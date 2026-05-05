@@ -62,6 +62,9 @@ def load_training_frame(session: Session) -> pd.DataFrame:
 
     df["target_home_win"] = (df["home_goals"] > df["away_goals"]).astype(int)
 
+    total_goals = df["home_goals"] + df["away_goals"]
+    df["target_over_2_5"] = (total_goals > 2.5).astype(int)
+
     return df
 
 

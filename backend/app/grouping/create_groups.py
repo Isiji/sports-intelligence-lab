@@ -9,6 +9,16 @@ from app.db.models import Prediction, PredictionGroupItem
 
 
 def group_predictions(session: Session, slate: str) -> dict[str, float]:
+    """
+    Create 4 groups of 3-4 games.
+
+    Important:
+    - A match can have several predictions/markets.
+    - But for grouping, one match counts as one game.
+    - We rank each match using its highest-confidence prediction.
+    - Then we add ALL predictions for that selected match into the group.
+    """
+
     predictions = list(
         session.scalars(
             select(Prediction)
@@ -17,49 +27,71 @@ def group_predictions(session: Session, slate: str) -> dict[str, float]:
         )
     )
 
-    group_sizes = _group_sizes(len(predictions))
+    best_prediction_by_match: dict[int, Prediction] = {}
+
+    for prediction in predictions:
+        current_best = best_prediction_by_match.get(prediction.match_id)
+
+        if current_best is None or prediction.confidence > current_best.confidence:
+            best_prediction_by_match[prediction.match_id] = prediction
+
+    ranked_games = sorted(
+        best_prediction_by_match.values(),
+        key=lambda prediction: (-prediction.confidence, prediction.id),
+    )
+
+    group_sizes = _group_sizes(len(ranked_games))
 
     session.execute(
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
     )
+
+    predictions_by_match: dict[int, list[Prediction]] = {}
+
+    for prediction in predictions:
+        predictions_by_match.setdefault(prediction.match_id, []).append(prediction)
 
     index = 0
     group_averages: dict[str, float] = {}
 
     for group_number, size in enumerate(group_sizes, start=1):
         group_name = f"Group {group_number}"
-        group_items = predictions[index : index + size]
+        selected_games = ranked_games[index : index + size]
         index += size
 
-        for prediction in group_items:
-            session.add(
-                PredictionGroupItem(
-                    slate=slate,
-                    group_name=group_name,
-                    prediction_id=prediction.id,
-                )
-            )
+        group_confidences = []
 
-        group_averages[group_name] = round(
-            mean(prediction.confidence for prediction in group_items),
-            4,
-        )
+        for selected_game in selected_games:
+            match_predictions = predictions_by_match[selected_game.match_id]
+
+            group_confidences.append(selected_game.confidence)
+
+            for prediction in match_predictions:
+                session.add(
+                    PredictionGroupItem(
+                        slate=slate,
+                        group_name=group_name,
+                        prediction_id=prediction.id,
+                    )
+                )
+
+        group_averages[group_name] = round(mean(group_confidences), 4)
 
     session.commit()
 
     return group_averages
 
 
-def _group_sizes(total_predictions: int) -> list[int]:
-    if total_predictions < 12:
-        raise ValueError("Need at least 12 predictions to create 4 groups of 3-4 games.")
+def _group_sizes(total_games: int) -> list[int]:
+    if total_games < 12:
+        raise ValueError("Need at least 12 games to create 4 groups of 3-4 games.")
 
-    usable_predictions = min(total_predictions, 16)
+    usable_games = min(total_games, 16)
 
     sizes = [3, 3, 3, 3]
-    extra_predictions = usable_predictions - 12
+    extra_games = usable_games - 12
 
-    for index in range(extra_predictions):
+    for index in range(extra_games):
         sizes[index] += 1
 
     return sizes
