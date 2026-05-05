@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Environment
+.env
+*.env
+
+# Database
+*.db
+*.sqlite3
+
+# ML artifacts
+backend/artifacts/*
+!backend/artifacts/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic temporary
+*.log

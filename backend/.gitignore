@@ -1,0 +1,23 @@
+# backend/.gitignore
+
+__pycache__/
+*.pyc
+
+.venv/
+venv/
+env/
+
+.env
+*.env
+
+*.db
+*.sqlite3
+
+artifacts/*
+!artifacts/.gitkeep
+
+.pytest_cache/
+.ruff_cache/
+
+.DS_Store
+Thumbs.db
