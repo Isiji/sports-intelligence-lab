@@ -4,7 +4,7 @@ from pathlib import Path
 import pickle
 
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
@@ -13,11 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ModelTrainingRun
 from app.features.football_features import feature_columns, load_training_frame
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
+from app.ml.registry import save_model_metadata
 
 
 HOME_WIN_MODEL_PATH = Path("artifacts/football_home_win_model.pkl")
+HOME_WIN_METADATA_PATH = Path("artifacts/football_home_win_model.json")
+
 OVER_2_5_MODEL_PATH = Path("artifacts/football_over_2_5_model.pkl")
+OVER_2_5_METADATA_PATH = Path("artifacts/football_over_2_5_model.json")
 
 
 def train_all_football_models(session: Session) -> None:
@@ -26,13 +29,14 @@ def train_all_football_models(session: Session) -> None:
     if df.empty:
         raise ValueError("No training data found.")
 
-    x = df[feature_columns()]
+    x = df[feature_columns()].fillna(0.0)
 
     _train_and_select_model(
         session=session,
         x=x,
         y=df["target_home_win"],
         save_path=HOME_WIN_MODEL_PATH,
+        metadata_path=HOME_WIN_METADATA_PATH,
         market="home_win",
     )
 
@@ -41,6 +45,7 @@ def train_all_football_models(session: Session) -> None:
         x=x,
         y=df["target_over_2_5"],
         save_path=OVER_2_5_MODEL_PATH,
+        metadata_path=OVER_2_5_METADATA_PATH,
         market="over_2_5_goals",
     )
 
@@ -53,9 +58,10 @@ def train_football_home_win_model(session: Session) -> None:
 
     _train_and_select_model(
         session=session,
-        x=df[feature_columns()],
+        x=df[feature_columns()].fillna(0.0),
         y=df["target_home_win"],
         save_path=HOME_WIN_MODEL_PATH,
+        metadata_path=HOME_WIN_METADATA_PATH,
         market="home_win",
     )
 
@@ -68,9 +74,10 @@ def train_football_over_2_5_model(session: Session) -> None:
 
     _train_and_select_model(
         session=session,
-        x=df[feature_columns()],
+        x=df[feature_columns()].fillna(0.0),
         y=df["target_over_2_5"],
         save_path=OVER_2_5_MODEL_PATH,
+        metadata_path=OVER_2_5_METADATA_PATH,
         market="over_2_5_goals",
     )
 
@@ -80,23 +87,19 @@ def _train_and_select_model(
     x,
     y,
     save_path: Path,
+    metadata_path: Path,
     market: str,
 ) -> None:
-    """
-    Train candidate models, compare them, save the best model,
-    and store all candidate results in the database.
-    """
-
-    x = x.fillna(0.0)
+    if y.nunique() < 2:
+        raise ValueError(f"Cannot train {market}: target has only one class.")
 
     x_train, x_test, y_train, y_test = train_test_split(
         x,
         y,
         test_size=0.2,
         random_state=42,
-        stratify=y if y.nunique() > 1 else None,
+        stratify=y,
     )
-
 
     candidates = {
         "LogisticRegression": CalibratedClassifierCV(
@@ -117,13 +120,12 @@ def _train_and_select_model(
             max_leaf_nodes=31,
             random_state=42,
         ),
-    }    
+    }
 
     results: list[tuple[str, object, float]] = []
 
     for model_name, model in candidates.items():
         model.fit(x_train, y_train)
-
         predictions = model.predict(x_test)
         accuracy = accuracy_score(y_test, predictions)
 
@@ -151,6 +153,14 @@ def _train_and_select_model(
 
     with save_path.open("wb") as file:
         pickle.dump(best_model, file)
+
+    save_model_metadata(
+        metadata_path=metadata_path,
+        market=market,
+        selected_model_name=best_model_name,
+        selected_accuracy=best_accuracy,
+        feature_columns=feature_columns(),
+    )
 
     print(f"\n[{market}] Model comparison:")
     for model_name, _, accuracy in results:

@@ -8,10 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Prediction, PredictionGroupItem
 from app.features.football_features import feature_columns, load_upcoming_frame
+from app.ml.registry import load_model_metadata
 
 
 HOME_WIN_MODEL_PATH = Path("artifacts/football_home_win_model.pkl")
+HOME_WIN_METADATA_PATH = Path("artifacts/football_home_win_model.json")
+
 OVER_2_5_MODEL_PATH = Path("artifacts/football_over_2_5_model.pkl")
+OVER_2_5_METADATA_PATH = Path("artifacts/football_over_2_5_model.json")
 
 
 def predict_football_home_win(
@@ -24,7 +28,7 @@ def predict_football_home_win(
         slate=slate,
         limit=limit,
         model_path=HOME_WIN_MODEL_PATH,
-        model_name="football_home_win_best_model",
+        metadata_path=HOME_WIN_METADATA_PATH,
         market="home_win",
         positive_label="HOME_WIN",
         negative_label="NOT_HOME_WIN",
@@ -41,7 +45,7 @@ def predict_football_over_2_5(
         slate=slate,
         limit=limit,
         model_path=OVER_2_5_MODEL_PATH,
-        model_name="football_over_2_5_best_model",
+        metadata_path=OVER_2_5_METADATA_PATH,
         market="over_2_5_goals",
         positive_label="OVER_2_5",
         negative_label="UNDER_2_5",
@@ -53,14 +57,6 @@ def predict_all_football_markets(
     slate: str,
     limit: int = 16,
 ) -> int:
-    """
-    Runs all football prediction markets.
-
-    Important:
-    We delete old group items first because prediction_group_items
-    depends on predictions through a foreign key.
-    """
-
     session.execute(
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
     )
@@ -93,13 +89,16 @@ def _predict_binary_market(
     slate: str,
     limit: int,
     model_path: Path,
-    model_name: str,
+    metadata_path: Path,
     market: str,
     positive_label: str,
     negative_label: str,
 ) -> int:
     if not model_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}. Train model first.")
+
+    metadata = load_model_metadata(metadata_path)
+    selected_model_name = metadata.get("selected_model_name", "unknown_model")
 
     with model_path.open("rb") as file:
         model = pickle.load(file)
@@ -131,7 +130,7 @@ def _predict_binary_market(
                 slate=slate,
                 match_id=int(row["match_id"]),
                 sport="football",
-                model_name=model_name,
+                model_name=selected_model_name,
                 market=market,
                 predicted_label=predicted_label,
                 confidence=round(confidence, 4),

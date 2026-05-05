@@ -7,14 +7,12 @@ from sqlalchemy.orm import Session
 
 def feature_columns() -> list[str]:
     return [
-        # base stats
         "home_sot",
         "home_corners",
         "home_possession",
         "home_fouls",
         "home_cards",
         "home_keeper_saves",
-
         "away_sot",
         "away_corners",
         "away_possession",
@@ -22,23 +20,25 @@ def feature_columns() -> list[str]:
         "away_cards",
         "away_keeper_saves",
 
-        # upgraded features
         "home_win_rate",
         "away_win_rate",
         "home_goal_diff",
         "away_goal_diff",
         "home_form_score",
         "away_form_score",
-        
-        # ADD THESE
+
         "home_h2h_win_rate",
         "away_h2h_win_rate",
         "h2h_avg_goals",
         "h2h_over_2_5_rate",
+
+        "home_home_win_rate",
+        "away_away_win_rate",
+        "home_current_streak",
+        "away_current_streak",
+        "team_strength_diff",
     ]
 
-
-# ---------------- TRAINING ----------------
 
 def load_training_frame(session: Session) -> pd.DataFrame:
     df = _base_query(session)
@@ -67,9 +67,7 @@ def load_upcoming_frame(session: Session, limit: int = 16) -> pd.DataFrame:
     return df
 
 
-# ---------------- BASE QUERY ----------------
-
-def _base_query(session: Session, upcoming_only=False, limit=None):
+def _base_query(session: Session, upcoming_only: bool = False, limit: int | None = None):
     query = text(
         """
         SELECT
@@ -104,49 +102,46 @@ def _base_query(session: Session, upcoming_only=False, limit=None):
     df = pd.read_sql(query, session.bind)
 
     if upcoming_only:
-        df = df[df["home_goals"].isna()]
+        df = df[df["home_goals"].isna() & df["away_goals"].isna()]
         if limit:
             df = df.head(limit)
     else:
-        df = df[df["home_goals"].notna()]
+        df = df[df["home_goals"].notna() & df["away_goals"].notna()]
 
     return df
 
 
-# ---------------- FEATURE ENGINE ----------------
-
 def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # existing features
-    df["home_win_rate"] = 0.0
-    df["away_win_rate"] = 0.0
-    df["home_goal_diff"] = 0.0
-    df["away_goal_diff"] = 0.0
-    df["home_form_score"] = 0.0
-    df["away_form_score"] = 0.0
+    new_columns = [
+        "home_win_rate",
+        "away_win_rate",
+        "home_goal_diff",
+        "away_goal_diff",
+        "home_form_score",
+        "away_form_score",
+        "home_h2h_win_rate",
+        "away_h2h_win_rate",
+        "h2h_avg_goals",
+        "h2h_over_2_5_rate",
+        "home_home_win_rate",
+        "away_away_win_rate",
+        "home_current_streak",
+        "away_current_streak",
+        "team_strength_diff",
+    ]
 
-    # NEW H2H features
-    df["home_h2h_win_rate"] = 0.0
-    df["away_h2h_win_rate"] = 0.0
-    df["h2h_avg_goals"] = 0.0
-    df["h2h_over_2_5_rate"] = 0.0
+    for column in new_columns:
+        df[column] = 0.0
 
     for i, row in df.iterrows():
         home = row["home_team"]
         away = row["away_team"]
         date = row["kickoff_date"]
 
-        # -------- FORM HISTORY --------
-        home_hist = df[
-            ((df["home_team"] == home) | (df["away_team"] == home))
-            & (df["kickoff_date"] < date)
-        ].tail(5)
-
-        away_hist = df[
-            ((df["home_team"] == away) | (df["away_team"] == away))
-            & (df["kickoff_date"] < date)
-        ].tail(5)
+        home_hist = _team_history(df, home, date).tail(5)
+        away_hist = _team_history(df, away, date).tail(5)
 
         df.at[i, "home_win_rate"] = _win_rate(home_hist, home)
         df.at[i, "away_win_rate"] = _win_rate(away_hist, away)
@@ -157,84 +152,208 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "home_form_score"] = _form_score(home_hist, home)
         df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
-        # -------- HEAD-TO-HEAD --------
-        h2h = df[
-            (
-                ((df["home_team"] == home) & (df["away_team"] == away)) |
-                ((df["home_team"] == away) & (df["away_team"] == home))
-            )
+        h2h = _head_to_head_history(df, home, away, date).tail(5)
+        h2h_values = _h2h_features(h2h, home, away)
+
+        df.at[i, "home_h2h_win_rate"] = h2h_values["home_h2h_win_rate"]
+        df.at[i, "away_h2h_win_rate"] = h2h_values["away_h2h_win_rate"]
+        df.at[i, "h2h_avg_goals"] = h2h_values["h2h_avg_goals"]
+        df.at[i, "h2h_over_2_5_rate"] = h2h_values["h2h_over_2_5_rate"]
+
+        home_home_hist = df[
+            (df["home_team"] == home)
             & (df["kickoff_date"] < date)
         ].tail(5)
 
-        home_wins = 0
-        away_wins = 0
-        total_goals = 0
-        over_2_5 = 0
+        away_away_hist = df[
+            (df["away_team"] == away)
+            & (df["kickoff_date"] < date)
+        ].tail(5)
 
-        for _, r in h2h.iterrows():
-            hg = r["home_goals"] or 0
-            ag = r["away_goals"] or 0
+        df.at[i, "home_home_win_rate"] = _home_win_rate(home_home_hist, home)
+        df.at[i, "away_away_win_rate"] = _away_win_rate(away_away_hist, away)
 
-            total_goals += hg + ag
+        df.at[i, "home_current_streak"] = _current_streak(home_hist, home)
+        df.at[i, "away_current_streak"] = _current_streak(away_hist, away)
 
-            if hg + ag > 2:
-                over_2_5 += 1
-
-            # determine who was home/away in that match
-            if r["home_team"] == home:
-                if hg > ag:
-                    home_wins += 1
-                elif ag > hg:
-                    away_wins += 1
-            else:
-                if ag > hg:
-                    home_wins += 1
-                elif hg > ag:
-                    away_wins += 1
-
-        games = max(len(h2h), 1)
-
-        df.at[i, "home_h2h_win_rate"] = home_wins / games
-        df.at[i, "away_h2h_win_rate"] = away_wins / games
-        df.at[i, "h2h_avg_goals"] = total_goals / games
-        df.at[i, "h2h_over_2_5_rate"] = over_2_5 / games
+        home_strength = _team_strength(home_hist, home)
+        away_strength = _team_strength(away_hist, away)
+        df.at[i, "team_strength_diff"] = home_strength - away_strength
 
     return df.fillna(0.0)
 
-# ---------------- CALCULATIONS ----------------
+
+def _team_history(df: pd.DataFrame, team: str, date) -> pd.DataFrame:
+    return df[
+        ((df["home_team"] == team) | (df["away_team"] == team))
+        & (df["kickoff_date"] < date)
+    ]
+
+
+def _head_to_head_history(df: pd.DataFrame, home: str, away: str, date) -> pd.DataFrame:
+    return df[
+        (
+            ((df["home_team"] == home) & (df["away_team"] == away))
+            | ((df["home_team"] == away) & (df["away_team"] == home))
+        )
+        & (df["kickoff_date"] < date)
+    ]
+
 
 def _win_rate(hist: pd.DataFrame, team: str) -> float:
     wins = 0
+
     for _, r in hist.iterrows():
-        if r["home_team"] == team:
-            if r["home_goals"] > r["away_goals"]:
-                wins += 1
-        else:
-            if r["away_goals"] > r["home_goals"]:
-                wins += 1
+        if r["home_team"] == team and r["home_goals"] > r["away_goals"]:
+            wins += 1
+        elif r["away_team"] == team and r["away_goals"] > r["home_goals"]:
+            wins += 1
+
+    return wins / max(len(hist), 1)
+
+
+def _home_win_rate(hist: pd.DataFrame, team: str) -> float:
+    wins = 0
+
+    for _, r in hist.iterrows():
+        if r["home_team"] == team and r["home_goals"] > r["away_goals"]:
+            wins += 1
+
+    return wins / max(len(hist), 1)
+
+
+def _away_win_rate(hist: pd.DataFrame, team: str) -> float:
+    wins = 0
+
+    for _, r in hist.iterrows():
+        if r["away_team"] == team and r["away_goals"] > r["home_goals"]:
+            wins += 1
+
     return wins / max(len(hist), 1)
 
 
 def _goal_diff(hist: pd.DataFrame, team: str) -> float:
-    diff = 0
+    diff = 0.0
+
     for _, r in hist.iterrows():
         if r["home_team"] == team:
-            diff += (r["home_goals"] or 0) - (r["away_goals"] or 0)
+            diff += float(r["home_goals"] or 0) - float(r["away_goals"] or 0)
         else:
-            diff += (r["away_goals"] or 0) - (r["home_goals"] or 0)
+            diff += float(r["away_goals"] or 0) - float(r["home_goals"] or 0)
+
     return diff / max(len(hist), 1)
 
 
 def _form_score(hist: pd.DataFrame, team: str) -> float:
-    score = 0
+    score = 0.0
+
     for _, r in hist.iterrows():
         if r["home_team"] == team:
-            g_for = r["home_goals"] or 0
-            g_against = r["away_goals"] or 0
+            goals_for = float(r["home_goals"] or 0)
+            goals_against = float(r["away_goals"] or 0)
         else:
-            g_for = r["away_goals"] or 0
-            g_against = r["home_goals"] or 0
+            goals_for = float(r["away_goals"] or 0)
+            goals_against = float(r["home_goals"] or 0)
 
-        score += (g_for * 2) - g_against
+        score += (goals_for * 2) - goals_against
 
     return score / max(len(hist), 1)
+
+
+def _current_streak(hist: pd.DataFrame, team: str) -> float:
+    """
+    Positive number = winning streak.
+    Negative number = losing streak.
+    Zero = no active win/loss streak or draw.
+    """
+
+    if hist.empty:
+        return 0.0
+
+    streak = 0
+
+    for _, r in hist.sort_values("kickoff_date", ascending=False).iterrows():
+        result = _result_for_team(r, team)
+
+        if result == "W":
+            if streak >= 0:
+                streak += 1
+            else:
+                break
+        elif result == "L":
+            if streak <= 0:
+                streak -= 1
+            else:
+                break
+        else:
+            break
+
+    return float(streak)
+
+
+def _team_strength(hist: pd.DataFrame, team: str) -> float:
+    """
+    Simple strength score:
+    win_rate + goal_difference + form_score.
+    Later we can replace this with ELO.
+    """
+
+    return (
+        _win_rate(hist, team)
+        + _goal_diff(hist, team)
+        + _form_score(hist, team)
+    )
+
+
+def _h2h_features(hist: pd.DataFrame, home: str, away: str) -> dict[str, float]:
+    home_wins = 0
+    away_wins = 0
+    total_goals = 0.0
+    over_2_5 = 0
+
+    for _, r in hist.iterrows():
+        home_goals = float(r["home_goals"] or 0)
+        away_goals = float(r["away_goals"] or 0)
+
+        total_goals += home_goals + away_goals
+
+        if home_goals + away_goals > 2:
+            over_2_5 += 1
+
+        if r["home_team"] == home:
+            if home_goals > away_goals:
+                home_wins += 1
+            elif away_goals > home_goals:
+                away_wins += 1
+        else:
+            if away_goals > home_goals:
+                home_wins += 1
+            elif home_goals > away_goals:
+                away_wins += 1
+
+    games = max(len(hist), 1)
+
+    return {
+        "home_h2h_win_rate": home_wins / games,
+        "away_h2h_win_rate": away_wins / games,
+        "h2h_avg_goals": total_goals / games,
+        "h2h_over_2_5_rate": over_2_5 / games,
+    }
+
+
+def _result_for_team(row, team: str) -> str:
+    if row["home_team"] == team:
+        if row["home_goals"] > row["away_goals"]:
+            return "W"
+        if row["home_goals"] < row["away_goals"]:
+            return "L"
+        return "D"
+
+    if row["away_team"] == team:
+        if row["away_goals"] > row["home_goals"]:
+            return "W"
+        if row["away_goals"] < row["home_goals"]:
+            return "L"
+        return "D"
+
+    return "D"
