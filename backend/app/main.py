@@ -3,7 +3,11 @@
 from fastapi import FastAPI
 
 from app.config import settings
+from app.routers.groups_router import router as groups_router
 from app.routers.health_router import router as health_router
+from app.routers.matches_router import router as matches_router
+from app.routers.ml_router import router as ml_router
+from app.routers.predictions_router import router as predictions_router
 
 
 app = FastAPI(
@@ -13,6 +17,10 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(matches_router)
+app.include_router(ml_router)
+app.include_router(predictions_router)
+app.include_router(groups_router)
 
 
 @app.get("/")
