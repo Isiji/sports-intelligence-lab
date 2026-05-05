@@ -2,9 +2,12 @@
 
 import typer
 
+from app.backtest.evaluate import evaluate_slate_by_group
+from app.backtest.settle import settle_and_score
 from app.db.base import Base
 from app.db.session import engine, get_cli_session
 from app.grouping.create_groups import group_predictions
+from app.ingest.demo_results import simulate_demo_results
 from app.ingest.demo_seed import seed_demo_data
 from app.ml.predict_football import predict_football_home_win
 from app.ml.train_football import train_football_home_win_model
@@ -55,6 +58,41 @@ def group_predictions_command(
 
     for group_name, average_confidence in averages.items():
         typer.echo(f"{group_name}: average confidence={average_confidence}")
+
+
+@app.command("simulate-results")
+def simulate_results(
+    limit: int = typer.Option(20, help="Number of demo matches to settle."),
+) -> None:
+    with get_cli_session() as session:
+        updated = simulate_demo_results(session=session, limit=limit)
+
+    typer.echo(f"Simulated results for {updated} demo matches.")
+
+
+@app.command("settle")
+def settle(
+    slate: str = typer.Option("demo", help="Prediction slate name."),
+) -> None:
+    with get_cli_session() as session:
+        run = settle_and_score(session=session, slate=slate)
+
+    typer.echo(
+        f"Backtest run {run.id}: "
+        f"accuracy={run.overall_accuracy}, "
+        f"settled_predictions={run.settled_predictions}"
+    )
+
+
+@app.command("evaluate-groups")
+def evaluate_groups(
+    slate: str = typer.Option("demo", help="Prediction slate name."),
+) -> None:
+    with get_cli_session() as session:
+        rows = evaluate_slate_by_group(session=session, slate=slate)
+
+    for row in rows:
+        typer.echo(row)
 
 
 if __name__ == "__main__":
