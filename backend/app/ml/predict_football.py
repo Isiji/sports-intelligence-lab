@@ -106,6 +106,9 @@ def _predict_binary_market(
 
     df = load_upcoming_frame(session, limit=limit)
 
+# VERY IMPORTANT FIX
+    df = df.reset_index(drop=True)
+    
     if df.empty:
         return 0
 

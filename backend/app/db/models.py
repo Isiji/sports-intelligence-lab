@@ -102,3 +102,21 @@ class ApiCallLog(Base):
     endpoint: Mapped[str] = mapped_column(String(120))
 
     called_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+  
+
+# backend/app/db/models.py
+
+class ModelTrainingRun(Base):
+    __tablename__ = "model_training_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    market: Mapped[str] = mapped_column(String(80), index=True)
+    model_name: Mapped[str] = mapped_column(String(120), index=True)
+
+    accuracy: Mapped[float] = mapped_column(Float, default=0.0)
+    selected: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    
