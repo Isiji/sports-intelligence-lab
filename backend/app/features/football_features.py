@@ -22,13 +22,23 @@ def feature_columns() -> list[str]:
         "away_cards",
         "away_keeper_saves",
 
-        # NEW: form features
-        "home_form_goals_scored",
-        "home_form_goals_conceded",
-        "away_form_goals_scored",
-        "away_form_goals_conceded",
+        # upgraded features
+        "home_win_rate",
+        "away_win_rate",
+        "home_goal_diff",
+        "away_goal_diff",
+        "home_form_score",
+        "away_form_score",
+        
+        # ADD THESE
+        "home_h2h_win_rate",
+        "away_h2h_win_rate",
+        "h2h_avg_goals",
+        "h2h_over_2_5_rate",
     ]
 
+
+# ---------------- TRAINING ----------------
 
 def load_training_frame(session: Session) -> pd.DataFrame:
     df = _base_query(session)
@@ -36,7 +46,7 @@ def load_training_frame(session: Session) -> pd.DataFrame:
     if df.empty:
         return df
 
-    df = _add_form_features(df)
+    df = _add_advanced_features(df)
 
     df["target_home_win"] = (df["home_goals"] > df["away_goals"]).astype(int)
 
@@ -52,14 +62,14 @@ def load_upcoming_frame(session: Session, limit: int = 16) -> pd.DataFrame:
     if df.empty:
         return df
 
-    df = _add_form_features(df)
+    df = _add_advanced_features(df)
 
     return df
 
 
-# ---------- INTERNAL HELPERS ----------
+# ---------------- BASE QUERY ----------------
 
-def _base_query(session: Session, upcoming_only: bool = False, limit: int | None = None) -> pd.DataFrame:
+def _base_query(session: Session, upcoming_only=False, limit=None):
     query = text(
         """
         SELECT
@@ -70,25 +80,23 @@ def _base_query(session: Session, upcoming_only: bool = False, limit: int | None
             m.home_goals,
             m.away_goals,
 
-            home_stats.shots_on_target AS home_sot,
-            home_stats.corners AS home_corners,
-            home_stats.possession AS home_possession,
-            home_stats.fouls AS home_fouls,
-            home_stats.cards AS home_cards,
-            home_stats.keeper_saves AS home_keeper_saves,
+            hs.shots_on_target AS home_sot,
+            hs.corners AS home_corners,
+            hs.possession AS home_possession,
+            hs.fouls AS home_fouls,
+            hs.cards AS home_cards,
+            hs.keeper_saves AS home_keeper_saves,
 
-            away_stats.shots_on_target AS away_sot,
-            away_stats.corners AS away_corners,
-            away_stats.possession AS away_possession,
-            away_stats.fouls AS away_fouls,
-            away_stats.cards AS away_cards,
-            away_stats.keeper_saves AS away_keeper_saves
+            as1.shots_on_target AS away_sot,
+            as1.corners AS away_corners,
+            as1.possession AS away_possession,
+            as1.fouls AS away_fouls,
+            as1.cards AS away_cards,
+            as1.keeper_saves AS away_keeper_saves
 
         FROM matches m
-        JOIN team_match_stats home_stats
-            ON home_stats.match_id = m.id AND home_stats.is_home = 1
-        JOIN team_match_stats away_stats
-            ON away_stats.match_id = m.id AND away_stats.is_home = 0
+        JOIN team_match_stats hs ON hs.match_id = m.id AND hs.is_home = 1
+        JOIN team_match_stats as1 ON as1.match_id = m.id AND as1.is_home = 0
         ORDER BY m.kickoff_date
         """
     )
@@ -96,70 +104,137 @@ def _base_query(session: Session, upcoming_only: bool = False, limit: int | None
     df = pd.read_sql(query, session.bind)
 
     if upcoming_only:
-        df = df[df["home_goals"].isna() & df["away_goals"].isna()]
+        df = df[df["home_goals"].isna()]
         if limit:
             df = df.head(limit)
     else:
-        df = df[df["home_goals"].notna() & df["away_goals"].notna()]
+        df = df[df["home_goals"].notna()]
 
     return df
 
 
-def _add_form_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute rolling form (last 5 matches) for each team.
-    """
+# ---------------- FEATURE ENGINE ----------------
 
+def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    df["home_form_goals_scored"] = 0.0
-    df["home_form_goals_conceded"] = 0.0
-    df["away_form_goals_scored"] = 0.0
-    df["away_form_goals_conceded"] = 0.0
+    # existing features
+    df["home_win_rate"] = 0.0
+    df["away_win_rate"] = 0.0
+    df["home_goal_diff"] = 0.0
+    df["away_goal_diff"] = 0.0
+    df["home_form_score"] = 0.0
+    df["away_form_score"] = 0.0
 
-    for idx, row in df.iterrows():
-        home_team = row["home_team"]
-        away_team = row["away_team"]
-        current_date = row["kickoff_date"]
+    # NEW H2H features
+    df["home_h2h_win_rate"] = 0.0
+    df["away_h2h_win_rate"] = 0.0
+    df["h2h_avg_goals"] = 0.0
+    df["h2h_over_2_5_rate"] = 0.0
 
-        home_history = df[
-            (
-                ((df["home_team"] == home_team) | (df["away_team"] == home_team))
-                & (df["kickoff_date"] < current_date)
-            )
+    for i, row in df.iterrows():
+        home = row["home_team"]
+        away = row["away_team"]
+        date = row["kickoff_date"]
+
+        # -------- FORM HISTORY --------
+        home_hist = df[
+            ((df["home_team"] == home) | (df["away_team"] == home))
+            & (df["kickoff_date"] < date)
         ].tail(5)
 
-        away_history = df[
-            (
-                ((df["home_team"] == away_team) | (df["away_team"] == away_team))
-                & (df["kickoff_date"] < current_date)
-            )
+        away_hist = df[
+            ((df["home_team"] == away) | (df["away_team"] == away))
+            & (df["kickoff_date"] < date)
         ].tail(5)
 
-        df.at[idx, "home_form_goals_scored"] = _goals_scored(home_history, home_team)
-        df.at[idx, "home_form_goals_conceded"] = _goals_conceded(home_history, home_team)
+        df.at[i, "home_win_rate"] = _win_rate(home_hist, home)
+        df.at[i, "away_win_rate"] = _win_rate(away_hist, away)
 
-        df.at[idx, "away_form_goals_scored"] = _goals_scored(away_history, away_team)
-        df.at[idx, "away_form_goals_conceded"] = _goals_conceded(away_history, away_team)
-    df = df.fillna(0.0)
-    return df
+        df.at[i, "home_goal_diff"] = _goal_diff(home_hist, home)
+        df.at[i, "away_goal_diff"] = _goal_diff(away_hist, away)
 
+        df.at[i, "home_form_score"] = _form_score(home_hist, home)
+        df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
-def _goals_scored(history: pd.DataFrame, team: str) -> float:
-    total = 0
-    for _, row in history.iterrows():
-        if row["home_team"] == team:
-            total += row["home_goals"] or 0
+        # -------- HEAD-TO-HEAD --------
+        h2h = df[
+            (
+                ((df["home_team"] == home) & (df["away_team"] == away)) |
+                ((df["home_team"] == away) & (df["away_team"] == home))
+            )
+            & (df["kickoff_date"] < date)
+        ].tail(5)
+
+        home_wins = 0
+        away_wins = 0
+        total_goals = 0
+        over_2_5 = 0
+
+        for _, r in h2h.iterrows():
+            hg = r["home_goals"] or 0
+            ag = r["away_goals"] or 0
+
+            total_goals += hg + ag
+
+            if hg + ag > 2:
+                over_2_5 += 1
+
+            # determine who was home/away in that match
+            if r["home_team"] == home:
+                if hg > ag:
+                    home_wins += 1
+                elif ag > hg:
+                    away_wins += 1
+            else:
+                if ag > hg:
+                    home_wins += 1
+                elif hg > ag:
+                    away_wins += 1
+
+        games = max(len(h2h), 1)
+
+        df.at[i, "home_h2h_win_rate"] = home_wins / games
+        df.at[i, "away_h2h_win_rate"] = away_wins / games
+        df.at[i, "h2h_avg_goals"] = total_goals / games
+        df.at[i, "h2h_over_2_5_rate"] = over_2_5 / games
+
+    return df.fillna(0.0)
+
+# ---------------- CALCULATIONS ----------------
+
+def _win_rate(hist: pd.DataFrame, team: str) -> float:
+    wins = 0
+    for _, r in hist.iterrows():
+        if r["home_team"] == team:
+            if r["home_goals"] > r["away_goals"]:
+                wins += 1
         else:
-            total += row["away_goals"] or 0
-    return total / max(len(history), 1)
+            if r["away_goals"] > r["home_goals"]:
+                wins += 1
+    return wins / max(len(hist), 1)
 
 
-def _goals_conceded(history: pd.DataFrame, team: str) -> float:
-    total = 0
-    for _, row in history.iterrows():
-        if row["home_team"] == team:
-            total += row["away_goals"] or 0
+def _goal_diff(hist: pd.DataFrame, team: str) -> float:
+    diff = 0
+    for _, r in hist.iterrows():
+        if r["home_team"] == team:
+            diff += (r["home_goals"] or 0) - (r["away_goals"] or 0)
         else:
-            total += row["home_goals"] or 0
-    return total / max(len(history), 1)
+            diff += (r["away_goals"] or 0) - (r["home_goals"] or 0)
+    return diff / max(len(hist), 1)
+
+
+def _form_score(hist: pd.DataFrame, team: str) -> float:
+    score = 0
+    for _, r in hist.iterrows():
+        if r["home_team"] == team:
+            g_for = r["home_goals"] or 0
+            g_against = r["away_goals"] or 0
+        else:
+            g_for = r["away_goals"] or 0
+            g_against = r["home_goals"] or 0
+
+        score += (g_for * 2) - g_against
+
+    return score / max(len(hist), 1)
