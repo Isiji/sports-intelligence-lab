@@ -1,0 +1,33 @@
+# backend/app/routers/backtests_router.py
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.backtest.evaluate import evaluate_slate_by_group
+from app.backtest.settle import settle_and_score
+from app.db.session import get_session
+from app.schemas.backtests import BacktestRunResponse, GroupBacktestResponse
+
+
+router = APIRouter(prefix="/backtests", tags=["Backtests"])
+
+
+@router.post("/settle", response_model=BacktestRunResponse)
+def settle_backtest(
+    slate: str = Query("demo"),
+    session: Session = Depends(get_session),
+):
+    try:
+        return settle_and_score(session=session, slate=slate)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/groups", response_model=list[GroupBacktestResponse])
+def evaluate_groups(
+    slate: str = Query("demo"),
+    session: Session = Depends(get_session),
+):
+    rows = evaluate_slate_by_group(session=session, slate=slate)
+
+    return [GroupBacktestResponse(**row) for row in rows]

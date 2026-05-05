@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from app.config import settings
+from app.routers.backtests_router import router as backtests_router
 from app.routers.groups_router import router as groups_router
 from app.routers.health_router import router as health_router
 from app.routers.matches_router import router as matches_router
@@ -21,6 +22,7 @@ app.include_router(matches_router)
 app.include_router(ml_router)
 app.include_router(predictions_router)
 app.include_router(groups_router)
+app.include_router(backtests_router)
 
 
 @app.get("/")
