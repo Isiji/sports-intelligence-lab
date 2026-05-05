@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ModelTrainingRun
 from app.features.football_features import feature_columns, load_training_frame
+from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
 
 
 HOME_WIN_MODEL_PATH = Path("artifacts/football_home_win_model.pkl")
@@ -96,6 +97,7 @@ def _train_and_select_model(
         stratify=y if y.nunique() > 1 else None,
     )
 
+
     candidates = {
         "LogisticRegression": CalibratedClassifierCV(
             estimator=LogisticRegression(max_iter=1000),
@@ -103,11 +105,19 @@ def _train_and_select_model(
             method="isotonic",
         ),
         "RandomForest": RandomForestClassifier(
-            n_estimators=200,
-            max_depth=10,
+            n_estimators=250,
+            max_depth=12,
+            min_samples_split=4,
+            min_samples_leaf=2,
             random_state=42,
         ),
-    }
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            max_iter=250,
+            learning_rate=0.05,
+            max_leaf_nodes=31,
+            random_state=42,
+        ),
+    }    
 
     results: list[tuple[str, object, float]] = []
 

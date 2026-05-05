@@ -24,7 +24,7 @@ def predict_football_home_win(
         slate=slate,
         limit=limit,
         model_path=HOME_WIN_MODEL_PATH,
-        model_name="football_home_win_baseline_v1",
+        model_name="football_home_win_best_model",
         market="home_win",
         positive_label="HOME_WIN",
         negative_label="NOT_HOME_WIN",
@@ -41,7 +41,7 @@ def predict_football_over_2_5(
         slate=slate,
         limit=limit,
         model_path=OVER_2_5_MODEL_PATH,
-        model_name="football_over_2_5_baseline_v1",
+        model_name="football_over_2_5_best_model",
         market="over_2_5_goals",
         positive_label="OVER_2_5",
         negative_label="UNDER_2_5",
@@ -54,17 +54,17 @@ def predict_all_football_markets(
     limit: int = 16,
 ) -> int:
     """
-    IMPORTANT:
-    We must delete group items FIRST before deleting predictions
-    due to foreign key constraints.
+    Runs all football prediction markets.
+
+    Important:
+    We delete old group items first because prediction_group_items
+    depends on predictions through a foreign key.
     """
 
-    # ✅ Step 1: delete groups
     session.execute(
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
     )
 
-    # ✅ Step 2: delete predictions
     session.execute(
         delete(Prediction).where(Prediction.slate == slate)
     )
@@ -106,37 +106,38 @@ def _predict_binary_market(
 
     df = load_upcoming_frame(session, limit=limit)
 
-# VERY IMPORTANT FIX
-    df = df.reset_index(drop=True)
-    
     if df.empty:
         return 0
 
-    probabilities = model.predict_proba(df[feature_columns()])
+    df = df.reset_index(drop=True)
+    x = df[feature_columns()].fillna(0.0)
+
+    probabilities = model.predict_proba(x)
 
     inserted = 0
 
     for row_index, row in df.iterrows():
-        prob = float(probabilities[row_index][1])
+        probability = float(probabilities[row_index][1])
 
-        if prob >= 0.5:
+        if probability >= 0.5:
             predicted_label = positive_label
-            confidence = prob
+            confidence = probability
         else:
             predicted_label = negative_label
-            confidence = 1 - prob
+            confidence = 1 - probability
 
-        prediction = Prediction(
-            slate=slate,
-            match_id=int(row["match_id"]),
-            sport="football",
-            model_name=model_name,
-            market=market,
-            predicted_label=predicted_label,
-            confidence=round(confidence, 4),
+        session.add(
+            Prediction(
+                slate=slate,
+                match_id=int(row["match_id"]),
+                sport="football",
+                model_name=model_name,
+                market=market,
+                predicted_label=predicted_label,
+                confidence=round(confidence, 4),
+            )
         )
 
-        session.add(prediction)
         inserted += 1
 
     session.commit()
