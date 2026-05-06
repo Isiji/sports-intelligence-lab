@@ -10,6 +10,7 @@ from app.backtest.settle import settle_and_score
 from app.db.session import get_session
 from app.schemas.backtests import BacktestRunResponse
 from app.schemas.calibration import CalibrationBucketResponse
+from app.backtest.thresholds import optimize_market_thresholds
 
 
 router = APIRouter(prefix="/backtests", tags=["Backtests"])
@@ -68,3 +69,13 @@ def rolling_backtest(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    
+@router.get("/thresholds")
+def optimize_thresholds(
+    market: str = Query("home_win"),
+    session: Session = Depends(get_session),
+):
+    return optimize_market_thresholds(
+        session=session,
+        market=market,
+    )

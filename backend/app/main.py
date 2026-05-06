@@ -13,6 +13,9 @@ from app.routers.ml_router import router as ml_router
 from app.routers.model_runs_router import router as model_runs_router
 from app.routers.predictions_router import router as predictions_router
 from app.routers.odds_router import router as odds_router
+from app.routers.value_edges_router import router as value_edges_router
+from app.routers.analysis_router import router as analysis_router
+
 
 app = FastAPI(
     title=settings.app_name,
@@ -30,6 +33,8 @@ app.include_router(backtests_router)
 app.include_router(dashboard_router)
 app.include_router(model_runs_router)
 app.include_router(odds_router)
+app.include_router(value_edges_router)
+app.include_router(analysis_router)
 
 
 @app.get("/")
