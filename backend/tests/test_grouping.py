@@ -1,23 +1,25 @@
-# backend/tests/test_grouping.py
-
 from app.grouping.create_groups import _group_sizes
 
 
+def test_group_sizes_4():
+    assert _group_sizes(4) == [4]
+
+
+def test_group_sizes_8():
+    assert _group_sizes(8) == [4, 4]
+
+
 def test_group_sizes_12():
-    assert _group_sizes(12) == [3, 3, 3, 3]
-
-
-def test_group_sizes_13():
-    assert _group_sizes(13) == [4, 3, 3, 3]
-
-
-def test_group_sizes_15():
-    assert _group_sizes(15) == [4, 4, 4, 3]
+    assert _group_sizes(12) == [4, 4, 4]
 
 
 def test_group_sizes_16():
     assert _group_sizes(16) == [4, 4, 4, 4]
 
 
-def test_group_sizes_more_than_16():
-    assert _group_sizes(20) == [4, 4, 4, 4]
+def test_group_sizes_20():
+    assert _group_sizes(20) == [5, 5, 5, 5]
+
+
+def test_group_sizes_50():
+    assert _group_sizes(50) == [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]

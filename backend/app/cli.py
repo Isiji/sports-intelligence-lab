@@ -18,9 +18,10 @@ app = typer.Typer()
 
 @app.command("init-db")
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    typer.echo("Database initialized.")
-
+    typer.echo(
+        "Use Alembic migrations instead:\n"
+        "alembic upgrade head"
+    )
 
 @app.command("seed-demo")
 def seed_demo() -> None:
