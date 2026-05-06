@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.backtest.calibration import evaluate_confidence_calibration
 from app.backtest.evaluate import evaluate_slate_by_group, evaluate_slate_by_market
+from app.backtest.rolling import run_rolling_backtest
 from app.backtest.settle import settle_and_score
 from app.db.session import get_session
-from app.schemas.backtests import BacktestRunResponse, GroupBacktestResponse
+from app.schemas.backtests import BacktestRunResponse
 from app.schemas.calibration import CalibrationBucketResponse
 
 
@@ -49,3 +50,21 @@ def evaluate_calibration(
     rows = evaluate_confidence_calibration(session=session, slate=slate)
 
     return [CalibrationBucketResponse(**row) for row in rows]
+
+
+@router.get("/rolling")
+def rolling_backtest(
+    market: str = Query("home_win"),
+    initial_train_size: int = Query(60, ge=30),
+    test_window_size: int = Query(20, ge=5),
+    session: Session = Depends(get_session),
+):
+    try:
+        return run_rolling_backtest(
+            session=session,
+            market=market,
+            initial_train_size=initial_train_size,
+            test_window_size=test_window_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

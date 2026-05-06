@@ -48,8 +48,8 @@ def evaluate_confidence_calibration(session: Session, slate: str) -> list[dict]:
             END AS bucket,
             COUNT(*) AS total_predictions,
             SUM(correct) AS correct_predictions,
-            ROUND(AVG(correct::float), 4) AS accuracy,
-            ROUND(AVG(confidence), 4) AS average_confidence
+            ROUND(AVG(correct::numeric), 4) AS accuracy,
+            ROUND(AVG(confidence::numeric), 4) AS average_confidence
         FROM scored
         GROUP BY bucket
         ORDER BY bucket

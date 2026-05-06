@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 INITIAL_ELO = 1500.0
 K_FACTOR = 32.0
+HOME_ADVANTAGE_ELO = 60.0
 
 
 def feature_columns() -> list[str]:
@@ -64,6 +65,14 @@ def feature_columns() -> list[str]:
         "home_elo",
         "away_elo",
         "elo_diff",
+        "home_elo_form",
+        "away_elo_form",
+        "elo_form_diff",
+        "home_attack_elo",
+        "away_attack_elo",
+        "home_defense_elo",
+        "away_defense_elo",
+        "attack_defense_diff",
         "team_strength_diff",
     ]
 
@@ -121,33 +130,6 @@ def load_upcoming_frame(session: Session, limit: int = 30) -> pd.DataFrame:
     df = _add_advanced_features(df)
 
     return df
-
-
-def search_matches_frame(session: Session, query_text: str, limit: int = 20) -> pd.DataFrame:
-    query = text(
-        """
-        SELECT
-            id AS match_id,
-            kickoff_date,
-            league,
-            home_team,
-            away_team,
-            home_goals,
-            away_goals
-        FROM matches
-        WHERE LOWER(home_team) LIKE LOWER(:q)
-           OR LOWER(away_team) LIKE LOWER(:q)
-           OR LOWER(league) LIKE LOWER(:q)
-        ORDER BY kickoff_date DESC
-        LIMIT :limit
-        """
-    )
-
-    return pd.read_sql(
-        query,
-        session.bind,
-        params={"q": f"%{query_text}%", "limit": limit},
-    )
 
 
 def _base_query(session: Session, upcoming_only: bool = False, limit: int | None = None):
@@ -231,22 +213,45 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
 
-    elo_ratings: dict[str, float] = {}
+    elo: dict[str, float] = {}
+    attack_elo: dict[str, float] = {}
+    defense_elo: dict[str, float] = {}
+    elo_history: dict[str, list[float]] = {}
 
     for i, row in df.iterrows():
         home = row["home_team"]
         away = row["away_team"]
         date = row["kickoff_date"]
 
-        home_hist = _team_history(df, home, date).tail(8)
-        away_hist = _team_history(df, away, date).tail(8)
+        home_elo = elo.get(home, INITIAL_ELO)
+        away_elo = elo.get(away, INITIAL_ELO)
 
-        home_elo = elo_ratings.get(home, INITIAL_ELO)
-        away_elo = elo_ratings.get(away, INITIAL_ELO)
+        home_attack = attack_elo.get(home, INITIAL_ELO)
+        away_attack = attack_elo.get(away, INITIAL_ELO)
+
+        home_defense = defense_elo.get(home, INITIAL_ELO)
+        away_defense = defense_elo.get(away, INITIAL_ELO)
+
+        home_elo_form = _elo_form(elo_history.get(home, []), home_elo)
+        away_elo_form = _elo_form(elo_history.get(away, []), away_elo)
 
         df.at[i, "home_elo"] = home_elo
         df.at[i, "away_elo"] = away_elo
-        df.at[i, "elo_diff"] = home_elo - away_elo
+        df.at[i, "elo_diff"] = (home_elo + HOME_ADVANTAGE_ELO) - away_elo
+
+        df.at[i, "home_elo_form"] = home_elo_form
+        df.at[i, "away_elo_form"] = away_elo_form
+        df.at[i, "elo_form_diff"] = home_elo_form - away_elo_form
+
+        df.at[i, "home_attack_elo"] = home_attack
+        df.at[i, "away_attack_elo"] = away_attack
+        df.at[i, "home_defense_elo"] = home_defense
+        df.at[i, "away_defense_elo"] = away_defense
+
+        df.at[i, "attack_defense_diff"] = home_attack - away_defense
+
+        home_hist = _team_history(df, home, date).tail(8)
+        away_hist = _team_history(df, away, date).tail(8)
 
         df.at[i, "home_win_rate"] = _win_rate(home_hist, home)
         df.at[i, "away_win_rate"] = _win_rate(away_hist, away)
@@ -258,9 +263,8 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
         h2h = _head_to_head_history(df, home, away, date).tail(6)
-        h2h_values = _h2h_features(h2h, home, away)
 
-        for key, value in h2h_values.items():
+        for key, value in _h2h_features(h2h, home, away).items():
             df.at[i, key] = value
 
         home_home_hist = df[(df["home_team"] == home) & (df["kickoff_date"] < date)].tail(8)
@@ -272,31 +276,103 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "home_current_streak"] = _current_streak(home_hist, home)
         df.at[i, "away_current_streak"] = _current_streak(away_hist, away)
 
-        home_profile = _team_profile(home_hist, home)
-        away_profile = _team_profile(away_hist, away)
-
-        for key, value in home_profile.items():
+        for key, value in _team_profile(home_hist, home).items():
             df.at[i, f"home_{key}"] = value
 
-        for key, value in away_profile.items():
+        for key, value in _team_profile(away_hist, away).items():
             df.at[i, f"away_{key}"] = value
 
         home_strength = _team_strength(home_hist, home)
         away_strength = _team_strength(away_hist, away)
-
         df.at[i, "team_strength_diff"] = home_strength - away_strength
 
         if pd.notna(row["home_goals"]) and pd.notna(row["away_goals"]):
-            new_home_elo, new_away_elo = _update_elo(
+            new_home_elo, new_away_elo = _update_result_elo(
                 home_elo=home_elo,
                 away_elo=away_elo,
                 home_goals=float(row["home_goals"]),
                 away_goals=float(row["away_goals"]),
             )
-            elo_ratings[home] = new_home_elo
-            elo_ratings[away] = new_away_elo
+
+            new_home_attack, new_away_defense = _update_attack_defense_elo(
+                attack_rating=home_attack,
+                defense_rating=away_defense,
+                goals_scored=float(row["home_goals"]),
+            )
+
+            new_away_attack, new_home_defense = _update_attack_defense_elo(
+                attack_rating=away_attack,
+                defense_rating=home_defense,
+                goals_scored=float(row["away_goals"]),
+            )
+
+            elo_history.setdefault(home, []).append(home_elo)
+            elo_history.setdefault(away, []).append(away_elo)
+
+            elo[home] = new_home_elo
+            elo[away] = new_away_elo
+
+            attack_elo[home] = new_home_attack
+            defense_elo[away] = new_away_defense
+
+            attack_elo[away] = new_away_attack
+            defense_elo[home] = new_home_defense
 
     return df.fillna(0.0)
+
+
+def _elo_form(history: list[float], current_elo: float) -> float:
+    if not history:
+        return 0.0
+
+    recent = history[-5:]
+
+    return current_elo - (sum(recent) / len(recent))
+
+
+def _update_result_elo(
+    home_elo: float,
+    away_elo: float,
+    home_goals: float,
+    away_goals: float,
+) -> tuple[float, float]:
+    adjusted_home = home_elo + HOME_ADVANTAGE_ELO
+
+    expected_home = 1 / (1 + 10 ** ((away_elo - adjusted_home) / 400))
+    expected_away = 1 - expected_home
+
+    if home_goals > away_goals:
+        actual_home = 1.0
+    elif home_goals < away_goals:
+        actual_home = 0.0
+    else:
+        actual_home = 0.5
+
+    actual_away = 1 - actual_home
+
+    goal_margin = abs(home_goals - away_goals)
+    margin_multiplier = 1 + min(goal_margin, 4) * 0.12
+
+    new_home = home_elo + K_FACTOR * margin_multiplier * (actual_home - expected_home)
+    new_away = away_elo + K_FACTOR * margin_multiplier * (actual_away - expected_away)
+
+    return new_home, new_away
+
+
+def _update_attack_defense_elo(
+    attack_rating: float,
+    defense_rating: float,
+    goals_scored: float,
+) -> tuple[float, float]:
+    expected_goals = 1.35
+    performance = goals_scored - expected_goals
+
+    movement = max(min(performance * 10, 24), -24)
+
+    new_attack = attack_rating + movement
+    new_defense = defense_rating - movement
+
+    return new_attack, new_defense
 
 
 def _team_history(df: pd.DataFrame, team: str, date) -> pd.DataFrame:
@@ -414,6 +490,7 @@ def _team_profile(hist: pd.DataFrame, team: str) -> dict[str, float]:
 
     for _, r in hist.iterrows():
         gf, ga = _goals_for_against(r, team)
+
         goals_for.append(gf)
         goals_against.append(ga)
 
@@ -523,27 +600,3 @@ def _goals_for_against(row, team: str) -> tuple[float, float]:
         return float(row["home_goals"] or 0), float(row["away_goals"] or 0)
 
     return float(row["away_goals"] or 0), float(row["home_goals"] or 0)
-
-
-def _update_elo(
-    home_elo: float,
-    away_elo: float,
-    home_goals: float,
-    away_goals: float,
-) -> tuple[float, float]:
-    expected_home = 1 / (1 + 10 ** ((away_elo - home_elo) / 400))
-    expected_away = 1 - expected_home
-
-    if home_goals > away_goals:
-        actual_home = 1.0
-    elif home_goals < away_goals:
-        actual_home = 0.0
-    else:
-        actual_home = 0.5
-
-    actual_away = 1 - actual_home
-
-    new_home = home_elo + K_FACTOR * (actual_home - expected_home)
-    new_away = away_elo + K_FACTOR * (actual_away - expected_away)
-
-    return new_home, new_away

@@ -61,9 +61,9 @@ def evaluate_slate_by_group(session: Session, slate: str) -> list[dict]:
         SELECT
             group_name,
             COUNT(*) AS picks,
-            ROUND(AVG(correct::float), 4) AS accuracy,
-            ROUND(AVG(confidence), 4) AS average_confidence,
-            ROUND(EXP(SUM(LN(NULLIF(odds, 0)))), 4) AS cumulative_odds
+            ROUND(AVG(correct::numeric), 4) AS accuracy,
+            ROUND(AVG(confidence::numeric), 4) AS average_confidence,
+            ROUND((EXP(SUM(LN(NULLIF(odds, 0)))))::numeric, 4) AS cumulative_odds
         FROM scored
         GROUP BY group_name
         ORDER BY group_name ASC
@@ -113,8 +113,8 @@ def evaluate_slate_by_market(session: Session, slate: str) -> list[dict]:
         SELECT
             market,
             COUNT(*) AS picks,
-            ROUND(AVG(correct::float), 4) AS accuracy,
-            ROUND(AVG(confidence), 4) AS average_confidence
+            ROUND(AVG(correct::numeric), 4) AS accuracy,
+            ROUND(AVG(confidence::numeric), 4) AS average_confidence
         FROM scored
         GROUP BY market
         ORDER BY accuracy DESC, picks DESC
