@@ -15,6 +15,7 @@ from app.routers.predictions_router import router as predictions_router
 from app.routers.odds_router import router as odds_router
 from app.routers.value_edges_router import router as value_edges_router
 from app.routers.analysis_router import router as analysis_router
+from app.routers.data_quality_router import router as data_quality_router
 
 
 app = FastAPI(
@@ -35,6 +36,7 @@ app.include_router(model_runs_router)
 app.include_router(odds_router)
 app.include_router(value_edges_router)
 app.include_router(analysis_router)
+app.include_router(data_quality_router)
 
 
 @app.get("/")
