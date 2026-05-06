@@ -10,6 +10,7 @@ from app.db.models import (
     Match,
     ProviderSyncLog,
     Team,
+    TeamMatchStat,
 )
 from app.ingest.api_football_client import ApiFootballClient
 
@@ -42,7 +43,6 @@ def ingest_fixtures_for_date(
 
     try:
         payload = client.get_fixtures_by_date(date_value.isoformat())
-
         fixtures = payload.get("response", [])
 
         if not isinstance(fixtures, list):
@@ -90,7 +90,6 @@ def ingest_fixtures_for_date(
         sync_log.records_skipped = records_skipped
 
         session.commit()
-
         raise
 
 
@@ -173,6 +172,7 @@ def _upsert_fixture(
             kickoff_date=kickoff_datetime.date(),
         )
         session.add(match)
+        session.flush()
 
     match.competition_id = competition.id if competition else None
     match.home_team_id = home_team.id if home_team else None
@@ -197,6 +197,7 @@ def _upsert_fixture(
     match.is_postponed = status_short in POSTPONED_STATUSES
     match.is_cancelled = status_short in CANCELLED_STATUSES
 
+    match.has_stats = False
     match.is_valid_for_training = (
         match.is_finished
         and match.home_goals is not None
@@ -207,9 +208,75 @@ def _upsert_fixture(
 
     match.last_synced_at = datetime.utcnow()
 
+    session.flush()
+
+    _ensure_placeholder_team_stats(
+        session=session,
+        match=match,
+        home_team_name=home_name,
+        away_team_name=away_name,
+    )
+
     session.commit()
 
     return "inserted" if is_new else "updated"
+
+
+def _ensure_placeholder_team_stats(
+    session: Session,
+    match: Match,
+    home_team_name: str,
+    away_team_name: str,
+) -> None:
+    existing_home = session.scalar(
+        select(TeamMatchStat).where(
+            TeamMatchStat.match_id == match.id,
+            TeamMatchStat.is_home == 1,
+        )
+    )
+
+    existing_away = session.scalar(
+        select(TeamMatchStat).where(
+            TeamMatchStat.match_id == match.id,
+            TeamMatchStat.is_home == 0,
+        )
+    )
+
+    if existing_home is None:
+        session.add(
+            TeamMatchStat(
+                match_id=match.id,
+                team=home_team_name,
+                is_home=1,
+                goals=0,
+                corners=0,
+                shots_on_target=0,
+                possession=0.0,
+                fouls=0,
+                cards=0,
+                keeper_saves=0,
+            )
+        )
+    else:
+        existing_home.team = home_team_name
+
+    if existing_away is None:
+        session.add(
+            TeamMatchStat(
+                match_id=match.id,
+                team=away_team_name,
+                is_home=0,
+                goals=0,
+                corners=0,
+                shots_on_target=0,
+                possession=0.0,
+                fouls=0,
+                cards=0,
+                keeper_saves=0,
+            )
+        )
+    else:
+        existing_away.team = away_team_name
 
 
 def _get_or_create_country(
@@ -261,6 +328,7 @@ def _get_or_create_competition(
     if competition:
         competition.name = name
         competition.country_id = country_id
+        competition.is_cup = _guess_is_cup(name)
         return competition
 
     competition = Competition(
@@ -355,9 +423,13 @@ def _guess_is_cup(name: str) -> bool:
         "carabao",
         "champions league",
         "europa league",
+        "conference league",
         "world cup",
         "afcon",
         "copa",
+        "copa del rey",
+        "coppa",
+        "dfb pokal",
     ]
 
     return any(keyword in lowered for keyword in cup_keywords)
