@@ -2,12 +2,59 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 
+class Country(Base):
+    __tablename__ = "countries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    code: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    continent: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
+
+class Competition(Base):
+    __tablename__ = "competitions"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_competition_id", name="uq_competition_provider_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="api-football", index=True)
+    provider_competition_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    country_id: Mapped[int | None] = mapped_column(ForeignKey("countries.id"), nullable=True, index=True)
+
+    competition_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_cup: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Team(Base):
+    __tablename__ = "teams"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_team_id", name="uq_team_provider_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    provider: Mapped[str] = mapped_column(String(40), default="api-football", index=True)
+    provider_team_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    normalized_name: Mapped[str] = mapped_column(String(160), index=True)
+
+    country_id: Mapped[int | None] = mapped_column(ForeignKey("countries.id"), nullable=True, index=True)
+
+    is_national_team: Mapped[bool] = mapped_column(Boolean, default=False)
 class Match(Base):
     __tablename__ = "matches"
     __table_args__ = (
@@ -31,7 +78,26 @@ class Match(Base):
     home_goals: Mapped[int | None] = mapped_column(Integer, nullable=True)
     away_goals: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    competition_id: Mapped[int | None] = mapped_column(ForeignKey("competitions.id"), nullable=True, index=True)
 
+    home_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
+    away_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
+
+    status: Mapped[str] = mapped_column(String(40), default="scheduled", index=True)
+    round_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    kickoff_datetime: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    is_finished: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_postponed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_cancelled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    has_stats: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_odds: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_valid_for_training: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    
 class TeamMatchStat(Base):
     __tablename__ = "team_match_stats"
 
@@ -149,3 +215,50 @@ class ModelTrainingRun(Base):
     selected: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    
+
+class ProviderSyncLog(Base):
+    __tablename__ = "provider_sync_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    sync_type: Mapped[str] = mapped_column(String(80), index=True)
+
+    status: Mapped[str] = mapped_column(String(40), default="started", index=True)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    records_received: Mapped[int] = mapped_column(Integer, default=0)
+    records_inserted: Mapped[int] = mapped_column(Integer, default=0)
+    records_updated: Mapped[int] = mapped_column(Integer, default=0)
+    records_skipped: Mapped[int] = mapped_column(Integer, default=0)
+
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OddsMarketMap(Base):
+    __tablename__ = "odds_market_maps"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_market_name",
+            "provider_selection_name",
+            name="uq_odds_market_provider_mapping",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+
+    provider_market_name: Mapped[str] = mapped_column(String(160), index=True)
+    provider_selection_name: Mapped[str] = mapped_column(String(160), index=True)
+
+    internal_market: Mapped[str] = mapped_column(String(80), index=True)
+    internal_selection: Mapped[str] = mapped_column(String(80), index=True)
+
+    line_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    active: Mapped[bool] = mapped_column(Boolean, default=True)  
