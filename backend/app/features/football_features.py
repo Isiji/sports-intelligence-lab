@@ -74,7 +74,7 @@ def feature_columns() -> list[str]:
         "away_defense_elo",
         "attack_defense_diff",
         "team_strength_diff",
-        
+
         "league_home_win_rate",
         "league_away_win_rate",
         "league_draw_rate",
@@ -99,6 +99,12 @@ MARKET_TARGETS = {
     "btts_no": "target_btts_no",
     "corners_over_8_5": "target_corners_over_8_5",
     "shots_on_target_over_8_5": "target_sot_over_8_5",
+}
+
+
+STATS_REQUIRED_MARKETS = {
+    "corners_over_8_5",
+    "shots_on_target_over_8_5",
 }
 
 
@@ -141,6 +147,18 @@ def load_upcoming_frame(session: Session, limit: int = 30) -> pd.DataFrame:
     return df
 
 
+def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFrame:
+    df = df.copy()
+
+    if market in STATS_REQUIRED_MARKETS:
+        if "has_stats" not in df.columns:
+            raise ValueError("has_stats column missing for stats market filtering.")
+
+        df = df[df["has_stats"] == True].copy()
+
+    return df.reset_index(drop=True)
+
+
 def _base_query(session: Session, upcoming_only: bool = False, limit: int | None = None):
     query = text(
         """
@@ -152,6 +170,7 @@ def _base_query(session: Session, upcoming_only: bool = False, limit: int | None
             m.away_team,
             m.home_goals,
             m.away_goals,
+            m.has_stats,
 
             hs.shots_on_target AS home_sot,
             hs.corners AS home_corners,
@@ -231,7 +250,7 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         home = row["home_team"]
         away = row["away_team"]
         date = row["kickoff_date"]
-        
+
         league_hist = _league_history(df, row["league"], date)
         league_profile = _league_profile(league_hist)
 
@@ -615,6 +634,7 @@ def _goals_for_against(row, team: str) -> tuple[float, float]:
         return float(row["home_goals"] or 0), float(row["away_goals"] or 0)
 
     return float(row["away_goals"] or 0), float(row["home_goals"] or 0)
+
 
 def _league_history(df: pd.DataFrame, league: str, date) -> pd.DataFrame:
     return df[

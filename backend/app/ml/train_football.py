@@ -1,3 +1,5 @@
+# backend/app/ml/train_football.py
+
 from pathlib import Path
 import pickle
 
@@ -22,6 +24,7 @@ from app.db.models import ModelTrainingRun
 from app.features.football_features import (
     MARKET_TARGETS,
     feature_columns,
+    filter_training_frame_for_market,
     load_training_frame,
 )
 from app.ml.registry import save_model_metadata
@@ -46,14 +49,21 @@ def train_all_football_models(session: Session) -> None:
 
     df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
 
-    print(f"\nTraining frame loaded: {len(df)} matches")
+    print(f"\nTraining frame loaded: {len(df)} finished matches")
     print(f"Date range: {df['kickoff_date'].min()} → {df['kickoff_date'].max()}")
 
     for market, target_column in MARKET_TARGETS.items():
         try:
+            market_df = filter_training_frame_for_market(df, market)
+
+            print(
+                f"\n[{market}] usable rows after market filtering: "
+                f"{len(market_df)}"
+            )
+
             _train_market_model(
                 session=session,
-                df=df,
+                df=market_df,
                 market=market,
                 target_column=target_column,
             )
@@ -62,6 +72,9 @@ def train_all_football_models(session: Session) -> None:
 
 
 def _train_market_model(session: Session, df, market: str, target_column: str) -> None:
+    if df.empty:
+        raise ValueError("no usable rows after market filtering.")
+
     if target_column not in df.columns:
         raise ValueError("target column missing.")
 
@@ -243,7 +256,7 @@ def _chronological_split(df):
     df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
 
     if len(df) < 50:
-        raise ValueError("Need at least 50 played matches.")
+        raise ValueError("Need at least 50 usable played matches.")
 
     split_index = int(len(df) * 0.8)
 

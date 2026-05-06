@@ -26,6 +26,17 @@ Stage 10: Frontend dashboard
 Stage 11: Model upgrades
 Stage 12: Basketball/Tennis/Cricket expansion
 
+commands
+python -m app.cli ingest-all-leagues-season --season 2025
+
+python -m app.cli train-football
+
+python -m app.cli ingest-missing-stats --limit 20
+
+python -m app.cli competition-coverage-report --limit 100
+
+python -m app.cli update-finished-matches --limit 100
+
 COMPETITIONS = [
     # =========================
     # INTERNATIONAL

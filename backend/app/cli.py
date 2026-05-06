@@ -23,6 +23,13 @@ from app.ingest.football_stats_ingestion import (
     ingest_fixture_statistics,
     ingest_missing_statistics,
 )
+# backend/app/cli.py
+
+from app.reports.competition_coverage import build_competition_coverage_report
+# backend/app/cli.py
+
+from app.ingest.finished_match_updater import update_finished_matches
+from app.reports.prediction_performance import build_prediction_performance_report
 
 
 app = typer.Typer()
@@ -66,6 +73,24 @@ def predict_football(
 
     typer.echo(f"Inserted {count} football predictions.")
 
+@app.command("prediction-performance-report")
+def prediction_performance_report(
+    slate: str | None = typer.Option(None, help="Optional slate name, for example demo."),
+) -> None:
+    with get_cli_session() as session:
+        report = build_prediction_performance_report(
+            session=session,
+            slate=slate,
+        )
+
+    typer.echo("\n=== SUMMARY ===")
+    typer.echo(report["summary"])
+
+    typer.echo("\n=== MARKET PERFORMANCE ===")
+
+    for row in report["markets"]:
+        typer.echo(row)
+        
 
 @app.command("group-predictions")
 def group_predictions_command(
@@ -211,6 +236,39 @@ def ingest_match_stats(
         result = ingest_fixture_statistics(
             session=session,
             match_id=match_id,
+        )
+
+    typer.echo(result)
+
+
+@app.command("competition-coverage-report")
+def competition_coverage_report(
+    limit: int = typer.Option(100, help="Number of competitions to show."),
+) -> None:
+    with get_cli_session() as session:
+        report = build_competition_coverage_report(
+            session=session,
+            limit=limit,
+        )
+
+    typer.echo("\n=== SUMMARY ===")
+    typer.echo(report["summary"])
+
+    typer.echo("\n=== COMPETITIONS ===")
+
+    for row in report["competitions"]:
+        typer.echo(row)
+
+# backend/app/cli.py
+
+@app.command("update-finished-matches")
+def update_finished_matches_command(
+    limit: int = typer.Option(500, help="Number of unfinished matches to check."),
+) -> None:
+    with get_cli_session() as session:
+        result = update_finished_matches(
+            session=session,
+            limit=limit,
         )
 
     typer.echo(result)
