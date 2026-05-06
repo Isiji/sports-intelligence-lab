@@ -9,6 +9,10 @@ from app.grouping.create_groups import group_predictions
 from app.ingest.demo_results import simulate_demo_results
 from app.ingest.demo_seed import seed_demo_data
 from app.ingest.football_ingestion import ingest_fixtures_for_date
+from app.ingest.football_odds_ingestion import (
+    ingest_odds_for_fixture,
+    ingest_odds_for_upcoming_matches,
+)
 from app.ml.predict_football import predict_all_football_markets
 from app.ml.train_football import train_all_football_models
 
@@ -128,6 +132,32 @@ def ingest_fixtures_date(
         result = ingest_fixtures_for_date(
             session=session,
             date_value=parsed_date,
+        )
+
+    typer.echo(result)
+
+
+@app.command("ingest-odds-match")
+def ingest_odds_match(
+    match_id: int = typer.Option(..., help="Internal match ID."),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_odds_for_fixture(
+            session=session,
+            match_id=match_id,
+        )
+
+    typer.echo(result)
+
+
+@app.command("ingest-odds-upcoming")
+def ingest_odds_upcoming(
+    limit: int = typer.Option(20, help="Number of upcoming matches to fetch odds for."),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_odds_for_upcoming_matches(
+            session=session,
+            limit=limit,
         )
 
     typer.echo(result)
