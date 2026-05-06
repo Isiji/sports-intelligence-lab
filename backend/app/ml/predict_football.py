@@ -52,14 +52,14 @@ def predict_football_market(
     metadata_path = metadata_path_for_market(market)
 
     if not model_path.exists():
-        print(f"[SKIPPED] Model file not found for {market}: {model_path}")
+        print(f"[SKIPPED] Ensemble model file not found for {market}: {model_path}")
         return 0
 
     metadata = load_model_metadata(metadata_path)
-    selected_model_name = metadata.get("selected_model_name", "unknown_model")
+    selected_model_name = metadata.get("selected_model_name", "WeightedEnsemble")
 
     with model_path.open("rb") as file:
-        model = pickle.load(file)
+        bundle = pickle.load(file)
 
     df = load_upcoming_frame(session, limit=limit)
 
@@ -67,16 +67,18 @@ def predict_football_market(
         return 0
 
     df = df.reset_index(drop=True)
-    x = df[feature_columns()].fillna(0.0)
 
-    probabilities = model.predict_proba(x)
+    model_feature_columns = bundle.get("feature_columns", feature_columns())
+    x = df[model_feature_columns].fillna(0.0)
+
+    probabilities = _predict_ensemble_probabilities(bundle=bundle, x=x)
 
     positive_label, negative_label = MARKET_LABELS[market]
 
     inserted = 0
 
     for row_index, row in df.iterrows():
-        probability = float(probabilities[row_index][1])
+        probability = float(probabilities[row_index])
 
         if probability >= 0.5:
             predicted_label = positive_label
@@ -122,6 +124,24 @@ def predict_football_market(
     session.commit()
 
     return inserted
+
+
+def _predict_ensemble_probabilities(bundle: dict, x):
+    models = bundle["models"]
+    weights = bundle["weights"]
+
+    final_probability = None
+
+    for model_name, model in models.items():
+        probability = model.predict_proba(x)[:, 1]
+        weighted_probability = probability * weights[model_name]
+
+        if final_probability is None:
+            final_probability = weighted_probability
+        else:
+            final_probability += weighted_probability
+
+    return final_probability
 
 
 def _find_odds(

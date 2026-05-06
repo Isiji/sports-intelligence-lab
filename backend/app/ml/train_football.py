@@ -21,11 +21,7 @@ from sklearn.preprocessing import StandardScaler
 from sqlalchemy.orm import Session
 
 from app.db.models import ModelTrainingRun
-from app.features.football_features import (
-    MARKET_TARGETS,
-    feature_columns,
-    load_training_frame,
-)
+from app.features.football_features import MARKET_TARGETS, feature_columns, load_training_frame
 from app.ml.registry import save_model_metadata
 
 
@@ -33,7 +29,7 @@ ARTIFACT_DIR = Path("artifacts")
 
 
 def model_path_for_market(market: str) -> Path:
-    return ARTIFACT_DIR / f"football_{market}_model.pkl"
+    return ARTIFACT_DIR / f"football_{market}_ensemble.pkl"
 
 
 def metadata_path_for_market(market: str) -> Path:
@@ -52,12 +48,8 @@ def train_all_football_models(session: Session) -> None:
     print(f"Date range: {df['kickoff_date'].min()} → {df['kickoff_date'].max()}")
 
     for market, target_column in MARKET_TARGETS.items():
-        if target_column not in df.columns:
-            print(f"[SKIPPED] {market}: target column missing.")
-            continue
-
         try:
-            _train_and_select_model(
+            _train_market_ensemble(
                 session=session,
                 df=df,
                 market=market,
@@ -67,12 +59,10 @@ def train_all_football_models(session: Session) -> None:
             print(f"[SKIPPED] {market}: {exc}")
 
 
-def _train_and_select_model(
-    session: Session,
-    df,
-    market: str,
-    target_column: str,
-) -> None:
+def _train_market_ensemble(session: Session, df, market: str, target_column: str) -> None:
+    if target_column not in df.columns:
+        raise ValueError("target column missing.")
+
     if df[target_column].nunique() < 2:
         raise ValueError("target has only one class.")
 
@@ -91,20 +81,22 @@ def _train_and_select_model(
     y_test = test_df[target_column]
 
     candidates = _candidate_models()
-
-    results: list[dict] = []
+    trained_models = {}
+    results = []
 
     for model_name, model in candidates.items():
         model.fit(x_train, y_train)
 
-        predicted = model.predict(x_test)
+        predictions = model.predict(x_test)
         probabilities = model.predict_proba(x_test)[:, 1]
 
         metrics = _calculate_metrics(
             y_true=y_test,
-            y_pred=predicted,
+            y_pred=predictions,
             probabilities=probabilities,
         )
+
+        trained_models[model_name] = model
 
         results.append(
             {
@@ -114,7 +106,21 @@ def _train_and_select_model(
             }
         )
 
-    best = _select_best_model(results)
+    weights = _build_weights_from_brier(results)
+
+    ensemble_probabilities = _ensemble_probabilities(
+        trained_models=trained_models,
+        weights=weights,
+        x=x_test,
+    )
+
+    ensemble_predictions = (ensemble_probabilities >= 0.5).astype(int)
+
+    ensemble_metrics = _calculate_metrics(
+        y_true=y_test,
+        y_pred=ensemble_predictions,
+        probabilities=ensemble_probabilities,
+    )
 
     for result in results:
         session.add(
@@ -131,33 +137,58 @@ def _train_and_select_model(
                 roc_auc=round(result["roc_auc"], 4),
                 train_size=len(train_df),
                 test_size=len(test_df),
-                selected=1 if result["model_name"] == best["model_name"] else 0,
+                selected=0,
             )
         )
+
+    session.add(
+        ModelTrainingRun(
+            sport="football",
+            market=market,
+            model_name="WeightedEnsemble",
+            accuracy=round(ensemble_metrics["accuracy"], 4),
+            precision=round(ensemble_metrics["precision"], 4),
+            recall=round(ensemble_metrics["recall"], 4),
+            f1=round(ensemble_metrics["f1"], 4),
+            log_loss=round(ensemble_metrics["log_loss"], 4),
+            brier_score=round(ensemble_metrics["brier_score"], 4),
+            roc_auc=round(ensemble_metrics["roc_auc"], 4),
+            train_size=len(train_df),
+            test_size=len(test_df),
+            selected=1,
+        )
+    )
 
     session.commit()
 
     save_path = model_path_for_market(market)
-    metadata_path = metadata_path_for_market(market)
-
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
+    bundle = {
+        "market": market,
+        "models": trained_models,
+        "weights": weights,
+        "feature_columns": feature_columns(),
+    }
+
     with save_path.open("wb") as file:
-        pickle.dump(best["model"], file)
+        pickle.dump(bundle, file)
 
     save_model_metadata(
-        metadata_path=metadata_path,
+        metadata_path=metadata_path_for_market(market),
         market=market,
-        selected_model_name=best["model_name"],
-        selected_accuracy=best["accuracy"],
+        selected_model_name="WeightedEnsemble",
+        selected_accuracy=ensemble_metrics["accuracy"],
         feature_columns=feature_columns(),
         extra={
-            "precision": round(best["precision"], 4),
-            "recall": round(best["recall"], 4),
-            "f1": round(best["f1"], 4),
-            "log_loss": round(best["log_loss"], 4),
-            "brier_score": round(best["brier_score"], 4),
-            "roc_auc": round(best["roc_auc"], 4),
+            "ensemble": True,
+            "weights": weights,
+            "precision": round(ensemble_metrics["precision"], 4),
+            "recall": round(ensemble_metrics["recall"], 4),
+            "f1": round(ensemble_metrics["f1"], 4),
+            "log_loss": round(ensemble_metrics["log_loss"], 4),
+            "brier_score": round(ensemble_metrics["brier_score"], 4),
+            "roc_auc": round(ensemble_metrics["roc_auc"], 4),
             "train_size": len(train_df),
             "test_size": len(test_df),
             "split_type": "chronological_80_20",
@@ -168,16 +199,7 @@ def _train_and_select_model(
         },
     )
 
-    print(f"\n[{market}] Chronological model comparison:")
-    print(
-        f"Train: {len(train_df)} matches "
-        f"({train_df['kickoff_date'].min()} → {train_df['kickoff_date'].max()})"
-    )
-    print(
-        f"Test: {len(test_df)} matches "
-        f"({test_df['kickoff_date'].min()} → {test_df['kickoff_date'].max()})"
-    )
-
+    print(f"\n[{market}] Ensemble model comparison:")
     for result in results:
         print(
             f"{result['model_name']}: "
@@ -187,14 +209,21 @@ def _train_and_select_model(
             f"roc_auc={round(result['roc_auc'], 4)}"
         )
 
-    print(f"Selected: {best['model_name']} ({round(best['accuracy'], 4)})\n")
+    print(
+        f"WeightedEnsemble: "
+        f"accuracy={round(ensemble_metrics['accuracy'], 4)}, "
+        f"f1={round(ensemble_metrics['f1'], 4)}, "
+        f"brier={round(ensemble_metrics['brier_score'], 4)}, "
+        f"roc_auc={round(ensemble_metrics['roc_auc'], 4)}"
+    )
+    print(f"Weights: {weights}\n")
 
 
 def _chronological_split(df):
     df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
 
     if len(df) < 50:
-        raise ValueError("Need at least 50 played matches for reliable chronological split.")
+        raise ValueError("Need at least 50 played matches.")
 
     split_index = int(len(df) * 0.8)
 
@@ -202,10 +231,7 @@ def _chronological_split(df):
     test_df = df.iloc[split_index:].copy()
 
     if train_df.empty or test_df.empty:
-        raise ValueError("Chronological split produced empty train or test set.")
-
-    if train_df["kickoff_date"].max() >= test_df["kickoff_date"].min():
-        raise ValueError("Invalid chronological split: train overlaps with test.")
+        raise ValueError("Empty train/test split.")
 
     return train_df, test_df
 
@@ -265,21 +291,31 @@ def _calculate_metrics(y_true, y_pred, probabilities) -> dict[str, float]:
     return {key: float(value) for key, value in metrics.items()}
 
 
-def _select_best_model(results: list[dict]) -> dict:
-    """
-    Selection priority:
-    1. Lower Brier score = better probability quality.
-    2. Higher ROC AUC = better ranking ability.
-    3. Higher F1 = better balance.
-    4. Higher accuracy.
-    """
+def _build_weights_from_brier(results: list[dict]) -> dict[str, float]:
+    scores = {}
 
-    return sorted(
-        results,
-        key=lambda item: (
-            item["brier_score"],
-            -item["roc_auc"],
-            -item["f1"],
-            -item["accuracy"],
-        ),
-    )[0]
+    for result in results:
+        brier = max(result["brier_score"], 0.0001)
+        scores[result["model_name"]] = 1 / brier
+
+    total = sum(scores.values())
+
+    return {
+        model_name: round(score / total, 4)
+        for model_name, score in scores.items()
+    }
+
+
+def _ensemble_probabilities(trained_models: dict, weights: dict[str, float], x):
+    final_probability = None
+
+    for model_name, model in trained_models.items():
+        model_probability = model.predict_proba(x)[:, 1]
+        weighted_probability = model_probability * weights[model_name]
+
+        if final_probability is None:
+            final_probability = weighted_probability
+        else:
+            final_probability += weighted_probability
+
+    return final_probability
