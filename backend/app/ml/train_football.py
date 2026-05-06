@@ -21,7 +21,11 @@ from sklearn.preprocessing import StandardScaler
 from sqlalchemy.orm import Session
 
 from app.db.models import ModelTrainingRun
-from app.features.football_features import MARKET_TARGETS, feature_columns, load_training_frame
+from app.features.football_features import (
+    MARKET_TARGETS,
+    feature_columns,
+    load_training_frame,
+)
 from app.ml.registry import save_model_metadata
 
 
@@ -42,8 +46,14 @@ def train_all_football_models(session: Session) -> None:
     if df.empty:
         raise ValueError("No training data found.")
 
+    df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
+
+    print(f"\nTraining frame loaded: {len(df)} matches")
+    print(f"Date range: {df['kickoff_date'].min()} → {df['kickoff_date'].max()}")
+
     for market, target_column in MARKET_TARGETS.items():
         if target_column not in df.columns:
+            print(f"[SKIPPED] {market}: target column missing.")
             continue
 
         try:
@@ -66,18 +76,13 @@ def _train_and_select_model(
     if df[target_column].nunique() < 2:
         raise ValueError("target has only one class.")
 
-    df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
+    train_df, test_df = _chronological_split(df)
 
-    split_index = int(len(df) * 0.8)
+    if train_df[target_column].nunique() < 2:
+        raise ValueError("training split has only one class.")
 
-    if split_index < 20:
-        raise ValueError("not enough historical data for time-based split.")
-
-    train_df = df.iloc[:split_index]
-    test_df = df.iloc[split_index:]
-
-    if test_df.empty:
-        raise ValueError("empty test split.")
+    if test_df[target_column].nunique() < 2:
+        raise ValueError("testing split has only one class.")
 
     x_train = train_df[feature_columns()].fillna(0.0)
     y_train = train_df[target_column]
@@ -85,37 +90,7 @@ def _train_and_select_model(
     x_test = test_df[feature_columns()].fillna(0.0)
     y_test = test_df[target_column]
 
-    if y_train.nunique() < 2 or y_test.nunique() < 2:
-        raise ValueError("train/test split does not contain both classes.")
-
-    candidates = {
-        "LogisticRegression": Pipeline(
-            steps=[
-                ("scaler", StandardScaler()),
-                (
-                    "model",
-                    CalibratedClassifierCV(
-                        estimator=LogisticRegression(max_iter=2000),
-                        cv=3,
-                        method="isotonic",
-                    ),
-                ),
-            ]
-        ),
-        "RandomForest": RandomForestClassifier(
-            n_estimators=300,
-            max_depth=14,
-            min_samples_split=4,
-            min_samples_leaf=2,
-            random_state=42,
-        ),
-        "HistGradientBoosting": HistGradientBoostingClassifier(
-            max_iter=300,
-            learning_rate=0.04,
-            max_leaf_nodes=31,
-            random_state=42,
-        ),
-    }
+    candidates = _candidate_models()
 
     results: list[dict] = []
 
@@ -139,14 +114,7 @@ def _train_and_select_model(
             }
         )
 
-    best = max(
-        results,
-        key=lambda item: (
-            item["brier_score"] * -1,
-            item["accuracy"],
-            item["f1"],
-        ),
-    )
+    best = _select_best_model(results)
 
     for result in results:
         session.add(
@@ -184,28 +152,93 @@ def _train_and_select_model(
         selected_accuracy=best["accuracy"],
         feature_columns=feature_columns(),
         extra={
-            "precision": best["precision"],
-            "recall": best["recall"],
-            "f1": best["f1"],
-            "log_loss": best["log_loss"],
-            "brier_score": best["brier_score"],
-            "roc_auc": best["roc_auc"],
+            "precision": round(best["precision"], 4),
+            "recall": round(best["recall"], 4),
+            "f1": round(best["f1"], 4),
+            "log_loss": round(best["log_loss"], 4),
+            "brier_score": round(best["brier_score"], 4),
+            "roc_auc": round(best["roc_auc"], 4),
             "train_size": len(train_df),
             "test_size": len(test_df),
-            "split_type": "time_based_80_20",
+            "split_type": "chronological_80_20",
+            "train_start": str(train_df["kickoff_date"].min()),
+            "train_end": str(train_df["kickoff_date"].max()),
+            "test_start": str(test_df["kickoff_date"].min()),
+            "test_end": str(test_df["kickoff_date"].max()),
         },
     )
 
-    print(f"\n[{market}] Model comparison:")
+    print(f"\n[{market}] Chronological model comparison:")
+    print(
+        f"Train: {len(train_df)} matches "
+        f"({train_df['kickoff_date'].min()} → {train_df['kickoff_date'].max()})"
+    )
+    print(
+        f"Test: {len(test_df)} matches "
+        f"({test_df['kickoff_date'].min()} → {test_df['kickoff_date'].max()})"
+    )
+
     for result in results:
         print(
-            result["model_name"],
-            "accuracy=", round(result["accuracy"], 4),
-            "f1=", round(result["f1"], 4),
-            "brier=", round(result["brier_score"], 4),
+            f"{result['model_name']}: "
+            f"accuracy={round(result['accuracy'], 4)}, "
+            f"f1={round(result['f1'], 4)}, "
+            f"brier={round(result['brier_score'], 4)}, "
+            f"roc_auc={round(result['roc_auc'], 4)}"
         )
 
     print(f"Selected: {best['model_name']} ({round(best['accuracy'], 4)})\n")
+
+
+def _chronological_split(df):
+    df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
+
+    if len(df) < 50:
+        raise ValueError("Need at least 50 played matches for reliable chronological split.")
+
+    split_index = int(len(df) * 0.8)
+
+    train_df = df.iloc[:split_index].copy()
+    test_df = df.iloc[split_index:].copy()
+
+    if train_df.empty or test_df.empty:
+        raise ValueError("Chronological split produced empty train or test set.")
+
+    if train_df["kickoff_date"].max() >= test_df["kickoff_date"].min():
+        raise ValueError("Invalid chronological split: train overlaps with test.")
+
+    return train_df, test_df
+
+
+def _candidate_models() -> dict[str, object]:
+    return {
+        "LogisticRegression": Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    CalibratedClassifierCV(
+                        estimator=LogisticRegression(max_iter=2000),
+                        cv=3,
+                        method="isotonic",
+                    ),
+                ),
+            ]
+        ),
+        "RandomForest": RandomForestClassifier(
+            n_estimators=300,
+            max_depth=14,
+            min_samples_split=4,
+            min_samples_leaf=2,
+            random_state=42,
+        ),
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            max_iter=300,
+            learning_rate=0.04,
+            max_leaf_nodes=31,
+            random_state=42,
+        ),
+    }
 
 
 def _calculate_metrics(y_true, y_pred, probabilities) -> dict[str, float]:
@@ -214,8 +247,8 @@ def _calculate_metrics(y_true, y_pred, probabilities) -> dict[str, float]:
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "f1": f1_score(y_true, y_pred, zero_division=0),
-        "log_loss": 0.0,
         "brier_score": brier_score_loss(y_true, probabilities),
+        "log_loss": 0.0,
         "roc_auc": 0.0,
     }
 
@@ -230,3 +263,23 @@ def _calculate_metrics(y_true, y_pred, probabilities) -> dict[str, float]:
         metrics["roc_auc"] = 0.0
 
     return {key: float(value) for key, value in metrics.items()}
+
+
+def _select_best_model(results: list[dict]) -> dict:
+    """
+    Selection priority:
+    1. Lower Brier score = better probability quality.
+    2. Higher ROC AUC = better ranking ability.
+    3. Higher F1 = better balance.
+    4. Higher accuracy.
+    """
+
+    return sorted(
+        results,
+        key=lambda item: (
+            item["brier_score"],
+            -item["roc_auc"],
+            -item["f1"],
+            -item["accuracy"],
+        ),
+    )[0]
