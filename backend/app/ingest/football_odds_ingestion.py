@@ -18,7 +18,7 @@ def ingest_odds_for_fixture(session: Session, match_id: int) -> dict[str, Any]:
     if match.provider != "api-football" or not match.provider_fixture_id:
         raise ValueError("Odds ingestion only supports api-football fixtures.")
 
-    client = ApiFootballClient()
+    client = ApiFootballClient(session=session)
 
     sync_log = ProviderSyncLog(
         provider="api-football",

@@ -24,7 +24,7 @@ def ingest_fixtures_for_date(
     session: Session,
     date_value: date,
 ) -> dict[str, int | str]:
-    client = ApiFootballClient()
+    client = ApiFootballClient(session=session)
 
     sync_log = ProviderSyncLog(
         provider="api-football",
