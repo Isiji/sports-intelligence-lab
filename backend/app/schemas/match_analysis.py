@@ -70,6 +70,17 @@ class H2HResponse(BaseModel):
     average_goals: float
 
     recent_games: list[dict]
+    
+class MarketProbabilityResponse(BaseModel):
+    market: str
+    predicted_label: str
+    probability: float
+
+    odds: float | None
+    implied_probability: float | None
+    value_score: float | None
+
+    model_name: str
 
 
 class MatchAnalysisResponse(BaseModel):
@@ -85,3 +96,6 @@ class MatchAnalysisResponse(BaseModel):
     head_to_head: H2HResponse
 
     risk_level: str
+    
+    market_probabilities: list[MarketProbabilityResponse]
+    

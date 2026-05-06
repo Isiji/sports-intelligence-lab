@@ -11,6 +11,8 @@ from app.db.session import get_session
 from app.schemas.backtests import BacktestRunResponse
 from app.schemas.calibration import CalibrationBucketResponse
 from app.backtest.thresholds import optimize_market_thresholds
+from app.analysis.backtest_report import build_backtest_report
+from app.analysis.weak_markets import get_weak_markets
 
 
 router = APIRouter(prefix="/backtests", tags=["Backtests"])
@@ -78,4 +80,25 @@ def optimize_thresholds(
     return optimize_market_thresholds(
         session=session,
         market=market,
+    )
+    
+    
+@router.get("/report")
+def backtest_report(
+    slate: str = Query("demo"),
+    session: Session = Depends(get_session),
+):
+    return build_backtest_report(session=session, slate=slate)
+
+
+@router.get("/weak-markets")
+def weak_markets(
+    min_accuracy: float = Query(0.58),
+    min_f1: float = Query(0.45),
+    session: Session = Depends(get_session),
+):
+    return get_weak_markets(
+        session=session,
+        min_accuracy=min_accuracy,
+        min_f1=min_f1,
     )

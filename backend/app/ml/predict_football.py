@@ -9,7 +9,7 @@ from app.db.models import MatchOdds, Prediction, PredictionGroupItem
 from app.features.football_features import MARKET_LABELS, MARKET_TARGETS, feature_columns, load_upcoming_frame
 from app.ml.registry import load_model_metadata
 from app.ml.train_football import metadata_path_for_market, model_path_for_market
-
+from app.analysis.weak_markets import is_market_weak
 
 def predict_all_football_markets(
     session: Session,
@@ -30,6 +30,10 @@ def predict_all_football_markets(
     inserted = 0
 
     for market in MARKET_TARGETS.keys():
+        if is_market_weak(session=session, market=market):
+            print(f"[SKIPPED WEAK MARKET] {market}")
+            continue
+        
         inserted += predict_football_market(
             session=session,
             slate=slate,

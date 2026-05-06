@@ -74,6 +74,15 @@ def feature_columns() -> list[str]:
         "away_defense_elo",
         "attack_defense_diff",
         "team_strength_diff",
+        
+        "league_home_win_rate",
+        "league_away_win_rate",
+        "league_draw_rate",
+        "league_avg_goals",
+        "league_btts_rate",
+        "league_over_2_5_rate",
+        "league_avg_corners",
+        "league_avg_sot",
     ]
 
 
@@ -222,6 +231,12 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         home = row["home_team"]
         away = row["away_team"]
         date = row["kickoff_date"]
+        
+        league_hist = _league_history(df, row["league"], date)
+        league_profile = _league_profile(league_hist)
+
+        for key, value in league_profile.items():
+            df.at[i, key] = value
 
         home_elo = elo.get(home, INITIAL_ELO)
         away_elo = elo.get(away, INITIAL_ELO)
@@ -600,3 +615,49 @@ def _goals_for_against(row, team: str) -> tuple[float, float]:
         return float(row["home_goals"] or 0), float(row["away_goals"] or 0)
 
     return float(row["away_goals"] or 0), float(row["home_goals"] or 0)
+
+def _league_history(df: pd.DataFrame, league: str, date) -> pd.DataFrame:
+    return df[
+        (df["league"] == league)
+        & (df["kickoff_date"] < date)
+        & df["home_goals"].notna()
+        & df["away_goals"].notna()
+    ]
+
+
+def _league_profile(hist: pd.DataFrame) -> dict[str, float]:
+    if hist.empty:
+        return {
+            "league_home_win_rate": 0.0,
+            "league_away_win_rate": 0.0,
+            "league_draw_rate": 0.0,
+            "league_avg_goals": 0.0,
+            "league_btts_rate": 0.0,
+            "league_over_2_5_rate": 0.0,
+            "league_avg_corners": 0.0,
+            "league_avg_sot": 0.0,
+        }
+
+    games = len(hist)
+
+    home_wins = (hist["home_goals"] > hist["away_goals"]).sum()
+    away_wins = (hist["away_goals"] > hist["home_goals"]).sum()
+    draws = (hist["home_goals"] == hist["away_goals"]).sum()
+
+    total_goals = hist["home_goals"] + hist["away_goals"]
+    total_corners = hist["home_corners"] + hist["away_corners"]
+    total_sot = hist["home_sot"] + hist["away_sot"]
+
+    btts = ((hist["home_goals"] > 0) & (hist["away_goals"] > 0)).sum()
+    over_2_5 = (total_goals > 2.5).sum()
+
+    return {
+        "league_home_win_rate": float(home_wins / games),
+        "league_away_win_rate": float(away_wins / games),
+        "league_draw_rate": float(draws / games),
+        "league_avg_goals": float(total_goals.mean()),
+        "league_btts_rate": float(btts / games),
+        "league_over_2_5_rate": float(over_2_5 / games),
+        "league_avg_corners": float(total_corners.mean()),
+        "league_avg_sot": float(total_sot.mean()),
+    }

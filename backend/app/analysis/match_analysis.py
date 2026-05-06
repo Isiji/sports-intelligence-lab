@@ -82,6 +82,21 @@ def get_match_analysis(
 
     predictions = [dict(row) for row in prediction_rows]
 
+    market_probabilities = []
+
+    for prediction in predictions:
+        market_probabilities.append(
+            {
+                "market": prediction["market"],
+                "predicted_label": prediction["predicted_label"],
+                "probability": prediction["confidence"],
+                "odds": prediction["odds"],
+                "implied_probability": prediction["implied_probability"],
+                "value_score": prediction["value_score"],
+                "model_name": prediction["model_name"],
+            }
+        )
+
     best_prediction = None
 
     if predictions:
@@ -93,7 +108,7 @@ def get_match_analysis(
             ),
             reverse=True,
         )[0]
-
+        
     home_form = _team_form(
         session=session,
         team=match_row["home_team"],
@@ -120,6 +135,7 @@ def get_match_analysis(
         "away_form": away_form,
         "head_to_head": h2h,
         "risk_level": risk_level,
+        "market_probabilities": market_probabilities,
     }
 
 
