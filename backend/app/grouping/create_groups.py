@@ -46,7 +46,12 @@ def group_predictions(
         key=lambda prediction: (-_ranking_score(prediction), prediction.id),
     )
 
-    group_sizes = _group_sizes(len(ranked_games))
+    group_sizes = _group_sizes(
+    total_games=len(ranked_games),
+    max_groups=10,
+    min_group_size=4,
+    max_group_size=5,
+    )
 
     session.execute(
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
@@ -148,16 +153,33 @@ def _boost_group_to_min_odds(
     return current
 
 
-def _group_sizes(total_games: int) -> list[int]:
-    if total_games < 12:
-        raise ValueError("Need at least 12 games to create 4 groups of 3-4 games.")
+def _group_sizes(
+    total_games: int,
+    max_groups: int = 10,
+    min_group_size: int = 4,
+    max_group_size: int = 5,
+) -> list[int]:
+    if total_games < min_group_size:
+        raise ValueError(
+            f"Need at least {min_group_size} games to create groups."
+        )
 
-    usable_games = min(total_games, 16)
+    usable_games = min(total_games, max_groups * max_group_size)
 
-    sizes = [3, 3, 3, 3]
-    extra_games = usable_games - 12
+    group_count = min(max_groups, usable_games // min_group_size)
 
-    for index in range(extra_games):
-        sizes[index] += 1
+    if group_count < 1:
+        raise ValueError("Not enough games to create groups.")
+
+    sizes = [min_group_size for _ in range(group_count)]
+
+    remaining = usable_games - (group_count * min_group_size)
+
+    index = 0
+    while remaining > 0 and index < group_count:
+        if sizes[index] < max_group_size:
+            sizes[index] += 1
+            remaining -= 1
+        index += 1
 
     return sizes
