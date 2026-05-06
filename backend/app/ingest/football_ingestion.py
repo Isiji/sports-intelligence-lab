@@ -433,3 +433,139 @@ def _guess_is_cup(name: str) -> bool:
     ]
 
     return any(keyword in lowered for keyword in cup_keywords)
+
+def ingest_fixtures_for_league_season(
+    session: Session,
+    league_id: int,
+    season: int,
+) -> dict[str, int | str]:
+    client = ApiFootballClient(session=session)
+
+    sync_log = ProviderSyncLog(
+        provider="api-football",
+        sync_type="fixtures_by_league_season",
+        status="started",
+    )
+
+    session.add(sync_log)
+    session.commit()
+    session.refresh(sync_log)
+
+    records_received = 0
+    records_inserted = 0
+    records_updated = 0
+    records_skipped = 0
+
+    try:
+        payload = client.get_fixtures_by_league_season(
+            league_id=league_id,
+            season=season,
+        )
+
+        fixtures = payload.get("response", [])
+
+        if not isinstance(fixtures, list):
+            raise ValueError("API response field 'response' is not a list.")
+
+        records_received = len(fixtures)
+
+        for item in fixtures:
+            result = _upsert_fixture(session=session, item=item)
+
+            if result == "inserted":
+                records_inserted += 1
+            elif result == "updated":
+                records_updated += 1
+            else:
+                records_skipped += 1
+
+        sync_log.status = "success"
+        sync_log.finished_at = datetime.utcnow()
+        sync_log.records_received = records_received
+        sync_log.records_inserted = records_inserted
+        sync_log.records_updated = records_updated
+        sync_log.records_skipped = records_skipped
+        session.commit()
+
+        return {
+            "status": "success",
+            "league_id": league_id,
+            "season": season,
+            "records_received": records_received,
+            "records_inserted": records_inserted,
+            "records_updated": records_updated,
+            "records_skipped": records_skipped,
+        }
+
+    except Exception as exc:
+        sync_log.status = "failed"
+        sync_log.finished_at = datetime.utcnow()
+        sync_log.error_message = str(exc)
+        session.commit()
+        raise
+
+
+def ingest_all_leagues_for_season(
+    session: Session,
+    season: int,
+    max_leagues: int | None = None,
+) -> dict[str, int]:
+    client = ApiFootballClient(session=session)
+
+    payload = client.get_leagues_by_season(season=season)
+    leagues = payload.get("response", [])
+
+    if not isinstance(leagues, list):
+        raise ValueError("API response field 'response' is not a list.")
+
+    league_ids: list[int] = []
+
+    for item in leagues:
+        league = item.get("league") or {}
+        league_id = league.get("id")
+
+        if league_id is None:
+            continue
+
+        league_ids.append(int(league_id))
+
+    league_ids = sorted(set(league_ids))
+
+    if max_leagues is not None:
+        league_ids = league_ids[:max_leagues]
+
+    leagues_processed = 0
+    leagues_failed = 0
+    fixtures_received = 0
+    fixtures_inserted = 0
+    fixtures_updated = 0
+    fixtures_skipped = 0
+
+    for league_id in league_ids:
+        try:
+            result = ingest_fixtures_for_league_season(
+                session=session,
+                league_id=league_id,
+                season=season,
+            )
+
+            leagues_processed += 1
+            fixtures_received += int(result["records_received"])
+            fixtures_inserted += int(result["records_inserted"])
+            fixtures_updated += int(result["records_updated"])
+            fixtures_skipped += int(result["records_skipped"])
+
+        except Exception:
+            leagues_failed += 1
+            continue
+
+    return {
+        "season": season,
+        "leagues_found": len(league_ids),
+        "leagues_processed": leagues_processed,
+        "leagues_failed": leagues_failed,
+        "fixtures_received": fixtures_received,
+        "fixtures_inserted": fixtures_inserted,
+        "fixtures_updated": fixtures_updated,
+        "fixtures_skipped": fixtures_skipped,
+    }

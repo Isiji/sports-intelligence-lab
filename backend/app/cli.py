@@ -8,13 +8,21 @@ from app.db.session import get_cli_session
 from app.grouping.create_groups import group_predictions
 from app.ingest.demo_results import simulate_demo_results
 from app.ingest.demo_seed import seed_demo_data
-from app.ingest.football_ingestion import ingest_fixtures_for_date
+from app.ingest.football_ingestion import (
+    ingest_all_leagues_for_season,
+    ingest_fixtures_for_date,
+    ingest_fixtures_for_league_season,
+)
 from app.ingest.football_odds_ingestion import (
     ingest_odds_for_fixture,
     ingest_odds_for_upcoming_matches,
 )
 from app.ml.predict_football import predict_all_football_markets
 from app.ml.train_football import train_all_football_models
+from app.ingest.football_stats_ingestion import (
+    ingest_fixture_statistics,
+    ingest_missing_statistics,
+)
 
 
 app = typer.Typer()
@@ -156,6 +164,64 @@ def ingest_odds_upcoming(
 ) -> None:
     with get_cli_session() as session:
         result = ingest_odds_for_upcoming_matches(
+            session=session,
+            limit=limit,
+        )
+
+    typer.echo(result)
+    
+    
+@app.command("ingest-league-season")
+def ingest_league_season(
+    league_id: int = typer.Option(..., help="API-Football league ID."),
+    season: int = typer.Option(..., help="Season year, for example 2025."),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_fixtures_for_league_season(
+            session=session,
+            league_id=league_id,
+            season=season,
+        )
+
+    typer.echo(result)
+
+
+@app.command("ingest-all-leagues-season")
+def ingest_all_leagues_season(
+    season: int = typer.Option(..., help="Season year, for example 2025."),
+    max_leagues: int | None = typer.Option(
+        None,
+        help="Optional safety limit while testing.",
+    ),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_all_leagues_for_season(
+            session=session,
+            season=season,
+            max_leagues=max_leagues,
+        )
+
+    typer.echo(result)
+    
+@app.command("ingest-match-stats")
+def ingest_match_stats(
+    match_id: int = typer.Option(...),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_fixture_statistics(
+            session=session,
+            match_id=match_id,
+        )
+
+    typer.echo(result)
+
+
+@app.command("ingest-missing-stats")
+def ingest_missing_stats(
+    limit: int = typer.Option(100),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_missing_statistics(
             session=session,
             limit=limit,
         )
