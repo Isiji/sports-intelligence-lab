@@ -24,10 +24,23 @@ SessionLocal = sessionmaker(
 
 def get_session() -> Generator[Session, None, None]:
     session = SessionLocal()
+
     try:
         yield session
+
     finally:
         session.close()
+
+
+# ADD THIS
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+
+    try:
+        yield db
+
+    finally:
+        db.close()
 
 
 def get_cli_session() -> Session:
