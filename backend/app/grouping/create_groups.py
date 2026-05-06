@@ -1,5 +1,6 @@
 # backend/app/grouping/create_groups.py
 
+from math import prod
 from statistics import mean
 
 from sqlalchemy import delete, select
@@ -8,21 +9,19 @@ from sqlalchemy.orm import Session
 from app.db.models import Prediction, PredictionGroupItem
 
 
-def group_predictions(session: Session, slate: str) -> dict[str, float]:
-    """
-    Create 4 groups of 3-4 games.
-
-    Important:
-    - A match can have several predictions/markets.
-    - But for grouping, one match counts as one game.
-    - We rank each match using its highest-confidence prediction.
-    - Then we add ALL predictions for that selected match into the group.
-    """
-
+def group_predictions(
+    session: Session,
+    slate: str,
+    min_confidence: float = 0.65,
+    min_group_odds: float = 3.0,
+) -> dict[str, dict[str, float]]:
     predictions = list(
         session.scalars(
             select(Prediction)
-            .where(Prediction.slate == slate)
+            .where(
+                Prediction.slate == slate,
+                Prediction.confidence >= min_confidence,
+            )
             .order_by(Prediction.confidence.desc(), Prediction.id.asc())
         )
     )
@@ -32,12 +31,19 @@ def group_predictions(session: Session, slate: str) -> dict[str, float]:
     for prediction in predictions:
         current_best = best_prediction_by_match.get(prediction.match_id)
 
-        if current_best is None or prediction.confidence > current_best.confidence:
+        if current_best is None:
+            best_prediction_by_match[prediction.match_id] = prediction
+            continue
+
+        current_score = _ranking_score(current_best)
+        new_score = _ranking_score(prediction)
+
+        if new_score > current_score:
             best_prediction_by_match[prediction.match_id] = prediction
 
     ranked_games = sorted(
         best_prediction_by_match.values(),
-        key=lambda prediction: (-prediction.confidence, prediction.id),
+        key=lambda prediction: (-_ranking_score(prediction), prediction.id),
     )
 
     group_sizes = _group_sizes(len(ranked_games))
@@ -46,40 +52,100 @@ def group_predictions(session: Session, slate: str) -> dict[str, float]:
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
     )
 
-    predictions_by_match: dict[int, list[Prediction]] = {}
-
-    for prediction in predictions:
-        predictions_by_match.setdefault(prediction.match_id, []).append(prediction)
-
     index = 0
-    group_averages: dict[str, float] = {}
+    group_summaries: dict[str, dict[str, float]] = {}
 
     for group_number, size in enumerate(group_sizes, start=1):
         group_name = f"Group {group_number}"
+
         selected_games = ranked_games[index : index + size]
         index += size
 
-        group_confidences = []
+        if not selected_games:
+            continue
 
-        for selected_game in selected_games:
-            match_predictions = predictions_by_match[selected_game.match_id]
+        cumulative_odds = _cumulative_odds(selected_games)
 
-            group_confidences.append(selected_game.confidence)
+        if cumulative_odds is not None and cumulative_odds < min_group_odds:
+            selected_games = _boost_group_to_min_odds(
+                selected_games=selected_games,
+                available_games=ranked_games,
+                min_group_odds=min_group_odds,
+            )
+            cumulative_odds = _cumulative_odds(selected_games)
 
-            for prediction in match_predictions:
-                session.add(
-                    PredictionGroupItem(
-                        slate=slate,
-                        group_name=group_name,
-                        prediction_id=prediction.id,
-                    )
+        for prediction in selected_games:
+            session.add(
+                PredictionGroupItem(
+                    slate=slate,
+                    group_name=group_name,
+                    prediction_id=prediction.id,
                 )
+            )
 
-        group_averages[group_name] = round(mean(group_confidences), 4)
+        group_summaries[group_name] = {
+            "average_confidence": round(mean([p.confidence for p in selected_games]), 4),
+            "cumulative_odds": round(cumulative_odds, 4) if cumulative_odds else 0.0,
+            "games": float(len(selected_games)),
+        }
 
     session.commit()
 
-    return group_averages
+    return group_summaries
+
+
+def _ranking_score(prediction: Prediction) -> float:
+    value_score = prediction.value_score or 0.0
+    odds_bonus = 0.0
+
+    if prediction.odds:
+        odds_bonus = min(prediction.odds / 10, 0.2)
+
+    return prediction.confidence + value_score + odds_bonus
+
+
+def _cumulative_odds(predictions: list[Prediction]) -> float | None:
+    odds_values = [p.odds for p in predictions if p.odds is not None]
+
+    if len(odds_values) != len(predictions):
+        return None
+
+    return float(prod(odds_values))
+
+
+def _boost_group_to_min_odds(
+    selected_games: list[Prediction],
+    available_games: list[Prediction],
+    min_group_odds: float,
+) -> list[Prediction]:
+    selected_ids = {p.id for p in selected_games}
+    candidates = [p for p in available_games if p.id not in selected_ids and p.odds]
+
+    current = selected_games[:]
+
+    for i in range(len(current)):
+        best_replacement = None
+        best_odds = _cumulative_odds(current) or 0.0
+
+        for candidate in candidates:
+            test_group = current[:]
+            test_group[i] = candidate
+
+            test_odds = _cumulative_odds(test_group) or 0.0
+
+            if test_odds > best_odds:
+                best_odds = test_odds
+                best_replacement = candidate
+
+        if best_replacement:
+            current[i] = best_replacement
+
+        final_odds = _cumulative_odds(current)
+
+        if final_odds and final_odds >= min_group_odds:
+            break
+
+    return current
 
 
 def _group_sizes(total_games: int) -> list[int]:

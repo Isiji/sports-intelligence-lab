@@ -11,6 +11,7 @@ def save_model_metadata(
     selected_model_name: str,
     selected_accuracy: float,
     feature_columns: list[str],
+    extra: dict[str, Any] | None = None,
 ) -> None:
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -20,6 +21,9 @@ def save_model_metadata(
         "selected_accuracy": round(float(selected_accuracy), 4),
         "feature_columns": feature_columns,
     }
+
+    if extra:
+        metadata.update(extra)
 
     metadata_path.write_text(
         json.dumps(metadata, indent=2),

@@ -51,6 +51,24 @@ class TeamMatchStat(Base):
     keeper_saves: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class MatchOdds(Base):
+    __tablename__ = "match_odds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
+
+    provider: Mapped[str] = mapped_column(String(40), default="manual", index=True)
+    bookmaker: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+    selection: Mapped[str] = mapped_column(String(80), index=True)
+
+    odds: Mapped[float] = mapped_column(Float)
+
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Prediction(Base):
     __tablename__ = "predictions"
 
@@ -61,10 +79,14 @@ class Prediction(Base):
 
     sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
     model_name: Mapped[str] = mapped_column(String(80), default="football_baseline_v1")
-    market: Mapped[str] = mapped_column(String(60), default="home_win")
+    market: Mapped[str] = mapped_column(String(80), default="home_win", index=True)
 
-    predicted_label: Mapped[str] = mapped_column(String(40))
+    predicted_label: Mapped[str] = mapped_column(String(80))
     confidence: Mapped[float] = mapped_column(Float)
+
+    odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    implied_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -102,9 +124,7 @@ class ApiCallLog(Base):
     endpoint: Mapped[str] = mapped_column(String(120))
 
     called_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-  
 
-# backend/app/db/models.py
 
 class ModelTrainingRun(Base):
     __tablename__ = "model_training_runs"
@@ -116,7 +136,16 @@ class ModelTrainingRun(Base):
     model_name: Mapped[str] = mapped_column(String(120), index=True)
 
     accuracy: Mapped[float] = mapped_column(Float, default=0.0)
+    precision: Mapped[float] = mapped_column(Float, default=0.0)
+    recall: Mapped[float] = mapped_column(Float, default=0.0)
+    f1: Mapped[float] = mapped_column(Float, default=0.0)
+    log_loss: Mapped[float] = mapped_column(Float, default=0.0)
+    brier_score: Mapped[float] = mapped_column(Float, default=0.0)
+    roc_auc: Mapped[float] = mapped_column(Float, default=0.0)
+
+    train_size: Mapped[int] = mapped_column(Integer, default=0)
+    test_size: Mapped[int] = mapped_column(Integer, default=0)
+
     selected: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    

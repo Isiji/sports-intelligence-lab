@@ -1,12 +1,13 @@
 # backend/app/routers/matches_router.py
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Match
+from app.db.models import Match, Prediction
 from app.db.session import get_session
 from app.schemas.matches import MatchResponse
+from app.schemas.predictions import PredictionResponse
 
 
 router = APIRouter(prefix="/matches", tags=["Matches"])
@@ -26,5 +27,59 @@ def list_matches(
         query = query.where(Match.home_goals.is_(None), Match.away_goals.is_(None))
 
     query = query.limit(limit)
+
+    return list(session.scalars(query))
+
+
+@router.get("/search", response_model=list[MatchResponse])
+def search_matches(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(30, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    query = (
+        select(Match)
+        .where(
+            or_(
+                Match.home_team.ilike(f"%{q}%"),
+                Match.away_team.ilike(f"%{q}%"),
+                Match.league.ilike(f"%{q}%"),
+            )
+        )
+        .order_by(Match.kickoff_date.desc())
+        .limit(limit)
+    )
+
+    return list(session.scalars(query))
+
+
+@router.get("/{match_id}", response_model=MatchResponse)
+def get_match(
+    match_id: int,
+    session: Session = Depends(get_session),
+):
+    match = session.get(Match, match_id)
+
+    if match is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Match not found.")
+
+    return match
+
+
+@router.get("/{match_id}/predictions", response_model=list[PredictionResponse])
+def get_match_predictions(
+    match_id: int,
+    slate: str = Query("demo"),
+    session: Session = Depends(get_session),
+):
+    query = (
+        select(Prediction)
+        .where(
+            Prediction.match_id == match_id,
+            Prediction.slate == slate,
+        )
+        .order_by(Prediction.confidence.desc())
+    )
 
     return list(session.scalars(query))

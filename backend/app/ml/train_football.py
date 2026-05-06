@@ -6,21 +6,34 @@ import pickle
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score,
+    brier_score_loss,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from sqlalchemy.orm import Session
 
 from app.db.models import ModelTrainingRun
-from app.features.football_features import feature_columns, load_training_frame
+from app.features.football_features import MARKET_TARGETS, feature_columns, load_training_frame
 from app.ml.registry import save_model_metadata
 
 
-HOME_WIN_MODEL_PATH = Path("artifacts/football_home_win_model.pkl")
-HOME_WIN_METADATA_PATH = Path("artifacts/football_home_win_model.json")
+ARTIFACT_DIR = Path("artifacts")
 
-OVER_2_5_MODEL_PATH = Path("artifacts/football_over_2_5_model.pkl")
-OVER_2_5_METADATA_PATH = Path("artifacts/football_over_2_5_model.json")
+
+def model_path_for_market(market: str) -> Path:
+    return ARTIFACT_DIR / f"football_{market}_model.pkl"
+
+
+def metadata_path_for_market(market: str) -> Path:
+    return ARTIFACT_DIR / f"football_{market}_model.json"
 
 
 def train_all_football_models(session: Session) -> None:
@@ -29,141 +42,191 @@ def train_all_football_models(session: Session) -> None:
     if df.empty:
         raise ValueError("No training data found.")
 
-    x = df[feature_columns()].fillna(0.0)
+    for market, target_column in MARKET_TARGETS.items():
+        if target_column not in df.columns:
+            continue
 
-    _train_and_select_model(
-        session=session,
-        x=x,
-        y=df["target_home_win"],
-        save_path=HOME_WIN_MODEL_PATH,
-        metadata_path=HOME_WIN_METADATA_PATH,
-        market="home_win",
-    )
-
-    _train_and_select_model(
-        session=session,
-        x=x,
-        y=df["target_over_2_5"],
-        save_path=OVER_2_5_MODEL_PATH,
-        metadata_path=OVER_2_5_METADATA_PATH,
-        market="over_2_5_goals",
-    )
-
-
-def train_football_home_win_model(session: Session) -> None:
-    df = load_training_frame(session)
-
-    if df.empty:
-        raise ValueError("No training data found.")
-
-    _train_and_select_model(
-        session=session,
-        x=df[feature_columns()].fillna(0.0),
-        y=df["target_home_win"],
-        save_path=HOME_WIN_MODEL_PATH,
-        metadata_path=HOME_WIN_METADATA_PATH,
-        market="home_win",
-    )
-
-
-def train_football_over_2_5_model(session: Session) -> None:
-    df = load_training_frame(session)
-
-    if df.empty:
-        raise ValueError("No training data found.")
-
-    _train_and_select_model(
-        session=session,
-        x=df[feature_columns()].fillna(0.0),
-        y=df["target_over_2_5"],
-        save_path=OVER_2_5_MODEL_PATH,
-        metadata_path=OVER_2_5_METADATA_PATH,
-        market="over_2_5_goals",
-    )
+        try:
+            _train_and_select_model(
+                session=session,
+                df=df,
+                market=market,
+                target_column=target_column,
+            )
+        except ValueError as exc:
+            print(f"[SKIPPED] {market}: {exc}")
 
 
 def _train_and_select_model(
     session: Session,
-    x,
-    y,
-    save_path: Path,
-    metadata_path: Path,
+    df,
     market: str,
+    target_column: str,
 ) -> None:
-    if y.nunique() < 2:
-        raise ValueError(f"Cannot train {market}: target has only one class.")
+    if df[target_column].nunique() < 2:
+        raise ValueError("target has only one class.")
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        x,
-        y,
-        test_size=0.2,
-        random_state=42,
-        stratify=y,
-    )
+    df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
+
+    split_index = int(len(df) * 0.8)
+
+    if split_index < 20:
+        raise ValueError("not enough historical data for time-based split.")
+
+    train_df = df.iloc[:split_index]
+    test_df = df.iloc[split_index:]
+
+    if test_df.empty:
+        raise ValueError("empty test split.")
+
+    x_train = train_df[feature_columns()].fillna(0.0)
+    y_train = train_df[target_column]
+
+    x_test = test_df[feature_columns()].fillna(0.0)
+    y_test = test_df[target_column]
+
+    if y_train.nunique() < 2 or y_test.nunique() < 2:
+        raise ValueError("train/test split does not contain both classes.")
 
     candidates = {
-        "LogisticRegression": CalibratedClassifierCV(
-            estimator=LogisticRegression(max_iter=1000),
-            cv=3,
-            method="isotonic",
+        "LogisticRegression": Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    CalibratedClassifierCV(
+                        estimator=LogisticRegression(max_iter=2000),
+                        cv=3,
+                        method="isotonic",
+                    ),
+                ),
+            ]
         ),
         "RandomForest": RandomForestClassifier(
-            n_estimators=250,
-            max_depth=12,
+            n_estimators=300,
+            max_depth=14,
             min_samples_split=4,
             min_samples_leaf=2,
             random_state=42,
         ),
         "HistGradientBoosting": HistGradientBoostingClassifier(
-            max_iter=250,
-            learning_rate=0.05,
+            max_iter=300,
+            learning_rate=0.04,
             max_leaf_nodes=31,
             random_state=42,
         ),
     }
 
-    results: list[tuple[str, object, float]] = []
+    results: list[dict] = []
 
     for model_name, model in candidates.items():
         model.fit(x_train, y_train)
-        predictions = model.predict(x_test)
-        accuracy = accuracy_score(y_test, predictions)
 
-        results.append((model_name, model, float(accuracy)))
+        predicted = model.predict(x_test)
+        probabilities = model.predict_proba(x_test)[:, 1]
 
-    best_model_name, best_model, best_accuracy = max(
+        metrics = _calculate_metrics(
+            y_true=y_test,
+            y_pred=predicted,
+            probabilities=probabilities,
+        )
+
+        results.append(
+            {
+                "model_name": model_name,
+                "model": model,
+                **metrics,
+            }
+        )
+
+    best = max(
         results,
-        key=lambda item: item[2],
+        key=lambda item: (
+            item["brier_score"] * -1,
+            item["accuracy"],
+            item["f1"],
+        ),
     )
 
-    for model_name, _, accuracy in results:
+    for result in results:
         session.add(
             ModelTrainingRun(
                 sport="football",
                 market=market,
-                model_name=model_name,
-                accuracy=round(accuracy, 4),
-                selected=1 if model_name == best_model_name else 0,
+                model_name=result["model_name"],
+                accuracy=round(result["accuracy"], 4),
+                precision=round(result["precision"], 4),
+                recall=round(result["recall"], 4),
+                f1=round(result["f1"], 4),
+                log_loss=round(result["log_loss"], 4),
+                brier_score=round(result["brier_score"], 4),
+                roc_auc=round(result["roc_auc"], 4),
+                train_size=len(train_df),
+                test_size=len(test_df),
+                selected=1 if result["model_name"] == best["model_name"] else 0,
             )
         )
 
     session.commit()
 
+    save_path = model_path_for_market(market)
+    metadata_path = metadata_path_for_market(market)
+
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     with save_path.open("wb") as file:
-        pickle.dump(best_model, file)
+        pickle.dump(best["model"], file)
 
     save_model_metadata(
         metadata_path=metadata_path,
         market=market,
-        selected_model_name=best_model_name,
-        selected_accuracy=best_accuracy,
+        selected_model_name=best["model_name"],
+        selected_accuracy=best["accuracy"],
         feature_columns=feature_columns(),
+        extra={
+            "precision": best["precision"],
+            "recall": best["recall"],
+            "f1": best["f1"],
+            "log_loss": best["log_loss"],
+            "brier_score": best["brier_score"],
+            "roc_auc": best["roc_auc"],
+            "train_size": len(train_df),
+            "test_size": len(test_df),
+            "split_type": "time_based_80_20",
+        },
     )
 
     print(f"\n[{market}] Model comparison:")
-    for model_name, _, accuracy in results:
-        print(f"{model_name}: {round(accuracy, 4)}")
+    for result in results:
+        print(
+            result["model_name"],
+            "accuracy=", round(result["accuracy"], 4),
+            "f1=", round(result["f1"], 4),
+            "brier=", round(result["brier_score"], 4),
+        )
 
-    print(f"Selected: {best_model_name} ({round(best_accuracy, 4)})\n")
+    print(f"Selected: {best['model_name']} ({round(best['accuracy'], 4)})\n")
+
+
+def _calculate_metrics(y_true, y_pred, probabilities) -> dict[str, float]:
+    metrics = {
+        "accuracy": accuracy_score(y_true, y_pred),
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1": f1_score(y_true, y_pred, zero_division=0),
+        "log_loss": 0.0,
+        "brier_score": brier_score_loss(y_true, probabilities),
+        "roc_auc": 0.0,
+    }
+
+    try:
+        metrics["log_loss"] = log_loss(y_true, probabilities)
+    except ValueError:
+        metrics["log_loss"] = 0.0
+
+    try:
+        metrics["roc_auc"] = roc_auc_score(y_true, probabilities)
+    except ValueError:
+        metrics["roc_auc"] = 0.0
+
+    return {key: float(value) for key, value in metrics.items()}

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.backtest.calibration import evaluate_confidence_calibration
-from app.backtest.evaluate import evaluate_slate_by_group
+from app.backtest.evaluate import evaluate_slate_by_group, evaluate_slate_by_market
 from app.backtest.settle import settle_and_score
 from app.db.session import get_session
 from app.schemas.backtests import BacktestRunResponse, GroupBacktestResponse
@@ -25,14 +25,20 @@ def settle_backtest(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/groups", response_model=list[GroupBacktestResponse])
+@router.get("/groups")
 def evaluate_groups(
     slate: str = Query("demo"),
     session: Session = Depends(get_session),
 ):
-    rows = evaluate_slate_by_group(session=session, slate=slate)
+    return evaluate_slate_by_group(session=session, slate=slate)
 
-    return [GroupBacktestResponse(**row) for row in rows]
+
+@router.get("/markets")
+def evaluate_markets(
+    slate: str = Query("demo"),
+    session: Session = Depends(get_session),
+):
+    return evaluate_slate_by_market(session=session, slate=slate)
 
 
 @router.get("/calibration", response_model=list[CalibrationBucketResponse])

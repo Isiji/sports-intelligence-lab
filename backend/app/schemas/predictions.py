@@ -14,6 +14,9 @@ class PredictionResponse(BaseModel):
     market: str
     predicted_label: str
     confidence: float
+    odds: float | None = None
+    implied_probability: float | None = None
+    value_score: float | None = None
     created_at: datetime
 
     model_config = {

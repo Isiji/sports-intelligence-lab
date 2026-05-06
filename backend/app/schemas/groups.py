@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class GroupCreateResponse(BaseModel):
     slate: str
-    group_averages: dict[str, float]
+    group_summaries: dict[str, dict[str, float]]
 
 
 class GroupItemResponse(BaseModel):
@@ -17,3 +17,5 @@ class GroupItemResponse(BaseModel):
     market: str
     predicted_label: str
     confidence: float
+    odds: float | None = None
+    value_score: float | None = None

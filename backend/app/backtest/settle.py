@@ -31,17 +31,11 @@ def settle_and_score(session: Session, slate: str) -> BacktestRun:
 
         settled += 1
 
-        home_win = match.home_goals > match.away_goals
-
-        prediction_correct = (
-            prediction.predicted_label == "HOME_WIN"
-            and home_win
-        ) or (
-            prediction.predicted_label == "NOT_HOME_WIN"
-            and not home_win
-        )
-
-        if prediction_correct:
+        if is_prediction_correct(
+            predicted_label=prediction.predicted_label,
+            home_goals=match.home_goals,
+            away_goals=match.away_goals,
+        ):
             correct += 1
 
     overall_accuracy = correct / settled if settled else 0.0
@@ -58,3 +52,85 @@ def settle_and_score(session: Session, slate: str) -> BacktestRun:
     session.refresh(backtest_run)
 
     return backtest_run
+
+
+def is_prediction_correct(
+    predicted_label: str,
+    home_goals: int,
+    away_goals: int,
+    home_corners: int | None = None,
+    away_corners: int | None = None,
+    home_sot: int | None = None,
+    away_sot: int | None = None,
+) -> bool:
+    total_goals = home_goals + away_goals
+
+    if predicted_label == "HOME_WIN":
+        return home_goals > away_goals
+
+    if predicted_label == "NOT_HOME_WIN":
+        return home_goals <= away_goals
+
+    if predicted_label == "AWAY_WIN":
+        return away_goals > home_goals
+
+    if predicted_label == "NOT_AWAY_WIN":
+        return away_goals <= home_goals
+
+    if predicted_label == "DRAW":
+        return home_goals == away_goals
+
+    if predicted_label == "NOT_DRAW":
+        return home_goals != away_goals
+
+    if predicted_label == "DOUBLE_CHANCE_1X":
+        return home_goals >= away_goals
+
+    if predicted_label == "NOT_DOUBLE_CHANCE_1X":
+        return home_goals < away_goals
+
+    if predicted_label == "DOUBLE_CHANCE_X2":
+        return away_goals >= home_goals
+
+    if predicted_label == "NOT_DOUBLE_CHANCE_X2":
+        return home_goals > away_goals
+
+    if predicted_label == "DOUBLE_CHANCE_12":
+        return home_goals != away_goals
+
+    if predicted_label == "NOT_DOUBLE_CHANCE_12":
+        return home_goals == away_goals
+
+    if predicted_label == "OVER_2_5":
+        return total_goals > 2.5
+
+    if predicted_label == "UNDER_2_5":
+        return total_goals <= 2.5
+
+    if predicted_label == "BTTS_YES":
+        return home_goals > 0 and away_goals > 0
+
+    if predicted_label == "BTTS_NO":
+        return home_goals == 0 or away_goals == 0
+
+    if predicted_label == "CORNERS_OVER_8_5":
+        if home_corners is None or away_corners is None:
+            return False
+        return home_corners + away_corners > 8.5
+
+    if predicted_label == "CORNERS_UNDER_8_5":
+        if home_corners is None or away_corners is None:
+            return False
+        return home_corners + away_corners <= 8.5
+
+    if predicted_label == "SOT_OVER_8_5":
+        if home_sot is None or away_sot is None:
+            return False
+        return home_sot + away_sot > 8.5
+
+    if predicted_label == "SOT_UNDER_8_5":
+        if home_sot is None or away_sot is None:
+            return False
+        return home_sot + away_sot <= 8.5
+
+    return False

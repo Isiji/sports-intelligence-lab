@@ -1,61 +1,21 @@
 # backend/app/ml/predict_football.py
 
-from pathlib import Path
 import pickle
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Prediction, PredictionGroupItem
-from app.features.football_features import feature_columns, load_upcoming_frame
+from app.db.models import MatchOdds, Prediction, PredictionGroupItem
+from app.features.football_features import MARKET_LABELS, MARKET_TARGETS, feature_columns, load_upcoming_frame
 from app.ml.registry import load_model_metadata
-
-
-HOME_WIN_MODEL_PATH = Path("artifacts/football_home_win_model.pkl")
-HOME_WIN_METADATA_PATH = Path("artifacts/football_home_win_model.json")
-
-OVER_2_5_MODEL_PATH = Path("artifacts/football_over_2_5_model.pkl")
-OVER_2_5_METADATA_PATH = Path("artifacts/football_over_2_5_model.json")
-
-
-def predict_football_home_win(
-    session: Session,
-    slate: str,
-    limit: int = 16,
-) -> int:
-    return _predict_binary_market(
-        session=session,
-        slate=slate,
-        limit=limit,
-        model_path=HOME_WIN_MODEL_PATH,
-        metadata_path=HOME_WIN_METADATA_PATH,
-        market="home_win",
-        positive_label="HOME_WIN",
-        negative_label="NOT_HOME_WIN",
-    )
-
-
-def predict_football_over_2_5(
-    session: Session,
-    slate: str,
-    limit: int = 16,
-) -> int:
-    return _predict_binary_market(
-        session=session,
-        slate=slate,
-        limit=limit,
-        model_path=OVER_2_5_MODEL_PATH,
-        metadata_path=OVER_2_5_METADATA_PATH,
-        market="over_2_5_goals",
-        positive_label="OVER_2_5",
-        negative_label="UNDER_2_5",
-    )
+from app.ml.train_football import metadata_path_for_market, model_path_for_market
 
 
 def predict_all_football_markets(
     session: Session,
     slate: str,
-    limit: int = 16,
+    limit: int = 30,
+    min_confidence: float = 0.6,
 ) -> int:
     session.execute(
         delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
@@ -69,33 +29,31 @@ def predict_all_football_markets(
 
     inserted = 0
 
-    inserted += predict_football_home_win(
-        session=session,
-        slate=slate,
-        limit=limit,
-    )
-
-    inserted += predict_football_over_2_5(
-        session=session,
-        slate=slate,
-        limit=limit,
-    )
+    for market in MARKET_TARGETS.keys():
+        inserted += predict_football_market(
+            session=session,
+            slate=slate,
+            market=market,
+            limit=limit,
+            min_confidence=min_confidence,
+        )
 
     return inserted
 
 
-def _predict_binary_market(
+def predict_football_market(
     session: Session,
     slate: str,
-    limit: int,
-    model_path: Path,
-    metadata_path: Path,
     market: str,
-    positive_label: str,
-    negative_label: str,
+    limit: int = 30,
+    min_confidence: float = 0.6,
 ) -> int:
+    model_path = model_path_for_market(market)
+    metadata_path = metadata_path_for_market(market)
+
     if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}. Train model first.")
+        print(f"[SKIPPED] Model file not found for {market}: {model_path}")
+        return 0
 
     metadata = load_model_metadata(metadata_path)
     selected_model_name = metadata.get("selected_model_name", "unknown_model")
@@ -113,6 +71,8 @@ def _predict_binary_market(
 
     probabilities = model.predict_proba(x)
 
+    positive_label, negative_label = MARKET_LABELS[market]
+
     inserted = 0
 
     for row_index, row in df.iterrows():
@@ -125,6 +85,23 @@ def _predict_binary_market(
             predicted_label = negative_label
             confidence = 1 - probability
 
+        if confidence < min_confidence:
+            continue
+
+        odds = _find_odds(
+            session=session,
+            match_id=int(row["match_id"]),
+            market=market,
+            selection=predicted_label,
+        )
+
+        implied_probability = None
+        value_score = None
+
+        if odds:
+            implied_probability = round(1 / odds, 4)
+            value_score = round(confidence - implied_probability, 4)
+
         session.add(
             Prediction(
                 slate=slate,
@@ -134,6 +111,9 @@ def _predict_binary_market(
                 market=market,
                 predicted_label=predicted_label,
                 confidence=round(confidence, 4),
+                odds=odds,
+                implied_probability=implied_probability,
+                value_score=value_score,
             )
         )
 
@@ -142,3 +122,25 @@ def _predict_binary_market(
     session.commit()
 
     return inserted
+
+
+def _find_odds(
+    session: Session,
+    match_id: int,
+    market: str,
+    selection: str,
+) -> float | None:
+    odds_row = session.scalar(
+        select(MatchOdds)
+        .where(
+            MatchOdds.match_id == match_id,
+            MatchOdds.market == market,
+            MatchOdds.selection == selection,
+        )
+        .order_by(MatchOdds.retrieved_at.desc())
+    )
+
+    if odds_row is None:
+        return None
+
+    return float(odds_row.odds)

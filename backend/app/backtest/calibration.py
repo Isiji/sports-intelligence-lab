@@ -11,21 +11,24 @@ def evaluate_confidence_calibration(session: Session, slate: str) -> list[dict]:
             SELECT
                 p.confidence,
                 CASE
-                    WHEN p.predicted_label = 'HOME_WIN'
-                         AND m.home_goals > m.away_goals
-                    THEN 1
+                    WHEN p.predicted_label = 'HOME_WIN' AND m.home_goals > m.away_goals THEN 1
+                    WHEN p.predicted_label = 'NOT_HOME_WIN' AND m.home_goals <= m.away_goals THEN 1
 
-                    WHEN p.predicted_label = 'NOT_HOME_WIN'
-                         AND m.home_goals <= m.away_goals
-                    THEN 1
+                    WHEN p.predicted_label = 'AWAY_WIN' AND m.away_goals > m.home_goals THEN 1
+                    WHEN p.predicted_label = 'NOT_AWAY_WIN' AND m.away_goals <= m.home_goals THEN 1
 
-                    WHEN p.predicted_label = 'OVER_2_5'
-                         AND (m.home_goals + m.away_goals) > 2
-                    THEN 1
+                    WHEN p.predicted_label = 'DRAW' AND m.home_goals = m.away_goals THEN 1
+                    WHEN p.predicted_label = 'NOT_DRAW' AND m.home_goals != m.away_goals THEN 1
 
-                    WHEN p.predicted_label = 'UNDER_2_5'
-                         AND (m.home_goals + m.away_goals) <= 2
-                    THEN 1
+                    WHEN p.predicted_label = 'DOUBLE_CHANCE_1X' AND m.home_goals >= m.away_goals THEN 1
+                    WHEN p.predicted_label = 'DOUBLE_CHANCE_X2' AND m.away_goals >= m.home_goals THEN 1
+                    WHEN p.predicted_label = 'DOUBLE_CHANCE_12' AND m.home_goals != m.away_goals THEN 1
+
+                    WHEN p.predicted_label = 'OVER_2_5' AND (m.home_goals + m.away_goals) > 2 THEN 1
+                    WHEN p.predicted_label = 'UNDER_2_5' AND (m.home_goals + m.away_goals) <= 2 THEN 1
+
+                    WHEN p.predicted_label = 'BTTS_YES' AND m.home_goals > 0 AND m.away_goals > 0 THEN 1
+                    WHEN p.predicted_label = 'BTTS_NO' AND (m.home_goals = 0 OR m.away_goals = 0) THEN 1
 
                     ELSE 0
                 END AS correct
@@ -45,7 +48,8 @@ def evaluate_confidence_calibration(session: Session, slate: str) -> list[dict]:
             END AS bucket,
             COUNT(*) AS total_predictions,
             SUM(correct) AS correct_predictions,
-            ROUND(AVG(correct::float), 4) AS accuracy
+            ROUND(AVG(correct::float), 4) AS accuracy,
+            ROUND(AVG(confidence), 4) AS average_confidence
         FROM scored
         GROUP BY bucket
         ORDER BY bucket
