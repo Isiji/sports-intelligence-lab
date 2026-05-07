@@ -1,11 +1,13 @@
 # backend/app/schemas/groups.py
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
 class GroupCreateResponse(BaseModel):
     slate: str
-    group_summaries: dict[str, dict[str, float]]
+    group_summaries: dict[str, dict[str, Any]]
 
 
 class GroupItemResponse(BaseModel):
