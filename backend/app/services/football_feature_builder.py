@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import FootballFeatureSnapshot
 from app.features.football_features import _add_targets, feature_columns
-
+from app.features.rolling_feature_engine import build_rolling_features
 
 def build_football_feature_cache(session: Session) -> dict:
     query = text("""
@@ -47,6 +47,8 @@ def build_football_feature_cache(session: Session) -> dict:
         return {"processed": 0}
 
     df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
+    
+    df = build_rolling_features(df)
 
     for col in feature_columns():
         if col not in df.columns:
