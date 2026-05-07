@@ -1,5 +1,7 @@
 # backend/app/ml/train_football.py
+# backend/app/ml/train_football.py
 
+from app.features.market_feature_map import feature_columns_for_market
 from pathlib import Path
 import pickle
 
@@ -89,10 +91,13 @@ def _train_market_model(session: Session, df, market: str, target_column: str) -
     if test_df[target_column].nunique() < 2:
         raise ValueError("testing split has only one class.")
 
-    x_train = train_df[feature_columns()].fillna(0.0)
+    market_features = feature_columns_for_market(market)
+
+    x_train = train_df[market_features].fillna(0.0)
+    
     y_train = train_df[target_column]
 
-    x_test = test_df[feature_columns()].fillna(0.0)
+    x_test = test_df[market_features].fillna(0.0)
     y_test = test_df[target_column]
 
     candidates = _candidate_models()
@@ -206,7 +211,7 @@ def _train_market_model(session: Session, df, market: str, target_column: str) -
         "selected_model_name": selected_result["model_name"],
         "models": saved_models,
         "weights": saved_weights,
-        "feature_columns": feature_columns(),
+        "feature_columns": market_features,
     }
 
     with save_path.open("wb") as file:
@@ -217,7 +222,7 @@ def _train_market_model(session: Session, df, market: str, target_column: str) -
         market=market,
         selected_model_name=selected_result["model_name"],
         selected_accuracy=selected_result["accuracy"],
-        feature_columns=feature_columns(),
+        feature_columns=market_features,
         extra={
             "selection_rule": "lowest_brier_then_highest_roc_auc_f1_accuracy",
             "weights": saved_weights,

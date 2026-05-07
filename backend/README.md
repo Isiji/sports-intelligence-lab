@@ -31,6 +31,8 @@ python -m app.cli ingest-all-leagues-season --season 2025
 
 python -m app.cli train-football
 
+python -m app.cli build-elo-ratings
+
 python -m app.cli build-football-features
 
 python -m app.cli ingest-missing-stats --limit 20
