@@ -318,3 +318,48 @@ class StatsQualitySnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    
+    
+# backend/app/db/models.py
+# ADD THIS CLASS AT THE BOTTOM
+
+class LeagueIntelligenceSnapshot(Base):
+    __tablename__ = "league_intelligence_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "sport",
+            "competition_id",
+            "season",
+            name="uq_league_intel_sport_competition_season",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    competition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitions.id"),
+        nullable=True,
+        index=True,
+    )
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+    stats_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    data_tier: Mapped[str] = mapped_column(String(40), default="poor", index=True)
+
+    prediction_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    training_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=0.5)
+    risk_level: Mapped[str] = mapped_column(String(40), default="high", index=True)
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
