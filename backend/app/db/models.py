@@ -363,3 +363,44 @@ class LeagueIntelligenceSnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    
+    
+# backend/app/db/models.py
+# ADD THIS CLASS AT THE BOTTOM
+
+class MarketReliabilitySnapshot(Base):
+    __tablename__ = "market_reliability_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "sport",
+            "market",
+            name="uq_market_reliability_sport_market",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    market: Mapped[str] = mapped_column(String(80), index=True)
+
+    settled_predictions: Mapped[int] = mapped_column(Integer, default=0)
+    correct_predictions: Mapped[int] = mapped_column(Integer, default=0)
+
+    accuracy: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    reliability_score: Mapped[float] = mapped_column(Float, default=0.0)
+    reliability_tier: Mapped[str] = mapped_column(String(40), default="poor", index=True)
+
+    prediction_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=0.5)
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
