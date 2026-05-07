@@ -177,21 +177,6 @@ def ingest_missing_statistics(
         Match.away_goals.isnot(None),
     ]
 
-    PRIORITY_STATS_LEAGUES = [
-    "Premier League",
-    "Championship",
-    "Bundesliga",
-    "2. Bundesliga",
-    "Ligue 1",
-    "Ligue 2",
-    "Serie A",
-    "Serie B",
-    "La Liga",
-    "Eredivisie",
-    "Primeira Liga",
-    "UEFA Champions League",
-    "UEFA Europa League",
-    ]
     if not force:
         conditions.append(Match.has_stats.is_(False))
 

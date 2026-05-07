@@ -267,3 +267,54 @@ class OddsMarketMap(Base):
     line_value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     active: Mapped[bool] = mapped_column(Boolean, default=True)  
+
+
+# backend/app/db/models.py
+# ADD THIS CLASS AT THE BOTTOM OF YOUR EXISTING FILE
+
+class StatsQualitySnapshot(Base):
+    __tablename__ = "stats_quality_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "sport",
+            "competition_id",
+            "season",
+            name="uq_stats_quality_sport_league_season",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    competition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitions.id"),
+        nullable=True,
+        index=True,
+    )
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+    finished_matches: Mapped[int] = mapped_column(Integer, default=0)
+    matches_with_stats: Mapped[int] = mapped_column(Integer, default=0)
+    matches_with_real_stats: Mapped[int] = mapped_column(Integer, default=0)
+    matches_with_odds: Mapped[int] = mapped_column(Integer, default=0)
+
+    stat_rows: Mapped[int] = mapped_column(Integer, default=0)
+    real_stat_rows: Mapped[int] = mapped_column(Integer, default=0)
+
+    coverage_score: Mapped[float] = mapped_column(Float, default=0.0)
+    realness_score: Mapped[float] = mapped_column(Float, default=0.0)
+    odds_score: Mapped[float] = mapped_column(Float, default=0.0)
+    sample_size_score: Mapped[float] = mapped_column(Float, default=0.0)
+    overall_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    quality_tier: Mapped[str] = mapped_column(String(40), default="poor", index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
