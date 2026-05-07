@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     sports_api_base_url: str = "https://v3.football.api-sports.io"
 
     sports_api_daily_limit: int = 7000
-    sports_api_safety_buffer: int = 3000
+    sports_api_safety_buffer: int = 1000
     sports_api_retry_attempts: int = 3
     sports_api_retry_sleep_seconds: int = 10
     sports_api_timeout_seconds: int = 30

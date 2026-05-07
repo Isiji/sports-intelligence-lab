@@ -10,21 +10,11 @@ K_FACTOR = 32.0
 HOME_ADVANTAGE_ELO = 60.0
 
 
+# backend/app/features/football_features.py
+
 def feature_columns() -> list[str]:
     return [
-        "home_sot",
-        "home_corners",
-        "home_possession",
-        "home_fouls",
-        "home_cards",
-        "home_keeper_saves",
-        "away_sot",
-        "away_corners",
-        "away_possession",
-        "away_fouls",
-        "away_cards",
-        "away_keeper_saves",
-
+        # Recent team form / performance
         "home_win_rate",
         "away_win_rate",
         "home_goal_diff",
@@ -32,16 +22,19 @@ def feature_columns() -> list[str]:
         "home_form_score",
         "away_form_score",
 
+        # Head-to-head history
         "home_h2h_win_rate",
         "away_h2h_win_rate",
         "h2h_avg_goals",
         "h2h_over_2_5_rate",
 
+        # Home/away specific form
         "home_home_win_rate",
         "away_away_win_rate",
         "home_current_streak",
         "away_current_streak",
 
+        # Rolling team profiles
         "home_goals_for_avg",
         "home_goals_against_avg",
         "away_goals_for_avg",
@@ -57,11 +50,13 @@ def feature_columns() -> list[str]:
         "home_over_2_5_rate",
         "away_over_2_5_rate",
 
+        # These are rolling averages from previous matches, not current match totals
         "home_corner_avg",
         "away_corner_avg",
         "home_sot_avg",
         "away_sot_avg",
 
+        # ELO / strength
         "home_elo",
         "away_elo",
         "elo_diff",
@@ -75,6 +70,7 @@ def feature_columns() -> list[str]:
         "attack_defense_diff",
         "team_strength_diff",
 
+        # League profile from previous matches
         "league_home_win_rate",
         "league_away_win_rate",
         "league_draw_rate",
@@ -84,7 +80,6 @@ def feature_columns() -> list[str]:
         "league_avg_corners",
         "league_avg_sot",
     ]
-
 
 MARKET_TARGETS = {
     "home_win": "target_home_win",
