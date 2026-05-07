@@ -1,5 +1,3 @@
-# backend/app/ingest/football_stats_ingestion.py
-
 from datetime import datetime
 import re
 from difflib import SequenceMatcher
@@ -80,6 +78,7 @@ def ingest_fixture_statistics(
 
     if len(rows) == 0:
         match.has_stats = False
+        match.last_synced_at = datetime.utcnow()
         session.commit()
 
         return {
@@ -128,6 +127,12 @@ def ingest_fixture_statistics(
         stat_row.fouls = parsed["fouls"]
         stat_row.cards = parsed["cards"]
         stat_row.keeper_saves = parsed["keeper_saves"]
+
+        # important: mark these rows as real API statistics
+        stat_row.source = "api_football"
+        stat_row.is_real = True
+        stat_row.raw_stats_json = team_block
+        stat_row.updated_at = datetime.utcnow()
 
         updated_teams += 1
         blocks_with_real_stats += 1
