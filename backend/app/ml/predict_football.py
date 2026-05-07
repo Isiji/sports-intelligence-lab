@@ -5,11 +5,18 @@ import pickle
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import MatchOdds, Prediction, PredictionGroupItem
-from app.features.football_features import MARKET_LABELS, MARKET_TARGETS, feature_columns, load_upcoming_frame
+from app.analysis.weak_markets import is_market_weak
+from app.db.models import Match, MatchOdds, Prediction, PredictionGroupItem
+from app.features.football_features import (
+    MARKET_LABELS,
+    MARKET_TARGETS,
+    feature_columns,
+    load_upcoming_frame,
+)
 from app.ml.registry import load_model_metadata
 from app.ml.train_football import metadata_path_for_market, model_path_for_market
-from app.analysis.weak_markets import is_market_weak
+from app.services.prediction_guard_service import apply_prediction_guard
+
 
 def predict_all_football_markets(
     session: Session,
@@ -31,9 +38,9 @@ def predict_all_football_markets(
 
     for market in MARKET_TARGETS.keys():
         if is_market_weak(session=session, market=market):
-            print(f"[SKIPPED WEAK MARKET] {market}")
+            print(f"[SKIPPED OLD WEAK MARKET CHECK] {market}")
             continue
-        
+
         inserted += predict_football_market(
             session=session,
             slate=slate,
@@ -82,6 +89,15 @@ def predict_football_market(
     inserted = 0
 
     for row_index, row in df.iterrows():
+        match_id = int(row["match_id"])
+
+        match = session.scalar(
+            select(Match).where(Match.id == match_id)
+        )
+
+        if match is None:
+            continue
+
         probability = float(probabilities[row_index])
 
         if probability >= 0.5:
@@ -91,12 +107,28 @@ def predict_football_market(
             predicted_label = negative_label
             confidence = 1 - probability
 
+        guard = apply_prediction_guard(
+            session=session,
+            match=match,
+            market=market,
+            raw_confidence=confidence,
+        )
+
+        if not guard["allowed"]:
+            print(
+                f"[GUARD BLOCKED] match_id={match_id}, "
+                f"market={market}, reasons={guard['reasons']}"
+            )
+            continue
+
+        confidence = float(guard["adjusted_confidence"])
+
         if confidence < min_confidence:
             continue
 
         odds = _find_odds(
             session=session,
-            match_id=int(row["match_id"]),
+            match_id=match_id,
             market=market,
             selection=predicted_label,
         )
@@ -111,7 +143,7 @@ def predict_football_market(
         session.add(
             Prediction(
                 slate=slate,
-                match_id=int(row["match_id"]),
+                match_id=match_id,
                 sport="football",
                 model_name=selected_model_name,
                 market=market,

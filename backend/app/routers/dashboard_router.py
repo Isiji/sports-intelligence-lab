@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_session
 from app.schemas.dashboard import DashboardResponse, GamePrediction, GroupSummary
+from app.utils.slate import resolve_slate
 
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -15,9 +16,11 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 @router.get("/summary", response_model=DashboardResponse)
 def get_dashboard_summary(
-    slate: str = Query("demo"),
+    slate: str | None = Query(None),
     session: Session = Depends(get_session),
 ):
+    selected_slate = resolve_slate(slate)
+
     query = text(
         """
         SELECT
@@ -37,7 +40,7 @@ def get_dashboard_summary(
         """
     )
 
-    rows = session.execute(query, {"slate": slate}).mappings().all()
+    rows = session.execute(query, {"slate": selected_slate}).mappings().all()
 
     groups_map: dict[str, list[GamePrediction]] = {}
 
@@ -74,6 +77,6 @@ def get_dashboard_summary(
         )
 
     return DashboardResponse(
-        slate=slate,
+        slate=selected_slate,
         groups=group_summaries,
     )

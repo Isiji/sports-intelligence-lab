@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.analysis.match_analysis import get_match_analysis
 from app.db.session import get_session
 from app.schemas.match_analysis import MatchAnalysisResponse
+from app.utils.slate import resolve_slate
 
 
 router = APIRouter(
@@ -20,13 +21,15 @@ router = APIRouter(
 )
 def analyze_match(
     match_id: int,
-    slate: str = Query("demo"),
+    slate: str | None = Query(None),
     session: Session = Depends(get_session),
 ):
+    selected_slate = resolve_slate(slate)
+
     result = get_match_analysis(
         session=session,
         match_id=match_id,
-        slate=slate,
+        slate=selected_slate,
     )
 
     if result is None:

@@ -67,17 +67,23 @@ def get_match(
     return match
 
 
+# backend/app/routers/matches_router.py
+
 @router.get("/{match_id}/predictions", response_model=list[PredictionResponse])
 def get_match_predictions(
     match_id: int,
-    slate: str = Query("demo"),
+    slate: str | None = Query(None),
     session: Session = Depends(get_session),
 ):
+    from app.utils.slate import resolve_slate
+
+    selected_slate = resolve_slate(slate)
+
     query = (
         select(Prediction)
         .where(
             Prediction.match_id == match_id,
-            Prediction.slate == slate,
+            Prediction.slate == selected_slate,
         )
         .order_by(Prediction.confidence.desc())
     )

@@ -1,3 +1,5 @@
+# backend/app/routers/groups_router.py
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from app.schemas.groups import (
     GroupCreateResponse,
     GroupItemResponse,
 )
+from app.utils.slate import resolve_slate
 
 
 router = APIRouter(
@@ -21,7 +24,7 @@ router = APIRouter(
     response_model=GroupCreateResponse,
 )
 def create_prediction_groups(
-    slate: str = Query("demo"),
+    slate: str | None = Query(None),
 
     min_confidence: float = Query(
         0.65,
@@ -38,10 +41,12 @@ def create_prediction_groups(
 
     session: Session = Depends(get_session),
 ):
+    selected_slate = resolve_slate(slate)
+
     try:
         summaries = group_predictions(
             session=session,
-            slate=slate,
+            slate=selected_slate,
             min_confidence=min_confidence,
             min_group_odds=min_group_odds,
             require_odds=require_odds,
@@ -54,7 +59,7 @@ def create_prediction_groups(
         ) from exc
 
     return GroupCreateResponse(
-        slate=slate,
+        slate=selected_slate,
         group_summaries=summaries,
     )
 
@@ -64,9 +69,11 @@ def create_prediction_groups(
     response_model=list[GroupItemResponse],
 )
 def list_prediction_groups(
-    slate: str = Query("demo"),
+    slate: str | None = Query(None),
     session: Session = Depends(get_session),
 ):
+    selected_slate = resolve_slate(slate)
+
     query = text(
         """
         SELECT
@@ -102,7 +109,7 @@ def list_prediction_groups(
 
     rows = session.execute(
         query,
-        {"slate": slate},
+        {"slate": selected_slate},
     ).mappings().all()
 
     return [

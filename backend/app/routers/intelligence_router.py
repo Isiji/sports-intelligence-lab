@@ -16,7 +16,10 @@ from app.services.stats_quality_service import (
     list_stats_quality_snapshots,
     rebuild_stats_quality_snapshots,
 )
+# backend/app/routers/intelligence_router.py
 
+from app.db.models import Match
+from app.services.prediction_guard_service import evaluate_prediction_guard
 
 router = APIRouter(prefix="/intelligence", tags=["Intelligence"])
 
@@ -93,3 +96,25 @@ def get_markets(
             tier=tier,
         )
     }
+    
+# backend/app/routers/intelligence_router.py
+
+@router.get("/guards/match/{match_id}")
+def check_match_guard(
+    match_id: int,
+    market: str = Query(...),
+    session: Session = Depends(get_session),
+):
+    match = session.query(Match).filter(Match.id == match_id).first()
+
+    if match is None:
+        return {
+            "allowed": False,
+            "message": "Match not found.",
+        }
+
+    return evaluate_prediction_guard(
+        session=session,
+        match=match,
+        market=market,
+    )
