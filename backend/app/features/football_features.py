@@ -90,17 +90,29 @@ MARKET_TARGETS = {
     "home_win": "target_home_win",
     "away_win": "target_away_win",
     "draw": "target_draw",
+
     "double_chance_1x": "target_double_chance_1x",
     "double_chance_x2": "target_double_chance_x2",
     "double_chance_12": "target_double_chance_12",
+
+    "over_1_5_goals": "target_over_1_5",
+    "under_1_5_goals": "target_under_1_5",
     "over_2_5_goals": "target_over_2_5",
     "under_2_5_goals": "target_under_2_5",
+    "over_3_5_goals": "target_over_3_5",
+    "under_3_5_goals": "target_under_3_5",
+
     "btts_yes": "target_btts_yes",
     "btts_no": "target_btts_no",
+
+    "home_over_0_5_goals": "target_home_over_0_5",
+    "away_over_0_5_goals": "target_away_over_0_5",
+    "home_clean_sheet": "target_home_clean_sheet",
+    "away_clean_sheet": "target_away_clean_sheet",
+
     "corners_over_8_5": "target_corners_over_8_5",
     "shots_on_target_over_8_5": "target_sot_over_8_5",
 }
-
 
 STATS_REQUIRED_MARKETS = {
     "corners_over_8_5",
@@ -112,40 +124,139 @@ MARKET_LABELS = {
     "home_win": ("HOME_WIN", "NOT_HOME_WIN"),
     "away_win": ("AWAY_WIN", "NOT_AWAY_WIN"),
     "draw": ("DRAW", "NOT_DRAW"),
+
     "double_chance_1x": ("DOUBLE_CHANCE_1X", "NOT_DOUBLE_CHANCE_1X"),
     "double_chance_x2": ("DOUBLE_CHANCE_X2", "NOT_DOUBLE_CHANCE_X2"),
     "double_chance_12": ("DOUBLE_CHANCE_12", "NOT_DOUBLE_CHANCE_12"),
+
+    "over_1_5_goals": ("OVER_1_5", "UNDER_1_5"),
+    "under_1_5_goals": ("UNDER_1_5", "OVER_1_5"),
     "over_2_5_goals": ("OVER_2_5", "UNDER_2_5"),
     "under_2_5_goals": ("UNDER_2_5", "OVER_2_5"),
+    "over_3_5_goals": ("OVER_3_5", "UNDER_3_5"),
+    "under_3_5_goals": ("UNDER_3_5", "OVER_3_5"),
+
     "btts_yes": ("BTTS_YES", "BTTS_NO"),
     "btts_no": ("BTTS_NO", "BTTS_YES"),
+
+    "home_over_0_5_goals": ("HOME_OVER_0_5", "HOME_UNDER_0_5"),
+    "away_over_0_5_goals": ("AWAY_OVER_0_5", "AWAY_UNDER_0_5"),
+    "home_clean_sheet": ("HOME_CLEAN_SHEET", "HOME_CONCEDED"),
+    "away_clean_sheet": ("AWAY_CLEAN_SHEET", "AWAY_CONCEDED"),
+
     "corners_over_8_5": ("CORNERS_OVER_8_5", "CORNERS_UNDER_8_5"),
     "shots_on_target_over_8_5": ("SOT_OVER_8_5", "SOT_UNDER_8_5"),
 }
 
 
 def load_training_frame(session: Session) -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            m.id AS match_id,
+            m.kickoff_date,
+            m.league,
+            m.home_team,
+            m.away_team,
+            m.home_goals,
+            m.away_goals,
+            m.has_stats,
+            f.features_json
+        FROM football_feature_snapshots f
+        JOIN matches m ON m.id = f.match_id
+        WHERE
+            m.home_goals IS NOT NULL
+            AND m.away_goals IS NOT NULL
+        ORDER BY m.kickoff_date ASC, m.id ASC
+        """
+    )
+
+    rows = pd.read_sql(query, session.bind)
+
+    if rows.empty:
+        raise ValueError(
+            "No cached football features found. Run: python -m app.cli build-football-features"
+        )
+
+    feature_rows = []
+
+    for _, row in rows.iterrows():
+        payload = row["features_json"] or {}
+
+        item = {
+            "match_id": row["match_id"],
+            "kickoff_date": row["kickoff_date"],
+            "league": row["league"],
+            "home_team": row["home_team"],
+            "away_team": row["away_team"],
+            "home_goals": row["home_goals"],
+            "away_goals": row["away_goals"],
+            "has_stats": row["has_stats"],
+        }
+
+        item.update(payload)
+        feature_rows.append(item)
+
+    df = pd.DataFrame(feature_rows)
+
+    df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
+
+    for col in feature_columns():
+        if col not in df.columns:
+            df[col] = 0.0
+
+    for target_column in MARKET_TARGETS.values():
+        if target_column not in df.columns:
+            df[target_column] = 0
+
+    return df.fillna(0.0).reset_index(drop=True)
+
+
+def load_upcoming_frame(
+    session: Session,
+    limit: int = 30,
+) -> pd.DataFrame:
     df = _base_query(session)
 
     if df.empty:
         return df
 
-    df = _add_advanced_features(df)
-    df = _add_targets(df)
+    historical_df = df[
+        df["home_goals"].notna()
+        & df["away_goals"].notna()
+    ].copy()
 
-    return df
+    upcoming_df = df[
+        df["home_goals"].isna()
+        & df["away_goals"].isna()
+    ].copy()
 
+    upcoming_df = (
+        upcoming_df
+        .sort_values(["kickoff_date", "match_id"])
+        .head(limit)
+    )
 
-def load_upcoming_frame(session: Session, limit: int = 30) -> pd.DataFrame:
-    df = _base_query(session, upcoming_only=True, limit=limit)
+    upcoming_df = build_upcoming_match_features(
+        session=session,
+        upcoming_df=upcoming_df,
+        historical_df=historical_df,
+    )
 
-    if df.empty:
-        return df
+    upcoming_df = _apply_persistent_elo_for_upcoming(
+        session=session,
+        df=upcoming_df,
+    )
 
-    df = _add_advanced_features(df)
+    for col in feature_columns():
+        if col not in upcoming_df.columns:
+            upcoming_df[col] = 0.0
 
-    return df
-
+    return (
+        upcoming_df
+        .fillna(0.0)
+        .reset_index(drop=True)
+    )
 
 def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFrame:
     df = df.copy()
@@ -158,8 +269,76 @@ def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFr
 
     return df.reset_index(drop=True)
 
+def _apply_persistent_elo_for_upcoming(
+    session: Session,
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    if df.empty:
+        return df
 
-def _base_query(session: Session, upcoming_only: bool = False, limit: int | None = None):
+    ratings_query = text(
+        """
+        SELECT
+            team_id,
+            overall_elo,
+            attack_elo,
+            defense_elo,
+            form_elo
+        FROM team_ratings
+        WHERE sport = 'football'
+        """
+    )
+
+    ratings_df = pd.read_sql(ratings_query, session.bind)
+
+    if ratings_df.empty:
+        return df
+
+    ratings = {
+        int(row["team_id"]): row
+        for _, row in ratings_df.iterrows()
+    }
+
+    df = df.copy()
+
+    for i, row in df.iterrows():
+        home_team_id = row.get("home_team_id")
+        away_team_id = row.get("away_team_id")
+
+        home_rating = ratings.get(int(home_team_id)) if pd.notna(home_team_id) else None
+        away_rating = ratings.get(int(away_team_id)) if pd.notna(away_team_id) else None
+
+        if home_rating is not None:
+            df.at[i, "home_elo"] = float(home_rating["overall_elo"])
+            df.at[i, "home_attack_elo"] = float(home_rating["attack_elo"])
+            df.at[i, "home_defense_elo"] = float(home_rating["defense_elo"])
+            df.at[i, "home_elo_form"] = float(home_rating["form_elo"])
+
+        if away_rating is not None:
+            df.at[i, "away_elo"] = float(away_rating["overall_elo"])
+            df.at[i, "away_attack_elo"] = float(away_rating["attack_elo"])
+            df.at[i, "away_defense_elo"] = float(away_rating["defense_elo"])
+            df.at[i, "away_elo_form"] = float(away_rating["form_elo"])
+
+        df.at[i, "elo_diff"] = (
+            float(df.at[i, "home_elo"])
+            + HOME_ADVANTAGE_ELO
+            - float(df.at[i, "away_elo"])
+        )
+
+        df.at[i, "elo_form_diff"] = (
+            float(df.at[i, "home_elo_form"])
+            - float(df.at[i, "away_elo_form"])
+        )
+
+        df.at[i, "attack_defense_diff"] = (
+            float(df.at[i, "home_attack_elo"])
+            - float(df.at[i, "away_defense_elo"])
+        )
+
+    return df.fillna(0.0)
+
+def _base_query(session: Session):
     query = text(
         """
         SELECT
@@ -168,40 +347,39 @@ def _base_query(session: Session, upcoming_only: bool = False, limit: int | None
             m.league,
             m.home_team,
             m.away_team,
+            m.home_team_id,
+            m.away_team_id,
             m.home_goals,
             m.away_goals,
             m.has_stats,
 
-            hs.shots_on_target AS home_sot,
-            hs.corners AS home_corners,
-            hs.possession AS home_possession,
-            hs.fouls AS home_fouls,
-            hs.cards AS home_cards,
-            hs.keeper_saves AS home_keeper_saves,
+            COALESCE(hs.shots_on_target, 0) AS home_sot,
+            COALESCE(hs.corners, 0) AS home_corners,
+            COALESCE(hs.possession, 0) AS home_possession,
+            COALESCE(hs.fouls, 0) AS home_fouls,
+            COALESCE(hs.cards, 0) AS home_cards,
+            COALESCE(hs.keeper_saves, 0) AS home_keeper_saves,
 
-            as1.shots_on_target AS away_sot,
-            as1.corners AS away_corners,
-            as1.possession AS away_possession,
-            as1.fouls AS away_fouls,
-            as1.cards AS away_cards,
-            as1.keeper_saves AS away_keeper_saves
+            COALESCE(as1.shots_on_target, 0) AS away_sot,
+            COALESCE(as1.corners, 0) AS away_corners,
+            COALESCE(as1.possession, 0) AS away_possession,
+            COALESCE(as1.fouls, 0) AS away_fouls,
+            COALESCE(as1.cards, 0) AS away_cards,
+            COALESCE(as1.keeper_saves, 0) AS away_keeper_saves
 
         FROM matches m
-        JOIN team_match_stats hs ON hs.match_id = m.id AND hs.is_home = 1
-        JOIN team_match_stats as1 ON as1.match_id = m.id AND as1.is_home = 0
+        LEFT JOIN team_match_stats hs ON hs.match_id = m.id AND hs.is_home = 1
+        LEFT JOIN team_match_stats as1 ON as1.match_id = m.id AND as1.is_home = 0
         ORDER BY m.kickoff_date ASC, m.id ASC
         """
     )
 
     df = pd.read_sql(query, session.bind)
-    df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
 
-    if upcoming_only:
-        df = df[df["home_goals"].isna() & df["away_goals"].isna()]
-        if limit:
-            df = df.head(limit)
-    else:
-        df = df[df["home_goals"].notna() & df["away_goals"].notna()]
+    if df.empty:
+        return df
+
+    df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
 
     return df.reset_index(drop=True)
 
@@ -221,17 +399,26 @@ def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df["target_double_chance_x2"] = (df["away_goals"] >= df["home_goals"]).astype(int)
     df["target_double_chance_12"] = (df["home_goals"] != df["away_goals"]).astype(int)
 
+    df["target_over_1_5"] = (total_goals > 1.5).astype(int)
+    df["target_under_1_5"] = (total_goals <= 1.5).astype(int)
     df["target_over_2_5"] = (total_goals > 2.5).astype(int)
     df["target_under_2_5"] = (total_goals <= 2.5).astype(int)
+    df["target_over_3_5"] = (total_goals > 3.5).astype(int)
+    df["target_under_3_5"] = (total_goals <= 3.5).astype(int)
 
     df["target_btts_yes"] = ((df["home_goals"] > 0) & (df["away_goals"] > 0)).astype(int)
     df["target_btts_no"] = ((df["home_goals"] == 0) | (df["away_goals"] == 0)).astype(int)
+
+    df["target_home_over_0_5"] = (df["home_goals"] > 0).astype(int)
+    df["target_away_over_0_5"] = (df["away_goals"] > 0).astype(int)
+
+    df["target_home_clean_sheet"] = (df["away_goals"] == 0).astype(int)
+    df["target_away_clean_sheet"] = (df["home_goals"] == 0).astype(int)
 
     df["target_corners_over_8_5"] = (total_corners > 8.5).astype(int)
     df["target_sot_over_8_5"] = (total_sot > 8.5).astype(int)
 
     return df
-
 
 def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -644,6 +831,89 @@ def _league_history(df: pd.DataFrame, league: str, date) -> pd.DataFrame:
         & df["away_goals"].notna()
     ]
 
+def build_upcoming_match_features(
+    session: Session,
+    upcoming_df: pd.DataFrame,
+    historical_df: pd.DataFrame,
+) -> pd.DataFrame:
+    upcoming_df = upcoming_df.copy()
+
+    historical_df = historical_df.sort_values(
+        ["kickoff_date", "match_id"]
+    )
+
+    for i, row in upcoming_df.iterrows():
+        home = row["home_team"]
+        away = row["away_team"]
+        league = row["league"]
+
+        home_hist = historical_df[
+            (
+                (historical_df["home_team"] == home)
+                | (historical_df["away_team"] == home)
+            )
+        ].tail(8)
+
+        away_hist = historical_df[
+            (
+                (historical_df["home_team"] == away)
+                | (historical_df["away_team"] == away)
+            )
+        ].tail(8)
+
+        league_hist = historical_df[
+            historical_df["league"] == league
+        ].tail(200)
+
+        h2h_hist = historical_df[
+            (
+                (
+                    (historical_df["home_team"] == home)
+                    & (historical_df["away_team"] == away)
+                )
+                |
+                (
+                    (historical_df["home_team"] == away)
+                    & (historical_df["away_team"] == home)
+                )
+            )
+        ].tail(6)
+
+        upcoming_df.at[i, "home_win_rate"] = _win_rate(home_hist, home)
+        upcoming_df.at[i, "away_win_rate"] = _win_rate(away_hist, away)
+
+        upcoming_df.at[i, "home_goal_diff"] = _goal_diff(home_hist, home)
+        upcoming_df.at[i, "away_goal_diff"] = _goal_diff(away_hist, away)
+
+        upcoming_df.at[i, "home_form_score"] = _form_score(home_hist, home)
+        upcoming_df.at[i, "away_form_score"] = _form_score(away_hist, away)
+
+        for key, value in _h2h_features(
+            h2h_hist,
+            home,
+            away,
+        ).items():
+            upcoming_df.at[i, key] = value
+
+        for key, value in _league_profile(
+            league_hist
+        ).items():
+            upcoming_df.at[i, key] = value
+
+        for key, value in _team_profile(home_hist, home).items():
+            upcoming_df.at[i, f"home_{key}"] = value
+
+        for key, value in _team_profile(away_hist, away).items():
+            upcoming_df.at[i, f"away_{key}"] = value
+
+        home_strength = _team_strength(home_hist, home)
+        away_strength = _team_strength(away_hist, away)
+
+        upcoming_df.at[i, "team_strength_diff"] = (
+            home_strength - away_strength
+        )
+
+    return upcoming_df.fillna(0.0)
 
 def _league_profile(hist: pd.DataFrame) -> dict[str, float]:
     if hist.empty:

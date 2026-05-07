@@ -5,6 +5,7 @@ import typer
 from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
 from app.db.session import get_cli_session
+from sqlalchemy import text
 from app.grouping.create_groups import group_predictions
 from app.ingest.demo_results import simulate_demo_results
 from app.ingest.demo_seed import seed_demo_data
@@ -30,6 +31,8 @@ from app.reports.competition_coverage import build_competition_coverage_report
 
 from app.ingest.finished_match_updater import update_finished_matches
 from app.reports.prediction_performance import build_prediction_performance_report
+from app.services.elo_service import build_elo_ratings
+from app.services.football_feature_builder import build_football_feature_cache
 
 
 app = typer.Typer()
@@ -50,7 +53,15 @@ def seed_demo() -> None:
 
     typer.echo("Demo football data seeded.")
 
+@app.command("feature-cache-status")
+def feature_cache_status() -> None:
+    with get_cli_session() as session:
+        count = session.execute(
+            text("SELECT COUNT(*) FROM football_feature_snapshots")
+        ).scalar()
 
+    typer.echo({"cached_feature_rows": count})
+    
 @app.command("train-football")
 def train_football() -> None:
     with get_cli_session() as session:
@@ -286,6 +297,20 @@ def ingest_missing_stats(
 
     typer.echo(result)
 
+@app.command("build-elo-ratings")
+def build_elo_ratings_command() -> None:
+    with get_cli_session() as session:
+        result = build_elo_ratings(session)
 
+    typer.echo(result)
+    
+@app.command("build-football-features")
+def build_football_features_command() -> None:
+    with get_cli_session() as session:
+        result = build_football_feature_cache(session)
+
+    typer.echo(result)
+    
+    
 if __name__ == "__main__":
     app()

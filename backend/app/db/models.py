@@ -404,3 +404,80 @@ class MarketReliabilitySnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    
+    
+class TeamRating(Base):
+    __tablename__ = "team_ratings"
+    __table_args__ = (
+        UniqueConstraint(
+            "team_id",
+            "sport",
+            name="uq_team_rating_team_sport",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    team_id: Mapped[int] = mapped_column(
+        ForeignKey("teams.id"),
+        index=True,
+    )
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+
+    overall_elo: Mapped[float] = mapped_column(Float, default=1500.0)
+    attack_elo: Mapped[float] = mapped_column(Float, default=1500.0)
+    defense_elo: Mapped[float] = mapped_column(Float, default=1500.0)
+    form_elo: Mapped[float] = mapped_column(Float, default=0.0)
+
+    matches_played: Mapped[int] = mapped_column(Integer, default=0)
+
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    draws: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+
+    goals_scored: Mapped[int] = mapped_column(Integer, default=0)
+    goals_conceded: Mapped[int] = mapped_column(Integer, default=0)
+
+    last_match_id: Mapped[int | None] = mapped_column(
+        ForeignKey("matches.id"),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )
+    
+class FootballFeatureSnapshot(Base):
+    __tablename__ = "football_feature_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "match_id",
+            name="uq_feature_snapshot_match",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id"),
+        index=True,
+    )
+
+    features_json: Mapped[dict] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
