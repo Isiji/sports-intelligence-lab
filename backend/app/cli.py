@@ -37,7 +37,9 @@ from app.services.elo_service import build_elo_ratings
 from app.services.football_feature_builder import build_football_feature_cache
 from app.backtest.value_backtest import run_value_backtest
 from app.backtest.historical_value_backtest import run_historical_value_backtest
-
+from app.backtest.market_profitability import (
+    summarize_market_profitability,
+)
 
 app = typer.Typer()
 
@@ -318,7 +320,35 @@ def ingest_missing_stats(
 
     typer.echo(result)
 
+@app.command("market-profitability")
+def market_profitability(
+    slate: str | None = typer.Option(None, help="Optional prediction slate filter."),
+) -> None:
+    """
+    Analyze profitability by market and league.
+    """
+
+    from pprint import pprint
+
+    with get_cli_session() as session:
+        results = summarize_market_profitability(
+            session=session,
+            slate=slate,
+        )
+
+    typer.echo("\n========== BEST MARKETS ==========\n")
+    pprint(results["best_markets"])
+
+    typer.echo("\n========== WORST MARKETS ==========\n")
+    pprint(results["worst_markets"])
+
+    typer.echo("\n========== BEST LEAGUES ==========\n")
+    pprint(results["best_leagues"])
+
+    typer.echo("\n========== WORST LEAGUES ==========\n")
+    pprint(results["worst_leagues"])
     
+
 @app.command("build-elo-ratings")
 def build_elo_ratings_command() -> None:
     with get_cli_session() as session:
@@ -370,6 +400,7 @@ def historical_backtest_football(
     market: str = typer.Option("home_win", help="Market to backtest."),
     initial_train_size: int = typer.Option(300, help="Initial historical training size."),
     test_window_size: int = typer.Option(50, help="Rolling test window size."),
+    limit: int = typer.Option(100, help="Maximum number of test matches to backtest."),
     min_confidence: float = typer.Option(0.60, help="Minimum confidence to place bet."),
     min_edge: float = typer.Option(0.0, help="Minimum value edge."),
     stake: float = typer.Option(100.0, help="Flat stake per bet."),
@@ -385,6 +416,7 @@ def historical_backtest_football(
             market=market,
             initial_train_size=initial_train_size,
             test_window_size=test_window_size,
+            limit=limit,
             min_confidence=min_confidence,
             min_edge=min_edge,
             stake=stake,
@@ -401,7 +433,7 @@ def historical_backtest_football(
 
     typer.echo("\n=== SAMPLE BETS ===")
     for bet in result["bets"][:20]:
-        typer.echo(bet)
-    
+        typer.echo(bet)  
+
 if __name__ == "__main__":
     app()
