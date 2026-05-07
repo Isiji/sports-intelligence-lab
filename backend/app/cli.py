@@ -17,7 +17,9 @@ from app.ingest.football_ingestion import (
 from app.ingest.football_odds_ingestion import (
     ingest_odds_for_fixture,
     ingest_odds_for_upcoming_matches,
+    ingest_odds_for_finished_matches,
 )
+
 from app.ml.predict_football import predict_all_football_markets
 from app.ml.train_football import train_all_football_models
 from app.ingest.football_stats_ingestion import (
@@ -33,6 +35,8 @@ from app.ingest.finished_match_updater import update_finished_matches
 from app.reports.prediction_performance import build_prediction_performance_report
 from app.services.elo_service import build_elo_ratings
 from app.services.football_feature_builder import build_football_feature_cache
+from app.backtest.value_backtest import run_value_backtest
+from app.backtest.historical_value_backtest import run_historical_value_backtest
 
 
 app = typer.Typer()
@@ -101,7 +105,18 @@ def prediction_performance_report(
 
     for row in report["markets"]:
         typer.echo(row)
-        
+
+@app.command("ingest-odds-finished")
+def ingest_odds_finished(
+    limit: int = typer.Option(50, help="Number of finished matches to fetch odds for."),
+) -> None:
+    with get_cli_session() as session:
+        result = ingest_odds_for_finished_matches(
+            session=session,
+            limit=limit,
+        )
+
+    typer.echo(result)        
 
 @app.command("group-predictions")
 def group_predictions_command(
@@ -311,6 +326,75 @@ def build_football_features_command() -> None:
 
     typer.echo(result)
     
+@app.command("backtest-football")
+def backtest_football(
+    slate: str = typer.Option("demo", help="Prediction slate name."),
+    min_confidence: float = typer.Option(0.0, help="Minimum prediction confidence."),
+    min_edge: float = typer.Option(0.0, help="Minimum value edge."),
+    min_odds: float = typer.Option(1.0, help="Minimum odds."),
+    max_odds: float = typer.Option(20.0, help="Maximum odds."),
+    market: str | None = typer.Option(None, help="Optional market filter."),
+    stake: float = typer.Option(100.0, help="Flat stake per bet."),
+    bankroll: float = typer.Option(10000.0, help="Starting bankroll."),
+) -> None:
+    with get_cli_session() as session:
+        result = run_value_backtest(
+            session=session,
+            slate=slate,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_odds=min_odds,
+            max_odds=max_odds,
+            market=market,
+            flat_stake=stake,
+            starting_bankroll=bankroll,
+        )
+
+    typer.echo("\n=== BACKTEST SUMMARY ===")
+    typer.echo(result["summary"])
+
+    typer.echo("\n=== SAMPLE BETS ===")
+    for bet in result["bets"][:20]:
+        typer.echo(bet)
+        
+        
+@app.command("historical-backtest-football")
+def historical_backtest_football(
+    market: str = typer.Option("home_win", help="Market to backtest."),
+    initial_train_size: int = typer.Option(300, help="Initial historical training size."),
+    test_window_size: int = typer.Option(50, help="Rolling test window size."),
+    min_confidence: float = typer.Option(0.60, help="Minimum confidence to place bet."),
+    min_edge: float = typer.Option(0.0, help="Minimum value edge."),
+    stake: float = typer.Option(100.0, help="Flat stake per bet."),
+    bankroll: float = typer.Option(10000.0, help="Starting bankroll."),
+    use_only_matches_with_odds: bool = typer.Option(
+        False,
+        help="Only backtest matches that have real odds.",
+    ),
+) -> None:
+    with get_cli_session() as session:
+        result = run_historical_value_backtest(
+            session=session,
+            market=market,
+            initial_train_size=initial_train_size,
+            test_window_size=test_window_size,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            stake=stake,
+            starting_bankroll=bankroll,
+            use_only_matches_with_odds=use_only_matches_with_odds,
+        )
+
+    typer.echo("\n=== HISTORICAL BACKTEST SUMMARY ===")
+    typer.echo(result["summary"])
+
+    typer.echo("\n=== WINDOWS ===")
+    for row in result["windows"][:10]:
+        typer.echo(row)
+
+    typer.echo("\n=== SAMPLE BETS ===")
+    for bet in result["bets"][:20]:
+        typer.echo(bet)
     
 if __name__ == "__main__":
     app()

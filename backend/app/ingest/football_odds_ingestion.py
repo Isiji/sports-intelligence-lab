@@ -198,7 +198,71 @@ def ingest_odds_for_upcoming_matches(session: Session, limit: int = 20) -> dict[
         "unmapped_examples": unmapped_examples,
     }
 
+def ingest_odds_for_finished_matches(
+    session: Session,
+    limit: int = 50,
+) -> dict[str, Any]:
+    matches = list(
+        session.scalars(
+            select(Match)
+            .where(
+                Match.provider == "api-football",
+                Match.provider_fixture_id.isnot(None),
+                Match.is_finished.is_(True),
+                Match.is_cancelled.is_(False),
+                Match.is_postponed.is_(False),
+                Match.has_odds.is_(False),
+            )
+            .order_by(Match.kickoff_datetime.desc().nulls_last())
+            .limit(limit)
+        )
+    )
 
+    processed = 0
+    inserted = 0
+    skipped = 0
+    failed = 0
+    failures: list[dict[str, Any]] = []
+    unmapped_examples: list[dict[str, Any]] = []
+
+    for match in matches:
+        try:
+            result = ingest_odds_for_fixture(
+                session=session,
+                match_id=match.id,
+            )
+
+            processed += 1
+            inserted += int(result["records_inserted"])
+            skipped += int(result["records_skipped"])
+
+            for example in result.get("unmapped_examples", []):
+                if len(unmapped_examples) < 30:
+                    unmapped_examples.append(example)
+
+        except Exception as exc:
+            failed += 1
+
+            if len(failures) < 20:
+                failures.append(
+                    {
+                        "match_id": match.id,
+                        "provider_fixture_id": match.provider_fixture_id,
+                        "home_team": match.home_team,
+                        "away_team": match.away_team,
+                        "error": str(exc),
+                    }
+                )
+
+    return {
+        "matches_found": len(matches),
+        "matches_processed": processed,
+        "odds_inserted": inserted,
+        "odds_skipped": skipped,
+        "matches_failed": failed,
+        "failures": failures,
+        "unmapped_examples": unmapped_examples,
+    }
 def _safe_float(value: Any) -> float | None:
     try:
         if value is None:

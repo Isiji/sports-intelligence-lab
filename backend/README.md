@@ -41,6 +41,14 @@ python -m app.cli competition-coverage-report --limit 100
 
 python -m app.cli update-finished-matches --limit 100
 
+python -m app.cli backtest-football --slate demo
+
+python -m app.cli historical-backtest-football
+
+python -m app.cli historical-backtest-football --market home_win --use-only-matches-with-odds
+
+python -m app.cli ingest-odds-finished --limit 5
+
 COMPETITIONS = [
     # =========================
     # INTERNATIONAL
