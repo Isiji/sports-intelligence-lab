@@ -1,3 +1,5 @@
+# backend/app/ingest/football_stats_ingestion.py
+
 from datetime import datetime
 import re
 from difflib import SequenceMatcher
@@ -29,19 +31,20 @@ def ingest_fixture_statistics(
     if match is None:
         raise ValueError("Match not found.")
 
-    if not match.provider_fixture_id:
-        raise ValueError("Match has no provider fixture ID.")
+    eligibility = _stats_ingestion_eligibility(match=match, force=force)
 
-    if match.has_stats and not force:
+    if not eligibility["eligible"]:
         return {
             "match_id": match.id,
             "provider_fixture_id": match.provider_fixture_id,
             "skipped": True,
-            "reason": "match already has real stats",
+            "reason": eligibility["reason"],
             "api_team_blocks": 0,
             "teams_updated": 0,
             "blocks_with_real_stats": 0,
             "has_stats": bool(match.has_stats),
+            "stats_unavailable": bool(getattr(match, "stats_unavailable", False)),
+            "stats_attempt_count": int(getattr(match, "stats_attempt_count", 0) or 0),
             "updated_at": datetime.utcnow().isoformat(),
         }
 
@@ -52,17 +55,29 @@ def ingest_fixture_statistics(
     )
 
     if not existing_stats:
+        match.stats_attempted_at = datetime.utcnow()
+        match.stats_attempt_count = int(match.stats_attempt_count or 0) + 1
+        match.stats_unavailable = True
+        match.last_synced_at = datetime.utcnow()
+        session.commit()
+
         return {
             "match_id": match.id,
             "provider_fixture_id": match.provider_fixture_id,
-            "skipped": False,
+            "skipped": True,
             "reason": "no TeamMatchStat rows found for this match",
             "api_team_blocks": 0,
             "teams_updated": 0,
             "blocks_with_real_stats": 0,
             "has_stats": False,
+            "stats_unavailable": True,
+            "stats_attempt_count": int(match.stats_attempt_count or 0),
             "updated_at": datetime.utcnow().isoformat(),
         }
+
+    match.stats_attempted_at = datetime.utcnow()
+    match.stats_attempt_count = int(match.stats_attempt_count or 0) + 1
+    session.commit()
 
     client = ApiFootballClient(session=session)
 
@@ -78,6 +93,7 @@ def ingest_fixture_statistics(
 
     if len(rows) == 0:
         match.has_stats = False
+        match.stats_unavailable = True
         match.last_synced_at = datetime.utcnow()
         session.commit()
 
@@ -85,11 +101,13 @@ def ingest_fixture_statistics(
             "match_id": match.id,
             "provider_fixture_id": match.provider_fixture_id,
             "skipped": False,
-            "reason": "api returned empty statistics response",
+            "reason": "api returned empty statistics response; marked stats_unavailable",
             "api_team_blocks": 0,
             "teams_updated": 0,
             "blocks_with_real_stats": 0,
             "has_stats": False,
+            "stats_unavailable": True,
+            "stats_attempt_count": int(match.stats_attempt_count or 0),
             "updated_at": datetime.utcnow().isoformat(),
         }
 
@@ -128,7 +146,6 @@ def ingest_fixture_statistics(
         stat_row.cards = parsed["cards"]
         stat_row.keeper_saves = parsed["keeper_saves"]
 
-        # important: mark these rows as real API statistics
         stat_row.source = "api_football"
         stat_row.is_real = True
         stat_row.raw_stats_json = team_block
@@ -139,14 +156,16 @@ def ingest_fixture_statistics(
 
     if updated_teams >= 2 and blocks_with_real_stats >= 2:
         match.has_stats = True
+        match.stats_unavailable = False
         reason = "real stats saved for both teams"
     else:
         match.has_stats = False
+        match.stats_unavailable = True
 
         if unmatched_api_teams:
-            reason = "api teams could not be matched to local teams"
+            reason = "api teams could not be matched to local teams; marked stats_unavailable"
         else:
-            reason = "api response existed but no usable real stats were saved"
+            reason = "api response existed but no usable real stats were saved; marked stats_unavailable"
 
     match.last_synced_at = datetime.utcnow()
     session.commit()
@@ -160,6 +179,8 @@ def ingest_fixture_statistics(
         "teams_updated": updated_teams,
         "blocks_with_real_stats": blocks_with_real_stats,
         "has_stats": bool(match.has_stats),
+        "stats_unavailable": bool(match.stats_unavailable),
+        "stats_attempt_count": int(match.stats_attempt_count or 0),
         "unmatched_api_teams": unmatched_api_teams,
         "updated_at": datetime.utcnow().isoformat(),
     }
@@ -173,12 +194,21 @@ def ingest_missing_statistics(
     conditions = [
         Match.provider == "api-football",
         Match.provider_fixture_id.isnot(None),
+        Match.is_finished.is_(True),
+        Match.is_cancelled.is_(False),
+        Match.is_postponed.is_(False),
         Match.home_goals.isnot(None),
         Match.away_goals.isnot(None),
     ]
 
     if not force:
-        conditions.append(Match.has_stats.is_(False))
+        conditions.extend(
+            [
+                Match.has_stats.is_(False),
+                Match.stats_unavailable.is_(False),
+                Match.stats_attempt_count < 1,
+            ]
+        )
 
     matches = list(
         session.scalars(
@@ -192,6 +222,7 @@ def ingest_missing_statistics(
     processed = 0
     skipped = 0
     failed = 0
+    unavailable = 0
     failures = []
     results = []
 
@@ -209,6 +240,8 @@ def ingest_missing_statistics(
                 skipped += 1
             elif result.get("has_stats"):
                 processed += 1
+            elif result.get("stats_unavailable"):
+                unavailable += 1
 
         except Exception as exc:
             failed += 1
@@ -222,14 +255,49 @@ def ingest_missing_statistics(
                 }
             )
 
+            if "Daily API safety limit reached" in str(exc):
+                break
+
     return {
         "matches_checked": len(matches),
         "matches_processed": processed,
         "matches_skipped": skipped,
+        "matches_unavailable": unavailable,
         "matches_failed": failed,
         "failures": failures[:20],
         "sample_results": results[:10],
     }
+
+
+def _stats_ingestion_eligibility(match: Match, force: bool = False) -> dict:
+    if match.provider != "api-football":
+        return {"eligible": False, "reason": "not an api-football match"}
+
+    if not match.provider_fixture_id:
+        return {"eligible": False, "reason": "match has no provider fixture ID"}
+
+    if match.is_cancelled:
+        return {"eligible": False, "reason": "match is cancelled"}
+
+    if match.is_postponed:
+        return {"eligible": False, "reason": "match is postponed"}
+
+    if not match.is_finished:
+        return {"eligible": False, "reason": "match is not finished"}
+
+    if match.home_goals is None or match.away_goals is None:
+        return {"eligible": False, "reason": "finished match has missing score"}
+
+    if match.has_stats and not force:
+        return {"eligible": False, "reason": "match already has real stats"}
+
+    if getattr(match, "stats_unavailable", False) and not force:
+        return {"eligible": False, "reason": "stats previously unavailable"}
+
+    if int(getattr(match, "stats_attempt_count", 0) or 0) >= 1 and not force:
+        return {"eligible": False, "reason": "stats already attempted once"}
+
+    return {"eligible": True, "reason": "eligible"}
 
 
 def _find_matching_stat_row(

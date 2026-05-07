@@ -109,14 +109,17 @@ def prediction_performance_report(
 @app.command("ingest-odds-finished")
 def ingest_odds_finished(
     limit: int = typer.Option(50, help="Number of finished matches to fetch odds for."),
+    force: bool = typer.Option(False, help="Retry even if odds were already attempted/unavailable."),
 ) -> None:
     with get_cli_session() as session:
         result = ingest_odds_for_finished_matches(
             session=session,
             limit=limit,
+            force=force,
         )
 
-    typer.echo(result)        
+    typer.echo(result)
+
 
 @app.command("group-predictions")
 def group_predictions_command(
@@ -212,15 +215,16 @@ def ingest_odds_match(
 @app.command("ingest-odds-upcoming")
 def ingest_odds_upcoming(
     limit: int = typer.Option(20, help="Number of upcoming matches to fetch odds for."),
+    force: bool = typer.Option(False, help="Retry even if odds were already attempted/unavailable."),
 ) -> None:
     with get_cli_session() as session:
         result = ingest_odds_for_upcoming_matches(
             session=session,
             limit=limit,
+            force=force,
         )
 
-    typer.echo(result)
-    
+    typer.echo(result)    
     
 @app.command("ingest-league-season")
 def ingest_league_season(
@@ -303,15 +307,18 @@ def update_finished_matches_command(
 @app.command("ingest-missing-stats")
 def ingest_missing_stats(
     limit: int = typer.Option(100),
+    force: bool = typer.Option(False, help="Retry even if stats were already attempted/unavailable."),
 ) -> None:
     with get_cli_session() as session:
         result = ingest_missing_statistics(
             session=session,
             limit=limit,
+            force=force,
         )
 
     typer.echo(result)
 
+    
 @app.command("build-elo-ratings")
 def build_elo_ratings_command() -> None:
     with get_cli_session() as session:

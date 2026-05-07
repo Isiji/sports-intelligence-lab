@@ -97,6 +97,13 @@ class Match(Base):
     is_valid_for_training: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stats_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    stats_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    stats_unavailable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    odds_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    odds_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    odds_unavailable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     
 class TeamMatchStat(Base):
     __tablename__ = "team_match_stats"
