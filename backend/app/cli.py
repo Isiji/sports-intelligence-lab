@@ -45,6 +45,7 @@ from app.backtest.historical_group_backtest import (
     run_historical_group_backtest,
 )
 from app.analysis.confidence_band_survivability_report import confidence_band_survivability_report
+from app.analysis.league_survivability_report import league_survivability_report
 
 from app.ingest.finished_match_updater import update_finished_matches
 from app.reports.prediction_performance import build_prediction_performance_report
@@ -227,6 +228,22 @@ def ingest_odds_finished(
         )
 
     typer.echo(result)
+
+@app.command("league-survivability-report")
+def league_survivability_report_command(
+    run_tag: str = typer.Option("research_all_v1"),
+    min_bets: int = typer.Option(10),
+):
+    session = get_cli_session()
+
+    try:
+        league_survivability_report(
+            session=session,
+            run_tag=run_tag,
+            min_bets=min_bets,
+        )
+    finally:
+        session.close()
 
 @app.command("rolling-group-backtest")
 def rolling_group_backtest_cli(
