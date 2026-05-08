@@ -11,6 +11,9 @@ from app.db.models import Match, TeamMatchStat
 from app.ingest.api_football_client import ApiFootballClient
 
 
+MAX_STATS_ATTEMPTS = 1
+
+
 STAT_NAME_MAP = {
     "Shots on Goal": "shots_on_target",
     "Corner Kicks": "corners",
@@ -25,11 +28,33 @@ def ingest_fixture_statistics(
     session: Session,
     match_id: int,
     force: bool = False,
+    half: int | None = None,
 ) -> dict:
     match = session.get(Match, match_id)
 
     if match is None:
         raise ValueError("Match not found.")
+
+    existing_real_stats = _existing_real_stats_count(session=session, match_id=match.id)
+
+    if existing_real_stats >= 2 and not force and half is None:
+        match.has_stats = True
+        match.stats_unavailable = False
+        session.commit()
+
+        return {
+            "match_id": match.id,
+            "provider_fixture_id": match.provider_fixture_id,
+            "skipped": True,
+            "reason": "real stats already exist locally; fixed has_stats without API call",
+            "api_team_blocks": 0,
+            "teams_updated": 0,
+            "blocks_with_real_stats": existing_real_stats,
+            "has_stats": True,
+            "stats_unavailable": False,
+            "stats_attempt_count": int(match.stats_attempt_count or 0),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
 
     eligibility = _stats_ingestion_eligibility(match=match, force=force)
 
@@ -81,9 +106,9 @@ def ingest_fixture_statistics(
 
     client = ApiFootballClient(session=session)
 
-    payload = client.get(
-        endpoint="fixtures/statistics",
-        params={"fixture": match.provider_fixture_id},
+    payload = client.get_fixture_statistics(
+        fixture_id=str(match.provider_fixture_id),
+        half=half,
     )
 
     rows = payload.get("response", [])
@@ -206,7 +231,7 @@ def ingest_missing_statistics(
             [
                 Match.has_stats.is_(False),
                 Match.stats_unavailable.is_(False),
-                Match.stats_attempt_count < 1,
+                Match.stats_attempt_count < MAX_STATS_ATTEMPTS,
             ]
         )
 
@@ -294,10 +319,25 @@ def _stats_ingestion_eligibility(match: Match, force: bool = False) -> dict:
     if getattr(match, "stats_unavailable", False) and not force:
         return {"eligible": False, "reason": "stats previously unavailable"}
 
-    if int(getattr(match, "stats_attempt_count", 0) or 0) >= 1 and not force:
+    if int(getattr(match, "stats_attempt_count", 0) or 0) >= MAX_STATS_ATTEMPTS and not force:
         return {"eligible": False, "reason": "stats already attempted once"}
 
     return {"eligible": True, "reason": "eligible"}
+
+
+def _existing_real_stats_count(session: Session, match_id: int) -> int:
+    rows = list(
+        session.scalars(
+            select(TeamMatchStat.id)
+            .where(
+                TeamMatchStat.match_id == match_id,
+                TeamMatchStat.is_real.is_(True),
+            )
+            .limit(2)
+        )
+    )
+
+    return len(rows)
 
 
 def _find_matching_stat_row(

@@ -1,3 +1,5 @@
+# backend/app/ingest/football_ingestion.py
+
 from datetime import date, datetime
 from typing import Any
 
@@ -17,7 +19,7 @@ from app.ingest.api_football_client import ApiFootballClient
 
 FINISHED_STATUSES = {"FT", "AET", "PEN"}
 POSTPONED_STATUSES = {"PST", "POSTPONED"}
-CANCELLED_STATUSES = {"CANC", "CANCELLED", "ABD", "SUSP"}
+CANCELLED_STATUSES = {"CANC", "CANCELLED", "ABD", "SUSP", "AWD", "WO"}
 
 
 def ingest_fixtures_for_date(
@@ -51,10 +53,7 @@ def ingest_fixtures_for_date(
         records_received = len(fixtures)
 
         for item in fixtures:
-            result = _upsert_fixture(
-                session=session,
-                item=item,
-            )
+            result = _upsert_fixture(session=session, item=item)
 
             if result == "inserted":
                 records_inserted += 1
@@ -81,6 +80,8 @@ def ingest_fixtures_for_date(
         }
 
     except Exception as exc:
+        session.rollback()
+
         sync_log.status = "failed"
         sync_log.finished_at = datetime.utcnow()
         sync_log.error_message = str(exc)
@@ -89,8 +90,157 @@ def ingest_fixtures_for_date(
         sync_log.records_updated = records_updated
         sync_log.records_skipped = records_skipped
 
+        session.add(sync_log)
         session.commit()
         raise
+
+
+def ingest_fixtures_for_league_season(
+    session: Session,
+    league_id: int,
+    season: int,
+    status: str | None = None,
+) -> dict[str, int | str]:
+    client = ApiFootballClient(session=session)
+
+    sync_log = ProviderSyncLog(
+        provider="api-football",
+        sync_type="fixtures_by_league_season",
+        status="started",
+    )
+
+    session.add(sync_log)
+    session.commit()
+    session.refresh(sync_log)
+
+    records_received = 0
+    records_inserted = 0
+    records_updated = 0
+    records_skipped = 0
+
+    try:
+        payload = client.get_fixtures_by_league_season(
+            league_id=league_id,
+            season=season,
+            status=status,
+        )
+
+        fixtures = payload.get("response", [])
+
+        if not isinstance(fixtures, list):
+            raise ValueError("API response field 'response' is not a list.")
+
+        records_received = len(fixtures)
+
+        for index, item in enumerate(fixtures, start=1):
+            result = _upsert_fixture(session=session, item=item)
+
+            if result == "inserted":
+                records_inserted += 1
+            elif result == "updated":
+                records_updated += 1
+            else:
+                records_skipped += 1
+
+            if index % 500 == 0:
+                session.flush()
+
+        sync_log.status = "success"
+        sync_log.finished_at = datetime.utcnow()
+        sync_log.records_received = records_received
+        sync_log.records_inserted = records_inserted
+        sync_log.records_updated = records_updated
+        sync_log.records_skipped = records_skipped
+
+        session.commit()
+
+        return {
+            "status": "success",
+            "league_id": league_id,
+            "season": season,
+            "records_received": records_received,
+            "records_inserted": records_inserted,
+            "records_updated": records_updated,
+            "records_skipped": records_skipped,
+        }
+
+    except Exception as exc:
+        session.rollback()
+
+        sync_log.status = "failed"
+        sync_log.finished_at = datetime.utcnow()
+        sync_log.error_message = str(exc)
+
+        session.add(sync_log)
+        session.commit()
+        raise
+
+
+def ingest_all_leagues_for_season(
+    session: Session,
+    season: int,
+    max_leagues: int | None = None,
+    status: str | None = None,
+) -> dict[str, int]:
+    client = ApiFootballClient(session=session)
+
+    payload = client.get_leagues_by_season(season=season)
+    leagues = payload.get("response", [])
+
+    if not isinstance(leagues, list):
+        raise ValueError("API response field 'response' is not a list.")
+
+    league_ids: list[int] = []
+
+    for item in leagues:
+        league = item.get("league") or {}
+        league_id = league.get("id")
+
+        if league_id is not None:
+            league_ids.append(int(league_id))
+
+    league_ids = sorted(set(league_ids))
+
+    if max_leagues is not None:
+        league_ids = league_ids[:max_leagues]
+
+    leagues_processed = 0
+    leagues_failed = 0
+    fixtures_received = 0
+    fixtures_inserted = 0
+    fixtures_updated = 0
+    fixtures_skipped = 0
+
+    for league_id in league_ids:
+        try:
+            result = ingest_fixtures_for_league_season(
+                session=session,
+                league_id=league_id,
+                season=season,
+                status=status,
+            )
+
+            leagues_processed += 1
+            fixtures_received += int(result["records_received"])
+            fixtures_inserted += int(result["records_inserted"])
+            fixtures_updated += int(result["records_updated"])
+            fixtures_skipped += int(result["records_skipped"])
+
+        except Exception:
+            leagues_failed += 1
+            session.rollback()
+            continue
+
+    return {
+        "season": season,
+        "leagues_found": len(league_ids),
+        "leagues_processed": leagues_processed,
+        "leagues_failed": leagues_failed,
+        "fixtures_received": fixtures_received,
+        "fixtures_inserted": fixtures_inserted,
+        "fixtures_updated": fixtures_updated,
+        "fixtures_skipped": fixtures_skipped,
+    }
 
 
 def _upsert_fixture(
@@ -146,10 +296,7 @@ def _upsert_fixture(
         team_data=away_data,
     )
 
-    status_short = (
-        fixture_data.get("status", {}).get("short")
-        or "scheduled"
-    )
+    status_short = fixture_data.get("status", {}).get("short") or "scheduled"
 
     match = session.scalar(
         select(Match).where(
@@ -170,9 +317,17 @@ def _upsert_fixture(
             home_team=home_name,
             away_team=away_name,
             kickoff_date=kickoff_datetime.date(),
+            has_stats=False,
+            has_odds=False,
+            stats_attempt_count=0,
+            odds_attempt_count=0,
+            stats_unavailable=False,
+            odds_unavailable=False,
         )
         session.add(match)
         session.flush()
+
+    old_state = _match_state(match)
 
     match.competition_id = competition.id if competition else None
     match.home_team_id = home_team.id if home_team else None
@@ -197,7 +352,6 @@ def _upsert_fixture(
     match.is_postponed = status_short in POSTPONED_STATUSES
     match.is_cancelled = status_short in CANCELLED_STATUSES
 
-    match.has_stats = False
     match.is_valid_for_training = (
         match.is_finished
         and match.home_goals is not None
@@ -217,9 +371,12 @@ def _upsert_fixture(
         away_team_name=away_name,
     )
 
-    session.commit()
+    new_state = _match_state(match)
 
-    return "inserted" if is_new else "updated"
+    if is_new:
+        return "inserted"
+
+    return "updated" if old_state != new_state else "skipped"
 
 
 def _ensure_placeholder_team_stats(
@@ -286,9 +443,7 @@ def _get_or_create_country(
     if not name:
         return None
 
-    country = session.scalar(
-        select(Country).where(Country.name == name)
-    )
+    country = session.scalar(select(Country).where(Country.name == name))
 
     if country:
         return country
@@ -434,138 +589,21 @@ def _guess_is_cup(name: str) -> bool:
 
     return any(keyword in lowered for keyword in cup_keywords)
 
-def ingest_fixtures_for_league_season(
-    session: Session,
-    league_id: int,
-    season: int,
-) -> dict[str, int | str]:
-    client = ApiFootballClient(session=session)
 
-    sync_log = ProviderSyncLog(
-        provider="api-football",
-        sync_type="fixtures_by_league_season",
-        status="started",
-    )
-
-    session.add(sync_log)
-    session.commit()
-    session.refresh(sync_log)
-
-    records_received = 0
-    records_inserted = 0
-    records_updated = 0
-    records_skipped = 0
-
-    try:
-        payload = client.get_fixtures_by_league_season(
-            league_id=league_id,
-            season=season,
-        )
-
-        fixtures = payload.get("response", [])
-
-        if not isinstance(fixtures, list):
-            raise ValueError("API response field 'response' is not a list.")
-
-        records_received = len(fixtures)
-
-        for item in fixtures:
-            result = _upsert_fixture(session=session, item=item)
-
-            if result == "inserted":
-                records_inserted += 1
-            elif result == "updated":
-                records_updated += 1
-            else:
-                records_skipped += 1
-
-        sync_log.status = "success"
-        sync_log.finished_at = datetime.utcnow()
-        sync_log.records_received = records_received
-        sync_log.records_inserted = records_inserted
-        sync_log.records_updated = records_updated
-        sync_log.records_skipped = records_skipped
-        session.commit()
-
-        return {
-            "status": "success",
-            "league_id": league_id,
-            "season": season,
-            "records_received": records_received,
-            "records_inserted": records_inserted,
-            "records_updated": records_updated,
-            "records_skipped": records_skipped,
-        }
-
-    except Exception as exc:
-        sync_log.status = "failed"
-        sync_log.finished_at = datetime.utcnow()
-        sync_log.error_message = str(exc)
-        session.commit()
-        raise
-
-
-def ingest_all_leagues_for_season(
-    session: Session,
-    season: int,
-    max_leagues: int | None = None,
-) -> dict[str, int]:
-    client = ApiFootballClient(session=session)
-
-    payload = client.get_leagues_by_season(season=season)
-    leagues = payload.get("response", [])
-
-    if not isinstance(leagues, list):
-        raise ValueError("API response field 'response' is not a list.")
-
-    league_ids: list[int] = []
-
-    for item in leagues:
-        league = item.get("league") or {}
-        league_id = league.get("id")
-
-        if league_id is None:
-            continue
-
-        league_ids.append(int(league_id))
-
-    league_ids = sorted(set(league_ids))
-
-    if max_leagues is not None:
-        league_ids = league_ids[:max_leagues]
-
-    leagues_processed = 0
-    leagues_failed = 0
-    fixtures_received = 0
-    fixtures_inserted = 0
-    fixtures_updated = 0
-    fixtures_skipped = 0
-
-    for league_id in league_ids:
-        try:
-            result = ingest_fixtures_for_league_season(
-                session=session,
-                league_id=league_id,
-                season=season,
-            )
-
-            leagues_processed += 1
-            fixtures_received += int(result["records_received"])
-            fixtures_inserted += int(result["records_inserted"])
-            fixtures_updated += int(result["records_updated"])
-            fixtures_skipped += int(result["records_skipped"])
-
-        except Exception:
-            leagues_failed += 1
-            continue
-
+def _match_state(match: Match) -> dict[str, Any]:
     return {
-        "season": season,
-        "leagues_found": len(league_ids),
-        "leagues_processed": leagues_processed,
-        "leagues_failed": leagues_failed,
-        "fixtures_received": fixtures_received,
-        "fixtures_inserted": fixtures_inserted,
-        "fixtures_updated": fixtures_updated,
-        "fixtures_skipped": fixtures_skipped,
+        "season": match.season,
+        "league": match.league,
+        "home_team": match.home_team,
+        "away_team": match.away_team,
+        "home_goals": match.home_goals,
+        "away_goals": match.away_goals,
+        "status": match.status,
+        "round_name": match.round_name,
+        "kickoff_date": match.kickoff_date,
+        "kickoff_datetime": match.kickoff_datetime,
+        "is_finished": bool(match.is_finished),
+        "is_postponed": bool(match.is_postponed),
+        "is_cancelled": bool(match.is_cancelled),
+        "is_valid_for_training": bool(match.is_valid_for_training),
     }

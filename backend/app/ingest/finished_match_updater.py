@@ -17,6 +17,7 @@ CANCELLED_STATUS_CODES = {"CANC", "ABD", "AWD", "WO"}
 def update_finished_matches(
     session: Session,
     limit: int = 500,
+    batch_size: int = 20,
 ) -> dict:
     matches = list(
         session.scalars(
@@ -40,43 +41,89 @@ def update_finished_matches(
     postponed = 0
     cancelled = 0
     failed = 0
+    api_batches = 0
     failures = []
 
-    for match in matches:
-        checked += 1
+    for batch in _chunked(matches, batch_size):
+        fixture_ids = [
+            str(match.provider_fixture_id)
+            for match in batch
+            if match.provider_fixture_id
+        ]
+
+        if not fixture_ids:
+            continue
 
         try:
-            result = _update_single_match_from_provider(
-                session=session,
-                client=client,
-                match=match,
-            )
+            payload = client.get_fixtures_by_ids(fixture_ids)
+            api_batches += 1
 
-            if result["updated"]:
-                updated += 1
+            rows = payload.get("response", [])
 
-            if result["is_finished"]:
-                finished += 1
+            if not isinstance(rows, list):
+                raise ValueError("Invalid fixture response.")
 
-            if result["is_postponed"]:
-                postponed += 1
+            rows_by_fixture_id = {}
 
-            if result["is_cancelled"]:
-                cancelled += 1
+            for row in rows:
+                fixture = row.get("fixture") or {}
+                provider_fixture_id = fixture.get("id")
+
+                if provider_fixture_id is not None:
+                    rows_by_fixture_id[str(provider_fixture_id)] = row
+
+            for match in batch:
+                checked += 1
+
+                try:
+                    fixture_row = rows_by_fixture_id.get(str(match.provider_fixture_id))
+
+                    result = _apply_fixture_row_to_match(
+                        match=match,
+                        fixture_row=fixture_row,
+                    )
+
+                    if result["updated"]:
+                        updated += 1
+
+                    if result["is_finished"]:
+                        finished += 1
+
+                    if result["is_postponed"]:
+                        postponed += 1
+
+                    if result["is_cancelled"]:
+                        cancelled += 1
+
+                except Exception as exc:
+                    failed += 1
+                    session.rollback()
+
+                    failures.append(
+                        {
+                            "match_id": match.id,
+                            "provider_fixture_id": match.provider_fixture_id,
+                            "error": str(exc),
+                        }
+                    )
+
+            session.commit()
 
         except Exception as exc:
-            failed += 1
+            failed += len(batch)
             session.rollback()
 
-            failures.append(
-                {
-                    "match_id": match.id,
-                    "provider_fixture_id": match.provider_fixture_id,
-                    "error": str(exc),
-                }
-            )
+            for match in batch:
+                failures.append(
+                    {
+                        "match_id": match.id,
+                        "provider_fixture_id": match.provider_fixture_id,
+                        "error": f"batch failed: {exc}",
+                    }
+                )
 
-    session.commit()
+            if "Daily API safety limit reached" in str(exc):
+                break
 
     return {
         "matches_checked": checked,
@@ -85,37 +132,24 @@ def update_finished_matches(
         "matches_postponed": postponed,
         "matches_cancelled": cancelled,
         "matches_failed": failed,
+        "api_batches_used": api_batches,
+        "batch_size": batch_size,
         "failures": failures[:20],
         "updated_at": datetime.utcnow().isoformat(),
     }
 
 
-def _update_single_match_from_provider(
-    session: Session,
-    client: ApiFootballClient,
+def _apply_fixture_row_to_match(
     match: Match,
+    fixture_row: dict | None,
 ) -> dict:
-    payload = client.get(
-        endpoint="fixtures",
-        params={
-            "id": match.provider_fixture_id,
-        },
-    )
-
-    rows = payload.get("response", [])
-
-    if not isinstance(rows, list):
-        raise ValueError("Invalid fixture response.")
-
-    if not rows:
+    if not fixture_row:
         return {
             "updated": False,
             "is_finished": bool(match.is_finished),
             "is_postponed": bool(match.is_postponed),
             "is_cancelled": bool(match.is_cancelled),
         }
-
-    fixture_row = rows[0]
 
     fixture = fixture_row.get("fixture") or {}
     goals = fixture_row.get("goals") or {}
@@ -149,13 +183,17 @@ def _update_single_match_from_provider(
         match.is_finished = True
         match.is_postponed = False
         match.is_cancelled = False
-        match.is_valid_for_training = True
 
         if home_goals is not None:
             match.home_goals = int(home_goals)
 
         if away_goals is not None:
             match.away_goals = int(away_goals)
+
+        match.is_valid_for_training = (
+            match.home_goals is not None
+            and match.away_goals is not None
+        )
 
     elif status_short in POSTPONED_STATUS_CODES:
         match.is_finished = False
@@ -172,8 +210,6 @@ def _update_single_match_from_provider(
     else:
         match.is_finished = False
         match.is_valid_for_training = False
-
-    session.add(match)
 
     new_state = _snapshot_match(match)
 
@@ -198,3 +234,13 @@ def _snapshot_match(match: Match) -> dict:
         "is_cancelled": bool(match.is_cancelled),
         "is_valid_for_training": bool(match.is_valid_for_training),
     }
+
+
+def _chunked(items: list, size: int) -> list[list]:
+    if size <= 0:
+        size = 20
+
+    return [
+        items[index:index + size]
+        for index in range(0, len(items), size)
+    ]

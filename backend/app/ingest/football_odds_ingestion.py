@@ -1,6 +1,6 @@
 # backend/app/ingest/football_odds_ingestion.py
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.db.models import Match, MatchOdds, ProviderSyncLog
 from app.ingest.api_football_client import ApiFootballClient
 from app.ingest.odds_mapping import extract_line_value, normalize_market_selection
+
+
+MAX_ODDS_ATTEMPTS = 1
 
 
 def ingest_odds_for_fixture(
@@ -20,6 +23,28 @@ def ingest_odds_for_fixture(
 
     if match is None:
         raise ValueError(f"Match {match_id} not found.")
+
+    existing_odds_count = _existing_odds_count(session=session, match_id=match.id)
+
+    if existing_odds_count > 0 and not force:
+        match.has_odds = True
+        match.odds_unavailable = False
+        session.commit()
+
+        return {
+            "status": "skipped",
+            "match_id": match.id,
+            "provider_fixture_id": match.provider_fixture_id,
+            "home_team": match.home_team,
+            "away_team": match.away_team,
+            "reason": "odds rows already exist locally; fixed has_odds without API call",
+            "records_received": 0,
+            "records_inserted": 0,
+            "records_skipped": existing_odds_count,
+            "odds_unavailable": False,
+            "odds_attempt_count": int(match.odds_attempt_count or 0),
+            "unmapped_examples": [],
+        }
 
     eligibility = _odds_ingestion_eligibility(match=match, force=force)
 
@@ -61,11 +86,7 @@ def ingest_odds_for_fixture(
     unmapped_examples: list[dict[str, Any]] = []
 
     try:
-        payload = client.get(
-            endpoint="odds",
-            params={"fixture": match.provider_fixture_id},
-        )
-
+        payload = client.get_odds_by_fixture(str(match.provider_fixture_id))
         responses = payload.get("response", [])
 
         if not isinstance(responses, list):
@@ -190,6 +211,7 @@ def ingest_odds_for_fixture(
         sync_log.status = "failed"
         sync_log.finished_at = datetime.utcnow()
         sync_log.error_message = str(exc)
+
         session.commit()
         raise
 
@@ -198,13 +220,20 @@ def ingest_odds_for_upcoming_matches(
     session: Session,
     limit: int = 20,
     force: bool = False,
+    days_ahead: int = 3,
 ) -> dict[str, Any]:
+    now = datetime.utcnow()
+    max_kickoff = now + timedelta(days=days_ahead)
+
     conditions = [
         Match.provider == "api-football",
         Match.provider_fixture_id.isnot(None),
         Match.is_finished.is_(False),
         Match.is_cancelled.is_(False),
         Match.is_postponed.is_(False),
+        Match.kickoff_datetime.isnot(None),
+        Match.kickoff_datetime >= now,
+        Match.kickoff_datetime <= max_kickoff,
     ]
 
     if not force:
@@ -212,7 +241,7 @@ def ingest_odds_for_upcoming_matches(
             [
                 Match.has_odds.is_(False),
                 Match.odds_unavailable.is_(False),
-                Match.odds_attempt_count < 1,
+                Match.odds_attempt_count < MAX_ODDS_ATTEMPTS,
             ]
         )
 
@@ -220,7 +249,7 @@ def ingest_odds_for_upcoming_matches(
         session.scalars(
             select(Match)
             .where(*conditions)
-            .order_by(Match.kickoff_datetime.asc().nulls_last())
+            .order_by(Match.kickoff_datetime.asc())
             .limit(limit)
         )
     )
@@ -252,7 +281,7 @@ def ingest_odds_for_finished_matches(
             [
                 Match.has_odds.is_(False),
                 Match.odds_unavailable.is_(False),
-                Match.odds_attempt_count < 1,
+                Match.odds_attempt_count < MAX_ODDS_ATTEMPTS,
             ]
         )
 
@@ -362,10 +391,20 @@ def _odds_ingestion_eligibility(match: Match, force: bool = False) -> dict[str, 
     if getattr(match, "odds_unavailable", False) and not force:
         return {"eligible": False, "reason": "odds previously unavailable"}
 
-    if int(getattr(match, "odds_attempt_count", 0) or 0) >= 1 and not force:
+    if int(getattr(match, "odds_attempt_count", 0) or 0) >= MAX_ODDS_ATTEMPTS and not force:
         return {"eligible": False, "reason": "odds already attempted once"}
 
     return {"eligible": True, "reason": "eligible"}
+
+
+def _existing_odds_count(session: Session, match_id: int) -> int:
+    rows = list(
+        session.scalars(
+            select(MatchOdds.id).where(MatchOdds.match_id == match_id).limit(1)
+        )
+    )
+
+    return len(rows)
 
 
 def _safe_float(value: Any) -> float | None:

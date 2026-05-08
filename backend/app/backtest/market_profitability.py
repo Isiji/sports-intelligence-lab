@@ -16,7 +16,7 @@ def get_market_profitability(session: Session, slate: str | None = None):
 
             SUM(
                 CASE
-                    WHEN p.predicted_label = b.actual_label THEN 1
+                    WHEN p.predicted_label = m.winner THEN 1
                     ELSE 0
                 END
             ) AS wins,
@@ -24,7 +24,7 @@ def get_market_profitability(session: Session, slate: str | None = None):
             ROUND(
                 AVG(
                     CASE
-                        WHEN p.predicted_label = b.actual_label THEN 1.0
+                        WHEN p.predicted_label = m.winner THEN 1.0
                         ELSE 0.0
                     END
                 )::numeric,
@@ -38,7 +38,7 @@ def get_market_profitability(session: Session, slate: str | None = None):
             ROUND(
                 SUM(
                     CASE
-                        WHEN p.predicted_label = b.actual_label
+                        WHEN p.predicted_label = m.winner
                         THEN p.odds - 1
                         ELSE -1
                     END
@@ -50,7 +50,7 @@ def get_market_profitability(session: Session, slate: str | None = None):
                 (
                     SUM(
                         CASE
-                            WHEN p.predicted_label = b.actual_label
+                            WHEN p.predicted_label = m.winner
                             THEN p.odds - 1
                             ELSE -1
                         END
@@ -63,9 +63,7 @@ def get_market_profitability(session: Session, slate: str | None = None):
         JOIN matches m
             ON m.id = p.match_id
 
-        JOIN backtest_results b
-            ON b.prediction_id = p.id
-
+        
         WHERE p.odds IS NOT NULL
           AND p.implied_probability IS NOT NULL
           AND p.value_score IS NOT NULL

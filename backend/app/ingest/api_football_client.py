@@ -1,3 +1,5 @@
+# backend/app/ingest/api_football_client.py
+
 from datetime import date, datetime, time
 from typing import Any
 import time as sleep_time
@@ -68,9 +70,42 @@ class ApiFootballClient:
         status: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"league": league_id, "season": season}
+
         if status:
             params["status"] = status
+
         return self.get("fixtures", params)
+
+    def get_fixture_by_id(self, fixture_id: str) -> dict[str, Any]:
+        return self.get("fixtures", {"id": fixture_id})
+
+    def get_fixtures_by_ids(self, fixture_ids: list[str]) -> dict[str, Any]:
+        clean_ids = [str(fixture_id) for fixture_id in fixture_ids if fixture_id]
+
+        if not clean_ids:
+            return {"response": []}
+
+        return self.get("fixtures", {"ids": "-".join(clean_ids)})
+
+    def get_fixture_statistics(
+        self,
+        fixture_id: str,
+        half: int | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"fixture": fixture_id}
+
+        if half is not None:
+            params["half"] = half
+
+        return self.get("fixtures/statistics", params)
+
+    def get_injuries_by_fixture_ids(self, fixture_ids: list[str]) -> dict[str, Any]:
+        clean_ids = [str(fixture_id) for fixture_id in fixture_ids if fixture_id]
+
+        if not clean_ids:
+            return {"response": []}
+
+        return self.get("injuries", {"ids": "-".join(clean_ids)})
 
     def get_odds_by_fixture(self, fixture_id: str) -> dict[str, Any]:
         return self.get("odds", {"fixture": fixture_id})
