@@ -186,23 +186,80 @@ def _find_odds(
     market: str,
     selection: str,
 ) -> float | None:
-    selection_mapping = {
-        "NOT_HOME_WIN": "AWAY_WIN",
-        "NOT_DOUBLE_CHANCE_X2": "DOUBLE_CHANCE_1X",
-        "NOT_DOUBLE_CHANCE_1X": "DOUBLE_CHANCE_X2",
+    odds_lookup_mapping = {
+        # 1X2 direction fixes
+        ("home_win", "HOME_WIN"): ("home_win", "HOME_WIN"),
+        ("home_win", "NOT_HOME_WIN"): ("away_win", "AWAY_WIN"),
+
+        ("away_win", "AWAY_WIN"): ("away_win", "AWAY_WIN"),
+        ("away_win", "NOT_AWAY_WIN"): ("home_win", "HOME_WIN"),
+
+        ("draw", "DRAW"): ("draw", "DRAW"),
+        ("draw", "NOT_DRAW"): ("double_chance_12", "DOUBLE_CHANCE_12"),
+
+        # Goals direction fixes
+        ("over_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
+        ("over_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
+
+        ("under_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
+        ("under_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
+
+        ("over_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
+        ("over_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
+
+        ("under_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
+        ("under_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
+
+        ("over_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
+        ("over_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
+
+        ("under_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
+        ("under_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
+
+        # BTTS
+        ("btts_yes", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
+        ("btts_yes", "BTTS_NO"): ("btts_no", "BTTS_NO"),
+
+        # Double chance logical opposites
+        ("double_chance_x2", "DOUBLE_CHANCE_X2"): (
+            "double_chance_x2",
+            "DOUBLE_CHANCE_X2",
+        ),
+        ("double_chance_x2", "NOT_DOUBLE_CHANCE_X2"): (
+            "home_win",
+            "HOME_WIN",
+        ),
+
+        ("double_chance_1x", "DOUBLE_CHANCE_1X"): (
+            "double_chance_1x",
+            "DOUBLE_CHANCE_1X",
+        ),
+        ("double_chance_1x", "NOT_DOUBLE_CHANCE_1X"): (
+            "away_win",
+            "AWAY_WIN",
+        ),
+
+        ("double_chance_12", "DOUBLE_CHANCE_12"): (
+            "double_chance_12",
+            "DOUBLE_CHANCE_12",
+        ),
+        ("double_chance_12", "NOT_DOUBLE_CHANCE_12"): (
+            "draw",
+            "DRAW",
+        ),
     }
 
-    normalized_selection = selection_mapping.get(
-        selection,
-        selection,
+    lookup_market, lookup_selection = odds_lookup_mapping.get(
+        (market, selection),
+        (market, selection),
     )
 
     odds_row = session.scalar(
         select(MatchOdds)
         .where(
             MatchOdds.match_id == match_id,
-            MatchOdds.market == market,
-            MatchOdds.selection == normalized_selection,
+            MatchOdds.market == lookup_market,
+            MatchOdds.selection == lookup_selection,
         )
         .order_by(MatchOdds.retrieved_at.desc())
     )
@@ -210,9 +267,11 @@ def _find_odds(
     if odds_row is None:
         print(
             "[ODDS MISS]",
-            f"market={market}",
-            f"selection={selection}",
-            f"normalized={normalized_selection}",
+            f"prediction_market={market}",
+            f"prediction_selection={selection}",
+            f"lookup_market={lookup_market}",
+            f"lookup_selection={lookup_selection}",
+            f"match_id={match_id}",
         )
         return None
 

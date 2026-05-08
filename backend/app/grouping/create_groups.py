@@ -27,14 +27,19 @@ class PortfolioGroupConfig:
     max_groups: int = 10
     min_group_size: int = 4
     max_group_size: int = 5
+
     min_confidence: float = 0.60
     min_value_score: float = 0.00
+
     min_odds: float = 1.25
     max_odds: float = 3.50
+
     min_market_roi: float = 0.00
-    min_league_roi: float = -0.05
-    min_band_roi: float = -0.05
-    min_sample_size: int = 20
+    min_league_roi: float = -0.15
+    min_band_roi: float = -0.15
+
+    min_sample_size: int = 10
+
     max_same_market_per_group: int = 2
     max_same_league_per_group: int = 2
 
@@ -48,7 +53,7 @@ def group_predictions(
 ) -> dict[str, dict[str, float | str]]:
     config = PortfolioGroupConfig(
         min_confidence=min_confidence,
-        min_sample_size=20,
+        min_sample_size=10,
     )
 
     portfolio_groups = _build_profitability_aware_groups(
@@ -68,6 +73,8 @@ def group_predictions(
         session.commit()
 
         return _summarize_portfolio_groups(portfolio_groups)
+
+    print("[PORTFOLIO DEBUG] No profitability portfolio created. Falling back.")
 
     return _fallback_confidence_groups(
         session=session,
@@ -93,7 +100,16 @@ def _build_profitability_aware_groups(
     odds_band_intel = load_odds_band_intelligence(session, intelligence_config)
     confidence_band_intel = load_confidence_band_intelligence(session, intelligence_config)
 
+    print(
+        "[PORTFOLIO DEBUG]",
+        f"market_intel={len(market_intel)}",
+        f"league_market_intel={len(league_market_intel)}",
+        f"odds_band_intel={len(odds_band_intel)}",
+        f"confidence_band_intel={len(confidence_band_intel)}",
+    )
+
     if not market_intel:
+        print("[PORTFOLIO DEBUG] No market intelligence found.")
         return []
 
     predictions = _load_live_prediction_candidates(
@@ -103,7 +119,12 @@ def _build_profitability_aware_groups(
         require_odds=require_odds,
     )
 
-    enriched_candidates: list[dict[str, Any]] = []
+    print(
+        "[PORTFOLIO DEBUG]",
+        f"live_candidates={len(predictions)}",
+        f"require_odds={require_odds}",
+        f"min_confidence={config.min_confidence}",
+    )
 
     best_by_match: dict[int, dict[str, Any]] = {}
 
@@ -140,13 +161,26 @@ def _build_profitability_aware_groups(
         ),
     )
 
+    print(
+        "[PORTFOLIO DEBUG]",
+        f"enriched_unique_matches={len(enriched_candidates)}",
+        f"min_group_size={config.min_group_size}",
+    )
+
     if len(enriched_candidates) < config.min_group_size:
         return []
 
-    return _construct_diversified_groups(
+    groups = _construct_diversified_groups(
         candidates=enriched_candidates,
         config=config,
     )
+
+    print(
+        "[PORTFOLIO DEBUG]",
+        f"portfolio_groups_created={len(groups)}",
+    )
+
+    return groups
 
 
 def _load_live_prediction_candidates(
@@ -214,13 +248,16 @@ def _enrich_candidate(
         odds = float(odds)
 
     if market not in market_intel:
+        print("[FILTER] no market intel", market)
         return None
 
     if value_score < config.min_value_score:
+        print("[FILTER] low value score", market, value_score)
         return None
 
     if odds is not None:
         if odds < config.min_odds or odds > config.max_odds:
+            print("[FILTER] odds out of range", market, odds)
             return None
 
     market_data = market_intel[market]
@@ -257,18 +294,40 @@ def _enrich_candidate(
     )
 
     if market_roi < config.min_market_roi:
+        print("[FILTER] negative market roi", market, market_roi)
         return None
 
     if league_sample_size >= config.min_sample_size and league_roi < config.min_league_roi:
+        print(
+            "[FILTER] weak league roi",
+            league,
+            market,
+            league_roi,
+            league_sample_size,
+        )
         return None
 
     if odds_band_sample_size >= config.min_sample_size and odds_band_roi < config.min_band_roi:
+        print(
+            "[FILTER] weak odds band",
+            market,
+            odds_band(odds),
+            odds_band_roi,
+            odds_band_sample_size,
+        )
         return None
 
     if (
         confidence_band_sample_size >= config.min_sample_size
         and confidence_band_roi < config.min_band_roi
     ):
+        print(
+            "[FILTER] weak confidence band",
+            market,
+            confidence_band(confidence),
+            confidence_band_roi,
+            confidence_band_sample_size,
+        )
         return None
 
     sample_penalty = _sample_penalty(
@@ -310,6 +369,20 @@ def _enrich_candidate(
     prediction["confidence_band_hit_rate"] = confidence_band_hit_rate
     prediction["confidence_band_sample_size"] = confidence_band_sample_size
     prediction["selection_score"] = selection_score
+
+    print(
+        "[PORTFOLIO ACCEPTED]",
+        market,
+        league,
+        f"confidence={round(confidence, 4)}",
+        f"odds={odds}",
+        f"value={round(value_score, 4)}",
+        f"market_roi={round(market_roi, 4)}",
+        f"league_roi={round(league_roi, 4)}",
+        f"odds_band_roi={round(odds_band_roi, 4)}",
+        f"confidence_band_roi={round(confidence_band_roi, 4)}",
+        f"score={round(selection_score, 4)}",
+    )
 
     return prediction
 
