@@ -20,6 +20,7 @@ from app.grouping.profitability_intelligence import (
     load_odds_band_intelligence,
     odds_band,
 )
+from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ class PortfolioGroupConfig:
     max_same_market_per_group: int = 2
     max_same_league_per_group: int = 2
 
+    use_intelligence_filters: bool = True
+
 
 def group_predictions(
     session: Session,
@@ -50,10 +53,12 @@ def group_predictions(
     min_confidence: float = 0.65,
     min_group_odds: float = 3.0,
     require_odds: bool = False,
+    use_intelligence_filters: bool = True,
 ) -> dict[str, dict[str, float | str]]:
     config = PortfolioGroupConfig(
         min_confidence=min_confidence,
         min_sample_size=10,
+        use_intelligence_filters=use_intelligence_filters,
     )
 
     portfolio_groups = _build_profitability_aware_groups(
@@ -106,6 +111,7 @@ def _build_profitability_aware_groups(
         f"league_market_intel={len(league_market_intel)}",
         f"odds_band_intel={len(odds_band_intel)}",
         f"confidence_band_intel={len(confidence_band_intel)}",
+        f"use_intelligence_filters={config.use_intelligence_filters}",
     )
 
     if not market_intel:
@@ -128,6 +134,8 @@ def _build_profitability_aware_groups(
 
     best_by_match: dict[int, dict[str, Any]] = {}
 
+    rejected_by_filter = 0
+
     for prediction in predictions:
         enriched = _enrich_candidate(
             prediction=prediction,
@@ -139,6 +147,7 @@ def _build_profitability_aware_groups(
         )
 
         if enriched is None:
+            rejected_by_filter += 1
             continue
 
         match_id = int(enriched["match_id"])
@@ -156,6 +165,7 @@ def _build_profitability_aware_groups(
         best_by_match.values(),
         key=lambda item: (
             -float(item["selection_score"]),
+            float(item.get("portfolio_risk_score") or 0.0),
             -float(item["confidence"]),
             item["prediction_id"],
         ),
@@ -164,6 +174,7 @@ def _build_profitability_aware_groups(
     print(
         "[PORTFOLIO DEBUG]",
         f"enriched_unique_matches={len(enriched_candidates)}",
+        f"rejected_by_filter={rejected_by_filter}",
         f"min_group_size={config.min_group_size}",
     )
 
@@ -246,6 +257,40 @@ def _enrich_candidate(
 
     if odds is not None:
         odds = float(odds)
+
+    if config.use_intelligence_filters:
+        filter_result = evaluate_pick_for_portfolio(
+            league=league,
+            market=market,
+            confidence=confidence,
+            odds=odds,
+            value_score=value_score,
+            strict=True,
+        )
+
+        prediction["portfolio_allowed"] = filter_result.allowed
+        prediction["portfolio_filter_reason"] = filter_result.reason
+        prediction["portfolio_risk_flags"] = filter_result.risk_flags
+        prediction["portfolio_risk_score"] = filter_result.risk_score
+
+        if not filter_result.allowed:
+            print(
+                "[INTELLIGENCE FILTER]",
+                market,
+                league,
+                f"confidence={round(confidence, 4)}",
+                f"odds={odds}",
+                f"value={round(value_score, 4)}",
+                filter_result.reason,
+                filter_result.risk_flags,
+                f"risk={round(filter_result.risk_score, 2)}",
+            )
+            return None
+    else:
+        prediction["portfolio_allowed"] = True
+        prediction["portfolio_filter_reason"] = "Not used"
+        prediction["portfolio_risk_flags"] = []
+        prediction["portfolio_risk_score"] = 0.0
 
     if market not in market_intel:
         print("[FILTER] no market intel", market)
@@ -343,6 +388,8 @@ def _enrich_candidate(
     if odds is not None:
         odds_quality = min(odds / 5.0, 0.50)
 
+    risk_penalty = max(float(prediction.get("portfolio_risk_score") or 0.0), 0.0) / 100.0
+
     selection_score = (
         confidence * 0.25
         + value_score * 0.20
@@ -352,6 +399,7 @@ def _enrich_candidate(
         + confidence_band_roi * 0.10
         + odds_quality * 0.05
         - sample_penalty
+        - risk_penalty
     )
 
     prediction["market_roi"] = market_roi
@@ -381,6 +429,7 @@ def _enrich_candidate(
         f"league_roi={round(league_roi, 4)}",
         f"odds_band_roi={round(odds_band_roi, 4)}",
         f"confidence_band_roi={round(confidence_band_roi, 4)}",
+        f"risk={round(float(prediction.get('portfolio_risk_score') or 0.0), 2)}",
         f"score={round(selection_score, 4)}",
     )
 
@@ -552,6 +601,19 @@ def _summarize_portfolio_groups(
                 mean(float(item["selection_score"] or 0) for item in group),
                 4,
             ),
+            "average_risk_score": round(
+                mean(float(item.get("portfolio_risk_score") or 0) for item in group),
+                4,
+            ),
+            "risk_flags": ", ".join(
+                sorted(
+                    {
+                        flag
+                        for item in group
+                        for flag in item.get("portfolio_risk_flags", [])
+                    }
+                )
+            ),
             "cumulative_odds": round(cumulative_odds, 4),
             "odds_coverage": round(len(odds_values) / len(group), 4),
         }
@@ -721,6 +783,7 @@ def _fallback_confidence_groups(
     session.commit()
 
     return group_summaries
+
 
 def _fallback_ranking_score(prediction: Prediction) -> float:
     value_score = prediction.value_score or 0.0

@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
+
 
 def cached_group_backtest(
     session: Session,
@@ -22,7 +24,7 @@ def cached_group_backtest(
     limit: int = 100,
     max_same_league: int = 2,
     max_group_odds: float = 5.8,
-
+    use_intelligence_filters: bool = False,
 ) -> dict[str, Any]:
     filters = [
         "hbb.confidence >= :min_confidence",
@@ -35,7 +37,7 @@ def cached_group_backtest(
         "min_confidence": min_confidence,
         "min_odds": min_odds,
         "max_odds": max_odds,
-        "limit": limit * group_size * 5,
+        "limit": limit * group_size * 10,
     }
 
     if run_tag:
@@ -86,7 +88,34 @@ def cached_group_backtest(
         params,
     ).mappings().all()
 
-    candidates = [dict(row) for row in rows]
+    raw_candidates = [dict(row) for row in rows]
+
+    candidates: list[dict[str, Any]] = []
+    rejected_by_intelligence = 0
+    rejection_reasons: Counter[str] = Counter()
+
+    for bet in raw_candidates:
+        if use_intelligence_filters:
+            result = evaluate_pick_for_portfolio(
+                league=bet.get("league"),
+                market=str(bet["market"]),
+                confidence=float(bet["confidence"]) if bet.get("confidence") is not None else None,
+                odds=float(bet["odds"]) if bet.get("odds") is not None else None,
+                value_score=float(bet["value_score"]) if bet.get("value_score") is not None else None,
+                strict=True,
+            )
+
+            bet["portfolio_allowed"] = result.allowed
+            bet["portfolio_filter_reason"] = result.reason
+            bet["portfolio_risk_flags"] = result.risk_flags
+            bet["portfolio_risk_score"] = result.risk_score
+
+            if not result.allowed:
+                rejected_by_intelligence += 1
+                rejection_reasons[result.reason] += 1
+                continue
+
+        candidates.append(bet)
 
     bets_by_date: dict[str, list[dict[str, Any]]] = {}
 
@@ -96,6 +125,8 @@ def cached_group_backtest(
 
     groups: list[list[dict[str, Any]]] = []
     used_match_ids: set[int] = set()
+
+    skipped_group_odds = 0
 
     for _, day_bets in bets_by_date.items():
         current_group: list[dict[str, Any]] = []
@@ -111,13 +142,18 @@ def cached_group_backtest(
             if league_counts[league] >= max_same_league:
                 continue
 
+            test_group = current_group + [bet]
+            test_odds = prod(float(item["odds"]) for item in test_group)
+
+            if test_odds > max_group_odds:
+                continue
+
             current_group.append(bet)
             used_match_ids.add(match_id)
             league_counts[league] += 1
 
             if len(current_group) == group_size:
                 groups.append(current_group)
-
                 current_group = []
                 league_counts = Counter()
 
@@ -134,14 +170,14 @@ def cached_group_backtest(
 
     group_reports = []
 
-    display_index = 0
+    display_index = 1
 
     for group in groups:
-
         odds_values = [float(bet["odds"]) for bet in group]
         total_odds = round(prod(odds_values), 4)
 
         if total_odds > max_group_odds:
+            skipped_group_odds += 1
             continue
 
         group_won = all(bool(bet["won"]) for bet in group)
@@ -174,17 +210,30 @@ def cached_group_backtest(
                     mean(float(bet["value_score"] or 0.0) for bet in group),
                     4,
                 ),
+                "average_risk_score": round(
+                    mean(float(bet.get("portfolio_risk_score") or 0.0) for bet in group),
+                    4,
+                ),
+                "risk_flags": sorted(
+                    {
+                        flag
+                        for bet in group
+                        for flag in bet.get("portfolio_risk_flags", [])
+                    }
+                ),
                 "total_odds": total_odds,
                 "profit": profit,
                 "bankroll": round(bankroll, 2),
             }
         )
 
+        display_index += 1
+
     total_groups = len(group_reports)
 
     return {
         "summary": {
-            "source": "historical_backtest_bets_cache",
+            "source": "historical_backtest_bets",
             "run_tag": run_tag,
             "market": market,
             "groups": total_groups,
@@ -196,9 +245,15 @@ def cached_group_backtest(
             "ending_bankroll": round(bankroll, 2),
             "group_size": group_size,
             "max_same_league": max_same_league,
-            "market_limit": "none",
+            "market_limit": market or "none",
             "same_day_grouping": True,
             "max_group_odds": max_group_odds,
+            "use_intelligence_filters": use_intelligence_filters,
+            "raw_candidates": len(raw_candidates),
+            "approved_candidates": len(candidates),
+            "rejected_by_intelligence": rejected_by_intelligence,
+            "rejection_reasons": dict(rejection_reasons),
+            "skipped_group_odds": skipped_group_odds,
         },
         "groups": group_reports,
     }

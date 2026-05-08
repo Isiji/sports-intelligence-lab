@@ -57,6 +57,7 @@ from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
 # backend/app/cli.py imports to add
+from app.analysis.test_portfolio_filters import test_portfolio_filters
 
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
@@ -183,6 +184,7 @@ def create_groups_command(
     slate: str | None = typer.Option(None, "--slate"),
     min_confidence: float = typer.Option(0.65, "--min-confidence"),
     min_group_odds: float = typer.Option(3.0, "--min-group-odds"),
+    use_intelligence_filters: bool = typer.Option(True, "--use-intelligence-filters/--no-intelligence-filters"),
     require_odds: bool = typer.Option(False, "--require-odds"),
 ):
     """
@@ -203,6 +205,7 @@ def create_groups_command(
             min_confidence=min_confidence,
             min_group_odds=min_group_odds,
             require_odds=require_odds,
+            use_intelligence_filters=use_intelligence_filters,
         )
 
         print("\n=== GROUPS CREATED ===")
@@ -245,6 +248,10 @@ def league_survivability_report_command(
     finally:
         session.close()
 
+@app.command("test-portfolio-filters")
+def test_portfolio_filters_command():
+    test_portfolio_filters()
+
 @app.command("rolling-group-backtest")
 def rolling_group_backtest_cli(
     market: str = typer.Option(...),
@@ -286,6 +293,7 @@ def cached_group_backtest_cli(
     stake: float = typer.Option(100.0),
     limit: int = typer.Option(100),
     max_same_league: int = typer.Option(2),
+    use_intelligence_filters: bool = typer.Option(False, "--use-intelligence-filters"),
 ):
     session = get_cli_session()
 
@@ -303,6 +311,7 @@ def cached_group_backtest_cli(
             stake=stake,
             limit=limit,
             max_same_league=max_same_league,
+            use_intelligence_filters=use_intelligence_filters,
         )
 
         print("\n=== CACHED GROUP BACKTEST ===")
@@ -314,6 +323,7 @@ def cached_group_backtest_cli(
 
     finally:
         session.close()
+
 
 @app.command("market-survivability-report")
 def market_survivability_report_command(
