@@ -20,7 +20,10 @@ from app.ingest.football_odds_ingestion import (
     ingest_odds_for_upcoming_matches,
     ingest_odds_for_finished_matches,
 )
-
+from app.backtest.rolling_group_backtest import (
+    rolling_group_backtest,
+)
+from app.backtest.cached_group_backtest import cached_group_backtest
 from app.ml.predict_football import predict_all_football_markets
 from app.ml.train_football import train_all_football_models
 from app.ingest.football_stats_ingestion import (
@@ -35,7 +38,11 @@ from app.backtest.profit_threshold_optimizer import (
 
 from app.reports.competition_coverage import build_competition_coverage_report
 # backend/app/cli.py
+from app.analysis.group_performance_report import build_group_performance_report
 
+from app.backtest.historical_group_backtest import (
+    run_historical_group_backtest,
+)
 from app.ingest.finished_match_updater import update_finished_matches
 from app.reports.prediction_performance import build_prediction_performance_report
 from app.services.elo_service import build_elo_ratings
@@ -172,7 +179,7 @@ def create_groups_command(
 
     finally:
         session.close()
-        
+
 @app.command("ingest-odds-finished")
 def ingest_odds_finished(
     limit: int = typer.Option(50, help="Number of finished matches to fetch odds for."),
@@ -187,7 +194,77 @@ def ingest_odds_finished(
 
     typer.echo(result)
 
+@app.command("rolling-group-backtest")
+def rolling_group_backtest_cli(
+    market: str = typer.Option(...),
+    initial_train_size: int = typer.Option(100),
+    test_window_size: int = typer.Option(20),
+    limit: int = typer.Option(100),
+    min_confidence: float = typer.Option(0.65),
+    stake: float = typer.Option(100.0),
+):
+    session = get_cli_session()
 
+    try:
+        result = rolling_group_backtest(
+            session=session,
+            market=market,
+            initial_train_size=initial_train_size,
+            test_window_size=test_window_size,
+            limit=limit,
+            min_confidence=min_confidence,
+            stake=stake,
+        )
+
+        print("\n=== ROLLING GROUP BACKTEST ===")
+        print(result)
+
+    finally:
+        session.close()
+
+@app.command("cached-group-backtest")
+def cached_group_backtest_cli(
+    run_tag: str | None = typer.Option(None),
+    market: str | None = typer.Option(None),
+    min_confidence: float = typer.Option(0.60),
+    min_edge: float | None = typer.Option(None),
+    min_odds: float = typer.Option(1.0),
+    max_odds: float = typer.Option(10.0),
+    max_group_odds: float = typer.Option(5.8),
+    group_size: int = typer.Option(4),
+    stake: float = typer.Option(100.0),
+    limit: int = typer.Option(100),
+    max_same_league: int = typer.Option(2),
+):
+    session = get_cli_session()
+
+    try:
+        result = cached_group_backtest(
+            session=session,
+            run_tag=run_tag,
+            market=market,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_odds=min_odds,
+            max_odds=max_odds,
+            max_group_odds=max_group_odds,
+            group_size=group_size,
+            stake=stake,
+            limit=limit,
+            max_same_league=max_same_league,
+        )
+
+        print("\n=== CACHED GROUP BACKTEST ===")
+        print(result["summary"])
+
+        print("\n=== GROUPS ===")
+        for row in result["groups"]:
+            print(row)
+
+    finally:
+        session.close()
+
+        
 @app.command("group-predictions")
 def group_predictions_command(
     slate: str = typer.Option("demo", help="Prediction slate name."),
@@ -200,6 +277,56 @@ def group_predictions_command(
 
     for group_name, summary in summaries.items():
         typer.echo(f"{group_name}: {summary}")
+
+@app.command("group-performance-report")
+def group_performance_report(
+    slate: str | None = typer.Option(None, "--slate"),
+    stake: float = typer.Option(100.0, "--stake"),
+    show_picks: bool = typer.Option(False, "--show-picks"),
+):
+    session = get_cli_session()
+
+    try:
+        report = build_group_performance_report(
+            session=session,
+            slate=slate,
+            stake=stake,
+        )
+
+        print("\n=== GROUP PERFORMANCE REPORT ===")
+        print(f"Slate: {report['slate']}")
+        print(f"Groups found: {report['groups_found']}")
+        print(f"Stake per group: {report['stake_per_group']}")
+
+        print("\n=== SUMMARY ===")
+        print(report["summary"])
+
+        for group in report["groups"]:
+            print("\n" + "=" * 60)
+            print(group["group_name"])
+            print("=" * 60)
+            print(f"Type: {group['group_type']}")
+            print(f"Games: {group['games']}")
+            print(f"Settled: {group['settled_games']}")
+            print(f"Pending: {group['pending_games']}")
+            print(f"Markets: {', '.join(group['markets_used'])}")
+            print(f"Leagues: {', '.join(group['leagues_used'])}")
+            print(f"Average confidence: {group['average_confidence']}")
+            print(f"Average value score: {group['average_value_score']}")
+            print(f"Total odds: {group['total_odds']}")
+            print(f"Odds coverage: {group['odds_coverage']}")
+            print(f"Outcome: {group['outcome']}")
+            print(f"Profit: {group['profit']}")
+            print(f"ROI: {group['roi']}")
+            print(f"Reason: {group['reason']}")
+
+            if show_picks:
+                print("\nPicks:")
+                for pick in group["picks"]:
+                    print(pick)
+
+    finally:
+        session.close()
 
 
 @app.command("simulate-results")
@@ -412,6 +539,31 @@ def market_profitability(
 
     typer.echo("\n========== WORST LEAGUES ==========\n")
     pprint(results["worst_leagues"])
+
+@app.command("historical-group-backtest")
+def historical_group_backtest(
+    slate: str = typer.Option(...),
+    stake: float = typer.Option(100.0),
+):
+    session = get_cli_session()
+
+    try:
+        result = run_historical_group_backtest(
+            session=session,
+            slate=slate,
+            stake=stake,
+        )
+
+        print("\n=== HISTORICAL GROUP BACKTEST ===")
+        print(result["summary"])
+
+        print("\n=== GROUPS ===")
+
+        for row in result["groups"]:
+            print(row)
+
+    finally:
+        session.close()
 
 @app.command("optimize-profit-thresholds")
 def optimize_profit_thresholds_command(

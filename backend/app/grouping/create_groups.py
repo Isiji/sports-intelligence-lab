@@ -624,17 +624,33 @@ def _fallback_confidence_groups(
         )
     )
 
-    index = 0
     group_summaries: dict[str, dict[str, float | str]] = {}
+    remaining_games = ranked_games.copy()
 
     for group_number, size in enumerate(group_sizes, start=1):
         group_name = f"Group {group_number}"
 
-        selected_games = ranked_games[index:index + size]
-        index += size
+        selected_games: list[Prediction] = []
+        selected_match_ids: set[int] = set()
 
-        if not selected_games:
-            continue
+        for candidate in remaining_games:
+            if candidate.match_id in selected_match_ids:
+                continue
+
+            selected_games.append(candidate)
+            selected_match_ids.add(candidate.match_id)
+
+            if len(selected_games) >= size:
+                break
+
+        if len(selected_games) < 4:
+            break
+
+        remaining_games = [
+            candidate
+            for candidate in remaining_games
+            if candidate.match_id not in selected_match_ids
+        ]
 
         odds_available = all(
             prediction.odds is not None
@@ -648,13 +664,25 @@ def _fallback_confidence_groups(
             and cumulative_odds is not None
             and cumulative_odds < min_group_odds
         ):
-            selected_games = _boost_group_to_min_odds(
+            boosted_games = _boost_group_to_min_odds(
                 selected_games=selected_games,
-                available_games=ranked_games,
+                available_games=remaining_games,
                 min_group_odds=min_group_odds,
             )
 
-            cumulative_odds = _cumulative_odds(selected_games)
+            boosted_match_ids = {game.match_id for game in boosted_games}
+
+            if len(boosted_match_ids) == len(boosted_games):
+                selected_games = boosted_games
+                selected_match_ids = boosted_match_ids
+
+                remaining_games = [
+                    candidate
+                    for candidate in remaining_games
+                    if candidate.match_id not in selected_match_ids
+                ]
+
+                cumulative_odds = _cumulative_odds(selected_games)
 
         for prediction in selected_games:
             session.add(
@@ -684,14 +712,8 @@ def _fallback_confidence_groups(
             ),
             "games": float(len(selected_games)),
             "odds_coverage": round(
-                (
-                    sum(
-                        1
-                        for p in selected_games
-                        if p.odds is not None
-                    )
-                    / len(selected_games)
-                ),
+                sum(1 for p in selected_games if p.odds is not None)
+                / len(selected_games),
                 4,
             ),
         }
@@ -699,7 +721,6 @@ def _fallback_confidence_groups(
     session.commit()
 
     return group_summaries
-
 
 def _fallback_ranking_score(prediction: Prediction) -> float:
     value_score = prediction.value_score or 0.0
