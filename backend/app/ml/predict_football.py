@@ -186,17 +186,34 @@ def _find_odds(
     market: str,
     selection: str,
 ) -> float | None:
+    selection_mapping = {
+        "NOT_HOME_WIN": "AWAY_WIN",
+        "NOT_DOUBLE_CHANCE_X2": "DOUBLE_CHANCE_1X",
+        "NOT_DOUBLE_CHANCE_1X": "DOUBLE_CHANCE_X2",
+    }
+
+    normalized_selection = selection_mapping.get(
+        selection,
+        selection,
+    )
+
     odds_row = session.scalar(
         select(MatchOdds)
         .where(
             MatchOdds.match_id == match_id,
             MatchOdds.market == market,
-            MatchOdds.selection == selection,
+            MatchOdds.selection == normalized_selection,
         )
         .order_by(MatchOdds.retrieved_at.desc())
     )
 
     if odds_row is None:
+        print(
+            "[ODDS MISS]",
+            f"market={market}",
+            f"selection={selection}",
+            f"normalized={normalized_selection}",
+        )
         return None
 
     return float(odds_row.odds)

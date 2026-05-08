@@ -311,14 +311,6 @@ def _enrich_candidate(
     prediction["confidence_band_sample_size"] = confidence_band_sample_size
     prediction["selection_score"] = selection_score
 
-    print(
-    prediction["market"],
-    prediction.get("league"),
-    market_roi,
-    league_roi,
-    odds_band_roi,
-    confidence_band_roi,
-    )
     return prediction
 
 

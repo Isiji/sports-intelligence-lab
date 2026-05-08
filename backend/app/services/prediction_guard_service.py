@@ -8,6 +8,8 @@ from app.db.models import LeagueIntelligenceSnapshot, MarketReliabilitySnapshot,
 DEFAULT_MIN_LEAGUE_SCORE = 0.30
 DEFAULT_MIN_MARKET_SCORE = 0.45
 
+BOOTSTRAP_ALLOW_IF_NO_INTELLIGENCE = True
+
 
 def evaluate_prediction_guard(
     session: Session,
@@ -33,11 +35,28 @@ def evaluate_prediction_guard(
         .first()
     )
 
-    allowed = True
     reasons: list[str] = []
 
     league_multiplier = 1.0
     market_multiplier = 1.0
+    bootstrap_mode = False
+
+    if league_row is None and market_row is None and BOOTSTRAP_ALLOW_IF_NO_INTELLIGENCE:
+        bootstrap_mode = True
+
+        return {
+            "allowed": True,
+            "bootstrap_mode": bootstrap_mode,
+            "market": market,
+            "match_id": match.id,
+            "league": match.league,
+            "league_multiplier": league_multiplier,
+            "market_multiplier": market_multiplier,
+            "final_confidence_multiplier": 1.0,
+            "reasons": [],
+        }
+
+    allowed = True
 
     if league_row is None:
         allowed = False
@@ -71,6 +90,7 @@ def evaluate_prediction_guard(
 
     return {
         "allowed": allowed,
+        "bootstrap_mode": bootstrap_mode,
         "market": market,
         "match_id": match.id,
         "league": match.league,

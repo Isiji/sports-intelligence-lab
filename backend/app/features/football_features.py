@@ -207,6 +207,7 @@ def load_training_frame(session: Session) -> pd.DataFrame:
     return df.fillna(0.0).reset_index(drop=True)
 
 
+
 def load_upcoming_frame(
     session: Session,
     limit: int = 30,
@@ -224,13 +225,20 @@ def load_upcoming_frame(
     upcoming_df = df[
         df["home_goals"].isna()
         & df["away_goals"].isna()
+        & (
+            (df["kickoff_datetime"] >= pd.Timestamp.utcnow().tz_localize(None))
+            | (df["kickoff_date"] >= pd.Timestamp.today().normalize())
+        )
     ].copy()
 
     upcoming_df = (
         upcoming_df
-        .sort_values(["kickoff_date", "match_id"])
+        .sort_values(["kickoff_datetime", "kickoff_date", "match_id"])
         .head(limit)
     )
+
+    if upcoming_df.empty:
+        return upcoming_df
 
     upcoming_df = build_upcoming_match_features(
         session=session,
@@ -339,6 +347,7 @@ def _base_query(session: Session):
         SELECT
             m.id AS match_id,
             m.kickoff_date,
+            m.kickoff_datetime,
             m.league,
             m.home_team,
             m.away_team,
@@ -347,6 +356,8 @@ def _base_query(session: Session):
             m.home_goals,
             m.away_goals,
             m.has_stats,
+            m.has_odds,
+            m.odds_unavailable,
 
             COALESCE(hs.shots_on_target, 0) AS home_sot,
             COALESCE(hs.corners, 0) AS home_corners,
@@ -363,9 +374,35 @@ def _base_query(session: Session):
             COALESCE(as1.keeper_saves, 0) AS away_keeper_saves
 
         FROM matches m
-        LEFT JOIN team_match_stats hs ON hs.match_id = m.id AND hs.is_home = 1
-        LEFT JOIN team_match_stats as1 ON as1.match_id = m.id AND as1.is_home = 0
-        ORDER BY m.kickoff_date ASC, m.id ASC
+        LEFT JOIN team_match_stats hs
+            ON hs.match_id = m.id
+           AND hs.is_home = 1
+
+        LEFT JOIN team_match_stats as1
+            ON as1.match_id = m.id
+           AND as1.is_home = 0
+
+        WHERE (
+            (
+                m.home_goals IS NULL
+                AND m.away_goals IS NULL
+                AND (
+                    m.kickoff_datetime >= NOW()
+                    OR m.kickoff_date >= CURRENT_DATE
+                )
+            )
+
+            OR
+
+            (
+                m.home_goals IS NOT NULL
+                AND m.away_goals IS NOT NULL
+            )
+        )
+
+        ORDER BY
+            COALESCE(m.kickoff_datetime, m.kickoff_date) ASC,
+            m.id ASC
         """
     )
 
@@ -374,10 +411,18 @@ def _base_query(session: Session):
     if df.empty:
         return df
 
-    df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
+    if "kickoff_datetime" in df.columns:
+        df["kickoff_datetime"] = pd.to_datetime(
+            df["kickoff_datetime"],
+            errors="coerce",
+        )
+
+    df["kickoff_date"] = pd.to_datetime(
+        df["kickoff_date"],
+        errors="coerce",
+    )
 
     return df.reset_index(drop=True)
-
 
 def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
