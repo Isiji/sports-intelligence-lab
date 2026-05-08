@@ -61,13 +61,13 @@ def build_historical_best_groups(
             SELECT
                 market,
                 COUNT(*) AS sample_size,
-                AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) AS hit_rate,
-                SUM(profit_loss) / NULLIF(SUM(stake), 0) AS roi,
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END) AS hit_rate,
+                SUM(profit) / NULLIF(SUM(stake), 0) AS roi,
                 AVG(odds) AS avg_odds,
                 AVG(confidence) AS avg_confidence,
                 AVG(value_score) AS avg_edge
             FROM historical_backtest_bets
-            WHERE profit_loss IS NOT NULL
+            WHERE profit IS NOT NULL
               AND stake IS NOT NULL
               AND odds IS NOT NULL
               AND confidence IS NOT NULL
@@ -79,14 +79,14 @@ def build_historical_best_groups(
                 league,
                 market,
                 COUNT(*) AS sample_size,
-                AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) AS hit_rate,
-                SUM(profit_loss) / NULLIF(SUM(stake), 0) AS roi,
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END) AS hit_rate,
+                SUM(profit) / NULLIF(SUM(stake), 0) AS roi,
                 AVG(odds) AS avg_odds,
                 AVG(confidence) AS avg_confidence,
                 AVG(value_score) AS avg_edge
             FROM historical_backtest_bets
             WHERE league IS NOT NULL
-              AND profit_loss IS NOT NULL
+              AND profit IS NOT NULL
               AND stake IS NOT NULL
               AND odds IS NOT NULL
               AND confidence IS NOT NULL
@@ -106,10 +106,10 @@ def build_historical_best_groups(
                     ELSE 'unknown'
                 END AS odds_band,
                 COUNT(*) AS sample_size,
-                AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) AS hit_rate,
-                SUM(profit_loss) / NULLIF(SUM(stake), 0) AS roi
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END) AS hit_rate,
+                SUM(profit) / NULLIF(SUM(stake), 0) AS roi
             FROM historical_backtest_bets
-            WHERE profit_loss IS NOT NULL
+            WHERE profit IS NOT NULL
               AND stake IS NOT NULL
               AND odds IS NOT NULL
             GROUP BY market, odds_band
@@ -129,13 +129,13 @@ def build_historical_best_groups(
                 b.odds,
                 b.implied_probability,
                 b.value_score,
-                b.profit_loss,
+                b.profit,
                 b.stake,
                 b.run_tag,
 
                 CASE
-                    WHEN b.profit_loss > 0 THEN 'win'
-                    WHEN b.profit_loss < 0 THEN 'loss'
+                    WHEN b.profit > 0 THEN 'win'
+                    WHEN b.profit < 0 THEN 'loss'
                     ELSE 'push'
                 END AS derived_result,
 
@@ -191,7 +191,7 @@ def build_historical_best_groups(
             WHERE b.confidence >= :min_confidence
               AND COALESCE(b.value_score, 0) >= :min_edge
               AND b.odds BETWEEN :min_odds AND :max_odds
-              AND b.profit_loss IS NOT NULL
+              AND b.profit IS NOT NULL
               AND b.stake IS NOT NULL
               AND mp.roi >= :min_market_roi
               AND COALESCE(lp.roi, 0) >= :min_league_roi

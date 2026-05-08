@@ -49,6 +49,8 @@ python -m app.cli historical-backtest-football --market home_win --use-only-matc
 
 python -m app.cli ingest-odds-finished --limit 5
 
+python -m app.cli create-groups
+
 COMPETITIONS = [
     # =========================
     # INTERNATIONAL

@@ -144,7 +144,7 @@ def run_historical_value_backtest(
             start_test_index += test_window_size
             continue
 
-        model = _build_model()
+        model = _build_model(market)
 
         model.fit(
             train_df[feature_columns()].fillna(0.0),
@@ -379,7 +379,31 @@ def _save_historical_backtest_bet(
     session.execute(statement)
 
 
-def _build_model():
+def _build_model(
+    market: str,
+):
+
+    rare_event_markets = {
+        "under_1_5_goals",
+        "over_3_5_goals",
+        "away_win",
+    }
+
+    if market in rare_event_markets:
+
+        return Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    LogisticRegression(
+                        max_iter=3000,
+                        C=0.5,
+                        class_weight=None,
+                    ),
+                ),
+            ]
+        )
 
     return Pipeline(
         steps=[
@@ -387,13 +411,13 @@ def _build_model():
             (
                 "model",
                 LogisticRegression(
-                    max_iter=2000,
+                    max_iter=3000,
+                    C=1.0,
                     class_weight="balanced",
                 ),
             ),
         ]
     )
-
 
 def _calculate_profit(
     won: bool,

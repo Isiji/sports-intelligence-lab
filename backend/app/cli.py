@@ -6,6 +6,7 @@ from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
 from app.db.session import get_cli_session
 from sqlalchemy import text
+from app.utils.slate import resolve_slate
 from app.grouping.create_groups import group_predictions
 from app.ingest.demo_results import simulate_demo_results
 from app.ingest.demo_seed import seed_demo_data
@@ -135,6 +136,43 @@ def prediction_performance_report(
     for row in report["markets"]:
         typer.echo(row)
 
+@app.command("create-groups")
+def create_groups_command(
+    slate: str | None = typer.Option(None, "--slate"),
+    min_confidence: float = typer.Option(0.65, "--min-confidence"),
+    min_group_odds: float = typer.Option(3.0, "--min-group-odds"),
+    require_odds: bool = typer.Option(False, "--require-odds"),
+):
+    """
+    Create prediction groups for a slate.
+
+    Uses profitability-aware portfolio grouping first.
+    Falls back to confidence/value grouping if historical intelligence is not enough.
+    """
+
+    session = get_cli_session()
+
+    try:
+        selected_slate = resolve_slate(slate)
+
+        summaries = group_predictions(
+            session=session,
+            slate=selected_slate,
+            min_confidence=min_confidence,
+            min_group_odds=min_group_odds,
+            require_odds=require_odds,
+        )
+
+        print("\n=== GROUPS CREATED ===")
+        print(f"Slate: {selected_slate}")
+
+        for group_name, summary in summaries.items():
+            print(f"\n{group_name}")
+            print(summary)
+
+    finally:
+        session.close()
+        
 @app.command("ingest-odds-finished")
 def ingest_odds_finished(
     limit: int = typer.Option(50, help="Number of finished matches to fetch odds for."),
