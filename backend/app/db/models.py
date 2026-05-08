@@ -488,3 +488,42 @@ class FootballFeatureSnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+
+class HistoricalBacktestBet(Base):
+    __tablename__ = "historical_backtest_bets"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_tag",
+            "market",
+            "match_id",
+            "predicted_label",
+            name="uq_historical_backtest_bet_unique",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    run_tag: Mapped[str] = mapped_column(String(120), index=True)
+
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+    home_team: Mapped[str] = mapped_column(String(160))
+    away_team: Mapped[str] = mapped_column(String(160))
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+    predicted_label: Mapped[str] = mapped_column(String(80), index=True)
+
+    confidence: Mapped[float] = mapped_column(Float, index=True)
+    odds: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    implied_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+
+    won: Mapped[bool] = mapped_column(Boolean, index=True)
+    profit: Mapped[float] = mapped_column(Float)
+    bankroll_after_bet: Mapped[float] = mapped_column(Float)
+
+    stake: Mapped[float] = mapped_column(Float, default=100.0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

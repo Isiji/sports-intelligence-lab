@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sqlalchemy import text
-from sqlalchemy.orm import Session
 
 from app.backtest.settle import is_prediction_correct
+from app.db.models import HistoricalBacktestBet
 from app.features.football_features import (
     MARKET_LABELS,
     MARKET_TARGETS,
@@ -51,24 +54,31 @@ def run_historical_value_backtest(
     stake: float = DEFAULT_STAKE,
     starting_bankroll: float = DEFAULT_STARTING_BANKROLL,
     use_only_matches_with_odds: bool = False,
+    save_bets: bool = False,
+    run_tag: str = "default",
 ) -> dict:
 
     if market not in MARKET_TARGETS:
         raise ValueError(f"Unsupported market: {market}")
 
     df = load_training_frame(session)
-    df = filter_training_frame_for_market(df, market)
+
+    df = filter_training_frame_for_market(
+        df,
+        market,
+    )
 
     if df.empty:
-        raise ValueError("No real training data found. Build features first.")
+        raise ValueError(
+            "No real training data found. Build features first."
+        )
 
     df = df.sort_values(
         ["kickoff_date", "match_id"]
     ).reset_index(drop=True)
 
-    # IMPORTANT:
-    # only use matches that actually have odds
     if use_only_matches_with_odds:
+
         odds_match_ids = _get_match_ids_with_odds(
             session=session,
             market=market,
@@ -82,13 +92,17 @@ def run_historical_value_backtest(
 
     if limit:
         maximum_rows = initial_train_size + limit
+
         df = df.iloc[:maximum_rows].copy()
 
-    minimum_required = initial_train_size + test_window_size
+    minimum_required = (
+        initial_train_size + test_window_size
+    )
 
     if len(df) < minimum_required:
         raise ValueError(
-            f"Need at least {minimum_required} finished matches for this backtest. "
+            f"Need at least {minimum_required} finished matches "
+            f"for this backtest. "
             f"Available: {len(df)}"
         )
 
@@ -105,6 +119,7 @@ def run_historical_value_backtest(
     losses = 0
 
     bets: list[HistoricalBet] = []
+
     windows = []
 
     start_test_index = initial_train_size
@@ -146,7 +161,9 @@ def run_historical_value_backtest(
 
         for row_index, (_, row) in enumerate(test_df.iterrows()):
 
-            probability = float(probabilities[row_index])
+            probability = float(
+                probabilities[row_index]
+            )
 
             if probability >= 0.5:
                 predicted_label = positive_label
@@ -158,11 +175,6 @@ def run_historical_value_backtest(
             if confidence < min_confidence:
                 continue
 
-            # VERY IMPORTANT:
-            # skip synthetic negative labels
-            # example:
-            # NOT_HOME_WIN
-            # NOT_DRAW
             if predicted_label.startswith("NOT_"):
                 continue
 
@@ -177,14 +189,21 @@ def run_historical_value_backtest(
             value_score = None
 
             if odds is not None:
-                implied_probability = round(1 / odds, 4)
+
+                implied_probability = round(
+                    1 / odds,
+                    4,
+                )
 
                 value_score = round(
                     confidence - implied_probability,
                     4,
                 )
 
-            if use_only_matches_with_odds and odds is None:
+            if (
+                use_only_matches_with_odds
+                and odds is None
+            ):
                 continue
 
             if (
@@ -193,7 +212,9 @@ def run_historical_value_backtest(
             ):
                 continue
 
-            safe_odds = odds if odds is not None else 2.0
+            safe_odds = (
+                odds if odds is not None else 2.0
+            )
 
             won = is_prediction_correct(
                 predicted_label=predicted_label,
@@ -221,30 +242,43 @@ def run_historical_value_backtest(
             else:
                 losses += 1
 
-            bets.append(
-                HistoricalBet(
-                    match_id=int(row["match_id"]),
-                    league=str(row["league"]),
-                    home_team=str(row["home_team"]),
-                    away_team=str(row["away_team"]),
-                    market=market,
-                    predicted_label=predicted_label,
-                    confidence=round(confidence, 4),
-                    odds=round(safe_odds, 4),
-                    implied_probability=implied_probability,
-                    value_score=value_score,
-                    won=won,
-                    profit=round(profit, 2),
-                    bankroll_after_bet=round(bankroll, 2),
-                )
+            historical_bet = HistoricalBet(
+                match_id=int(row["match_id"]),
+                league=str(row["league"]),
+                home_team=str(row["home_team"]),
+                away_team=str(row["away_team"]),
+                market=market,
+                predicted_label=predicted_label,
+                confidence=round(confidence, 4),
+                odds=round(safe_odds, 4),
+                implied_probability=implied_probability,
+                value_score=value_score,
+                won=won,
+                profit=round(profit, 2),
+                bankroll_after_bet=round(bankroll, 2),
             )
+
+            bets.append(historical_bet)
+
+            if save_bets:
+
+                _save_historical_backtest_bet(
+                    session=session,
+                    historical_bet=historical_bet,
+                    run_tag=run_tag,
+                    stake=stake,
+                )
 
         windows.append(
             {
                 "train_size": len(train_df),
                 "test_size": len(test_df),
-                "test_start": str(test_df["kickoff_date"].min()),
-                "test_end": str(test_df["kickoff_date"].max()),
+                "test_start": str(
+                    test_df["kickoff_date"].min()
+                ),
+                "test_end": str(
+                    test_df["kickoff_date"].max()
+                ),
                 "bets": window_bets,
                 "wins": window_wins,
                 "hit_rate": round(
@@ -256,6 +290,9 @@ def run_historical_value_backtest(
         )
 
         start_test_index += test_window_size
+
+    if save_bets:
+        session.commit()
 
     total_bets = len(bets)
 
@@ -277,8 +314,14 @@ def run_historical_value_backtest(
             "initial_train_size": initial_train_size,
             "test_window_size": test_window_size,
             "limit": limit,
-            "starting_bankroll": round(starting_bankroll, 2),
-            "ending_bankroll": round(bankroll, 2),
+            "starting_bankroll": round(
+                starting_bankroll,
+                2,
+            ),
+            "ending_bankroll": round(
+                bankroll,
+                2,
+            ),
             "total_bets": total_bets,
             "wins": wins,
             "losses": losses,
@@ -288,11 +331,52 @@ def run_historical_value_backtest(
             "total_staked": round(total_staked, 2),
             "min_confidence": min_confidence,
             "min_edge": min_edge,
-            "used_only_matches_with_odds": use_only_matches_with_odds,
+            "used_only_matches_with_odds": (
+                use_only_matches_with_odds
+            ),
+            "saved_bets": save_bets,
+            "run_tag": run_tag,
         },
         "windows": windows,
-        "bets": [bet.__dict__ for bet in bets],
+        "bets": [
+            bet.__dict__
+            for bet in bets
+        ],
     }
+
+
+def _save_historical_backtest_bet(
+    session: Session,
+    historical_bet: HistoricalBet,
+    run_tag: str,
+    stake: float,
+) -> None:
+
+    statement = insert(
+        HistoricalBacktestBet
+    ).values(
+        run_tag=run_tag,
+        match_id=historical_bet.match_id,
+        league=historical_bet.league,
+        home_team=historical_bet.home_team,
+        away_team=historical_bet.away_team,
+        market=historical_bet.market,
+        predicted_label=historical_bet.predicted_label,
+        confidence=historical_bet.confidence,
+        odds=historical_bet.odds,
+        implied_probability=historical_bet.implied_probability,
+        value_score=historical_bet.value_score,
+        won=historical_bet.won,
+        profit=historical_bet.profit,
+        bankroll_after_bet=historical_bet.bankroll_after_bet,
+        stake=stake,
+    )
+
+    statement = statement.on_conflict_do_nothing(
+        constraint="uq_historical_backtest_bet_unique"
+    )
+
+    session.execute(statement)
 
 
 def _build_model():
@@ -343,7 +427,10 @@ def _get_match_ids_with_odds(
         },
     ).scalars().all()
 
-    return {int(row) for row in rows}
+    return {
+        int(row)
+        for row in rows
+    }
 
 
 def _find_odds(

@@ -26,6 +26,10 @@ from app.ingest.football_stats_ingestion import (
     ingest_fixture_statistics,
     ingest_missing_statistics,
 )
+from app.backtest.profit_threshold_optimizer import (
+    optimize_profit_thresholds,
+    optimize_all_profit_thresholds,
+)
 # backend/app/cli.py
 
 from app.reports.competition_coverage import build_competition_coverage_report
@@ -67,7 +71,16 @@ def feature_cache_status() -> None:
         ).scalar()
 
     typer.echo({"cached_feature_rows": count})
-    
+
+@app.command("backtest-cache-status")
+def backtest_cache_status() -> None:
+    with get_cli_session() as session:
+        count = session.execute(
+            text("SELECT COUNT(*) FROM historical_backtest_bets")
+        ).scalar()
+
+    typer.echo({"cached_backtest_bets": count})
+
 @app.command("train-football")
 def train_football() -> None:
     with get_cli_session() as session:
@@ -347,7 +360,46 @@ def market_profitability(
 
     typer.echo("\n========== WORST LEAGUES ==========\n")
     pprint(results["worst_leagues"])
-    
+
+@app.command("optimize-profit-thresholds")
+def optimize_profit_thresholds_command(
+    market: str = typer.Option("over_2_5_goals", help="Market to optimize."),
+    min_bets: int = typer.Option(5, help="Minimum bets required for a threshold combo."),
+) -> None:
+    from pprint import pprint
+
+    with get_cli_session() as session:
+        result = optimize_profit_thresholds(
+            session=session,
+            market=market,
+            min_bets=min_bets,
+        )
+
+    typer.echo("\n========== RAW BACKTEST SUMMARY ==========\n")
+    pprint(result["raw_summary"])
+
+    typer.echo("\n========== BEST PROFIT THRESHOLDS ==========\n")
+    pprint(result["best_thresholds"])
+
+    typer.echo("\n========== WORST PROFIT THRESHOLDS ==========\n")
+    pprint(result["worst_thresholds"])
+
+
+@app.command("optimize-profit-thresholds-all")
+def optimize_profit_thresholds_all_command(
+    min_bets: int = typer.Option(5, help="Minimum bets required for a threshold combo."),
+) -> None:
+    from pprint import pprint
+
+    with get_cli_session() as session:
+        result = optimize_all_profit_thresholds(
+            session=session,
+            min_bets=min_bets,
+        )
+
+    typer.echo("\n========== BEST MARKET THRESHOLDS ==========\n")
+    pprint(result["best_market_thresholds"])
+
 
 @app.command("build-elo-ratings")
 def build_elo_ratings_command() -> None:
@@ -409,6 +461,14 @@ def historical_backtest_football(
         False,
         help="Only backtest matches that have real odds.",
     ),
+    save_bets: bool = typer.Option(
+        False,
+        help="Save historical backtest bets into cache.",
+    ),
+    run_tag: str = typer.Option(
+        "default",
+        help="Cache run label, for example overnight_2026_05_08.",
+    ),
 ) -> None:
     with get_cli_session() as session:
         result = run_historical_value_backtest(
@@ -422,6 +482,8 @@ def historical_backtest_football(
             stake=stake,
             starting_bankroll=bankroll,
             use_only_matches_with_odds=use_only_matches_with_odds,
+            save_bets=save_bets,
+            run_tag=run_tag,
         )
 
     typer.echo("\n=== HISTORICAL BACKTEST SUMMARY ===")
@@ -433,7 +495,7 @@ def historical_backtest_football(
 
     typer.echo("\n=== SAMPLE BETS ===")
     for bet in result["bets"][:20]:
-        typer.echo(bet)  
-
+        typer.echo(bet)
+        
 if __name__ == "__main__":
     app()
