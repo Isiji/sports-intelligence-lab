@@ -34,7 +34,8 @@ from app.backtest.profit_threshold_optimizer import (
     optimize_profit_thresholds,
     optimize_all_profit_thresholds,
 )
-# backend/app/cli.py
+from app.analysis.market_survivability_report import market_survivability_report
+from app.analysis.odds_band_survivability_report import odds_band_survivability_report
 
 from app.reports.competition_coverage import build_competition_coverage_report
 # backend/app/cli.py
@@ -43,6 +44,8 @@ from app.analysis.group_performance_report import build_group_performance_report
 from app.backtest.historical_group_backtest import (
     run_historical_group_backtest,
 )
+from app.analysis.confidence_band_survivability_report import confidence_band_survivability_report
+
 from app.ingest.finished_match_updater import update_finished_matches
 from app.reports.prediction_performance import build_prediction_performance_report
 from app.services.elo_service import build_elo_ratings
@@ -142,6 +145,37 @@ def prediction_performance_report(
 
     for row in report["markets"]:
         typer.echo(row)
+@app.command("odds-band-survivability-report")
+def odds_band_survivability_report_command(
+    run_tag: str = typer.Option("research_all_v1"),
+    min_bets: int = typer.Option(10),
+):
+    session = get_cli_session()
+
+    try:
+        odds_band_survivability_report(
+            session=session,
+            run_tag=run_tag,
+            min_bets=min_bets,
+        )
+    finally:
+        session.close()
+
+@app.command("confidence-band-survivability-report")
+def confidence_band_survivability_report_command(
+    run_tag: str = typer.Option("research_all_v1"),
+    min_bets: int = typer.Option(10),
+):
+    session = get_cli_session()
+
+    try:
+        confidence_band_survivability_report(
+            session=session,
+            run_tag=run_tag,
+            min_bets=min_bets,
+        )
+    finally:
+        session.close()
 
 @app.command("create-groups")
 def create_groups_command(
@@ -264,7 +298,22 @@ def cached_group_backtest_cli(
     finally:
         session.close()
 
-        
+@app.command("market-survivability-report")
+def market_survivability_report_command(
+    run_tag: str = typer.Option("research_all_v1"),
+    min_bets: int = typer.Option(20),
+):
+    session = get_cli_session()
+
+    try:
+        market_survivability_report(
+            session=session,
+            run_tag=run_tag,
+            min_bets=min_bets,
+        )
+    finally:
+        session.close()
+
 @app.command("group-predictions")
 def group_predictions_command(
     slate: str = typer.Option("demo", help="Prediction slate name."),
