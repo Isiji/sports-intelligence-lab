@@ -24,36 +24,41 @@ class ProfitabilityFilters:
     min_sample_size: int = MIN_SAMPLE_SIZE
 
 
-def _where_clause(filters: ProfitabilityFilters) -> tuple[str, dict[str, Any]]:
+def _where_clause(
+    filters: ProfitabilityFilters,
+    alias: str = "",
+) -> tuple[str, dict[str, Any]]:
+    prefix = f"{alias}." if alias else ""
+
     clauses = ["1=1"]
     params: dict[str, Any] = {}
 
     if filters.market:
-        clauses.append("market = :market")
+        clauses.append(f"{prefix}market = :market")
         params["market"] = filters.market
 
     if filters.league:
-        clauses.append("league = :league")
+        clauses.append(f"{prefix}league = :league")
         params["league"] = filters.league
 
     if filters.run_tag:
-        clauses.append("run_tag = :run_tag")
+        clauses.append(f"{prefix}run_tag = :run_tag")
         params["run_tag"] = filters.run_tag
 
     if filters.min_confidence is not None:
-        clauses.append("confidence >= :min_confidence")
+        clauses.append(f"{prefix}confidence >= :min_confidence")
         params["min_confidence"] = filters.min_confidence
 
     if filters.min_edge is not None:
-        clauses.append("value_score >= :min_edge")
+        clauses.append(f"{prefix}value_score >= :min_edge")
         params["min_edge"] = filters.min_edge
 
     if filters.min_odds is not None:
-        clauses.append("odds >= :min_odds")
+        clauses.append(f"{prefix}odds >= :min_odds")
         params["min_odds"] = filters.min_odds
 
     if filters.max_odds is not None:
-        clauses.append("odds <= :max_odds")
+        clauses.append(f"{prefix}odds <= :max_odds")
         params["max_odds"] = filters.max_odds
 
     return " AND ".join(clauses), params
@@ -65,6 +70,7 @@ def market_profitability_fast(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     where_sql, params = _where_clause(filters)
+
     params["min_sample_size"] = filters.min_sample_size
     params["limit"] = limit
 
@@ -72,30 +78,74 @@ def market_profitability_fast(
         f"""
         SELECT
             market,
+
             COUNT(*) AS bets,
-            SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
-            ROUND(AVG(CASE WHEN result = 'win' THEN 1.0 ELSE 0.0 END)::numeric, 4) AS hit_rate,
+
+            SUM(CASE WHEN won = true THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN won = false THEN 1 ELSE 0 END) AS losses,
+
+            ROUND(
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END)::numeric,
+                4
+            ) AS hit_rate,
+
             ROUND(AVG(odds)::numeric, 3) AS avg_odds,
-            ROUND(AVG(confidence)::numeric, 4) AS avg_confidence,
-            ROUND(AVG(implied_probability)::numeric, 4) AS avg_implied_probability,
-            ROUND(AVG(value_score)::numeric, 4) AS avg_edge,
-            ROUND(SUM(profit_loss)::numeric, 2) AS profit_loss,
-            ROUND((SUM(profit_loss) / NULLIF(SUM(stake), 0))::numeric, 4) AS roi
+
+            ROUND(
+                AVG(confidence)::numeric,
+                4
+            ) AS avg_confidence,
+
+            ROUND(
+                AVG(implied_probability)::numeric,
+                4
+            ) AS avg_implied_probability,
+
+            ROUND(
+                AVG(value_score)::numeric,
+                4
+            ) AS avg_edge,
+
+            ROUND(
+                SUM(stake)::numeric,
+                2
+            ) AS total_staked,
+
+            ROUND(
+                SUM(profit)::numeric,
+                2
+            ) AS total_profit,
+
+            ROUND(
+                (SUM(profit) / NULLIF(SUM(stake), 0))::numeric,
+                4
+            ) AS roi
+
         FROM historical_backtest_bets
+
         WHERE {where_sql}
           AND odds IS NOT NULL
           AND confidence IS NOT NULL
-          AND profit_loss IS NOT NULL
+          AND profit IS NOT NULL
           AND stake IS NOT NULL
+
         GROUP BY market
+
         HAVING COUNT(*) >= :min_sample_size
-        ORDER BY roi DESC, profit_loss DESC, bets DESC
+
+        ORDER BY
+            roi DESC,
+            total_profit DESC,
+            bets DESC
+
         LIMIT :limit
         """
     )
 
-    return [dict(row._mapping) for row in session.execute(query, params).fetchall()]
+    return [
+        dict(row._mapping)
+        for row in session.execute(query, params).fetchall()
+    ]
 
 
 def league_profitability_fast(
@@ -104,6 +154,7 @@ def league_profitability_fast(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     where_sql, params = _where_clause(filters)
+
     params["min_sample_size"] = filters.min_sample_size
     params["limit"] = limit
 
@@ -112,29 +163,70 @@ def league_profitability_fast(
         SELECT
             league,
             market,
+
             COUNT(*) AS bets,
-            SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
-            ROUND(AVG(CASE WHEN result = 'win' THEN 1.0 ELSE 0.0 END)::numeric, 4) AS hit_rate,
+
+            SUM(CASE WHEN won = true THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN won = false THEN 1 ELSE 0 END) AS losses,
+
+            ROUND(
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END)::numeric,
+                4
+            ) AS hit_rate,
+
             ROUND(AVG(odds)::numeric, 3) AS avg_odds,
-            ROUND(AVG(confidence)::numeric, 4) AS avg_confidence,
-            ROUND(AVG(value_score)::numeric, 4) AS avg_edge,
-            ROUND(SUM(profit_loss)::numeric, 2) AS profit_loss,
-            ROUND((SUM(profit_loss) / NULLIF(SUM(stake), 0))::numeric, 4) AS roi
+
+            ROUND(
+                AVG(confidence)::numeric,
+                4
+            ) AS avg_confidence,
+
+            ROUND(
+                AVG(value_score)::numeric,
+                4
+            ) AS avg_edge,
+
+            ROUND(
+                SUM(stake)::numeric,
+                2
+            ) AS total_staked,
+
+            ROUND(
+                SUM(profit)::numeric,
+                2
+            ) AS total_profit,
+
+            ROUND(
+                (SUM(profit) / NULLIF(SUM(stake), 0))::numeric,
+                4
+            ) AS roi
+
         FROM historical_backtest_bets
+
         WHERE {where_sql}
           AND league IS NOT NULL
           AND odds IS NOT NULL
           AND confidence IS NOT NULL
-          AND profit_loss IS NOT NULL
+          AND profit IS NOT NULL
           AND stake IS NOT NULL
+
         GROUP BY league, market
+
         HAVING COUNT(*) >= :min_sample_size
-        ORDER BY roi DESC, profit_loss DESC, bets DESC
+
+        ORDER BY
+            roi DESC,
+            total_profit DESC,
+            bets DESC
+
         LIMIT :limit
         """
     )
 
-    return [dict(row._mapping) for row in session.execute(query, params).fetchall()]
+    return [
+        dict(row._mapping)
+        for row in session.execute(query, params).fetchall()
+    ]
 
 
 def odds_band_profitability_fast(
@@ -142,6 +234,7 @@ def odds_band_profitability_fast(
     filters: ProfitabilityFilters,
 ) -> list[dict[str, Any]]:
     where_sql, params = _where_clause(filters)
+
     params["min_sample_size"] = filters.min_sample_size
 
     query = text(
@@ -149,6 +242,7 @@ def odds_band_profitability_fast(
         WITH banded AS (
             SELECT
                 *,
+
                 CASE
                     WHEN odds < 1.30 THEN 'below_1.30'
                     WHEN odds >= 1.30 AND odds < 1.50 THEN '1.30_to_1.49'
@@ -158,28 +252,72 @@ def odds_band_profitability_fast(
                     WHEN odds >= 3.00 THEN '3.00_plus'
                     ELSE 'unknown'
                 END AS odds_band
+
             FROM historical_backtest_bets
+
             WHERE {where_sql}
               AND odds IS NOT NULL
+              AND confidence IS NOT NULL
+              AND profit IS NOT NULL
+              AND stake IS NOT NULL
         )
+
         SELECT
             odds_band,
+
             COUNT(*) AS bets,
-            SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
-            ROUND(AVG(CASE WHEN result = 'win' THEN 1.0 ELSE 0.0 END)::numeric, 4) AS hit_rate,
+
+            SUM(CASE WHEN won = true THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN won = false THEN 1 ELSE 0 END) AS losses,
+
+            ROUND(
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END)::numeric,
+                4
+            ) AS hit_rate,
+
             ROUND(AVG(odds)::numeric, 3) AS avg_odds,
-            ROUND(AVG(confidence)::numeric, 4) AS avg_confidence,
-            ROUND(AVG(value_score)::numeric, 4) AS avg_edge,
-            ROUND(SUM(profit_loss)::numeric, 2) AS profit_loss,
-            ROUND((SUM(profit_loss) / NULLIF(SUM(stake), 0))::numeric, 4) AS roi
+
+            ROUND(
+                AVG(confidence)::numeric,
+                4
+            ) AS avg_confidence,
+
+            ROUND(
+                AVG(value_score)::numeric,
+                4
+            ) AS avg_edge,
+
+            ROUND(
+                SUM(stake)::numeric,
+                2
+            ) AS total_staked,
+
+            ROUND(
+                SUM(profit)::numeric,
+                2
+            ) AS total_profit,
+
+            ROUND(
+                (SUM(profit) / NULLIF(SUM(stake), 0))::numeric,
+                4
+            ) AS roi
+
         FROM banded
+
         GROUP BY odds_band
+
         HAVING COUNT(*) >= :min_sample_size
-        ORDER BY roi DESC, profit_loss DESC
+
+        ORDER BY
+            roi DESC,
+            total_profit DESC
         """
     )
 
-    return [dict(row._mapping) for row in session.execute(query, params).fetchall()]
+    return [
+        dict(row._mapping)
+        for row in session.execute(query, params).fetchall()
+    ]
 
 
 def confidence_band_profitability_fast(
@@ -187,6 +325,7 @@ def confidence_band_profitability_fast(
     filters: ProfitabilityFilters,
 ) -> list[dict[str, Any]]:
     where_sql, params = _where_clause(filters)
+
     params["min_sample_size"] = filters.min_sample_size
 
     query = text(
@@ -194,6 +333,7 @@ def confidence_band_profitability_fast(
         WITH banded AS (
             SELECT
                 *,
+
                 CASE
                     WHEN confidence < 0.50 THEN 'below_0.50'
                     WHEN confidence >= 0.50 AND confidence < 0.60 THEN '0.50_to_0.59'
@@ -203,28 +343,70 @@ def confidence_band_profitability_fast(
                     WHEN confidence >= 0.90 THEN '0.90_plus'
                     ELSE 'unknown'
                 END AS confidence_band
+
             FROM historical_backtest_bets
+
             WHERE {where_sql}
               AND confidence IS NOT NULL
+              AND odds IS NOT NULL
+              AND profit IS NOT NULL
+              AND stake IS NOT NULL
         )
+
         SELECT
             confidence_band,
+
             COUNT(*) AS bets,
-            SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
-            ROUND(AVG(CASE WHEN result = 'win' THEN 1.0 ELSE 0.0 END)::numeric, 4) AS hit_rate,
+
+            SUM(CASE WHEN won = true THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN won = false THEN 1 ELSE 0 END) AS losses,
+
+            ROUND(
+                AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END)::numeric,
+                4
+            ) AS hit_rate,
+
             ROUND(AVG(odds)::numeric, 3) AS avg_odds,
-            ROUND(AVG(confidence)::numeric, 4) AS avg_confidence,
-            ROUND(AVG(value_score)::numeric, 4) AS avg_edge,
-            ROUND(SUM(profit_loss)::numeric, 2) AS profit_loss,
-            ROUND((SUM(profit_loss) / NULLIF(SUM(stake), 0))::numeric, 4) AS roi
+
+            ROUND(
+                AVG(confidence)::numeric,
+                4
+            ) AS avg_confidence,
+
+            ROUND(
+                AVG(value_score)::numeric,
+                4
+            ) AS avg_edge,
+
+            ROUND(
+                SUM(stake)::numeric,
+                2
+            ) AS total_staked,
+
+            ROUND(
+                SUM(profit)::numeric,
+                2
+            ) AS total_profit,
+
+            ROUND(
+                (SUM(profit) / NULLIF(SUM(stake), 0))::numeric,
+                4
+            ) AS roi
+
         FROM banded
+
         GROUP BY confidence_band
+
         HAVING COUNT(*) >= :min_sample_size
+
         ORDER BY confidence_band
         """
     )
 
-    return [dict(row._mapping) for row in session.execute(query, params).fetchall()]
+    return [
+        dict(row._mapping)
+        for row in session.execute(query, params).fetchall()
+    ]
 
 
 def optimize_profit_thresholds_fast(
@@ -234,8 +416,28 @@ def optimize_profit_thresholds_fast(
     run_tag: str | None = None,
     min_sample_size: int = 30,
 ) -> list[dict[str, Any]]:
-    confidence_thresholds = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
-    edge_thresholds = [-0.05, 0.00, 0.03, 0.05, 0.08, 0.10, 0.15]
+    confidence_thresholds = [
+        0.50,
+        0.55,
+        0.60,
+        0.65,
+        0.70,
+        0.75,
+        0.80,
+        0.85,
+        0.90,
+    ]
+
+    edge_thresholds = [
+        -0.05,
+        0.00,
+        0.03,
+        0.05,
+        0.08,
+        0.10,
+        0.15,
+    ]
+
     odds_ranges = [
         (1.20, 1.50),
         (1.30, 1.80),
@@ -261,35 +463,69 @@ def optimize_profit_thresholds_fast(
                 )
 
                 where_sql, params = _where_clause(filters)
+
                 params["min_sample_size"] = min_sample_size
 
                 query = text(
                     f"""
                     SELECT
                         COUNT(*) AS bets,
-                        SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
-                        ROUND(AVG(CASE WHEN result = 'win' THEN 1.0 ELSE 0.0 END)::numeric, 4) AS hit_rate,
+
+                        SUM(CASE WHEN won = true THEN 1 ELSE 0 END) AS wins,
+                        SUM(CASE WHEN won = false THEN 1 ELSE 0 END) AS losses,
+
+                        ROUND(
+                            AVG(CASE WHEN won = true THEN 1.0 ELSE 0.0 END)::numeric,
+                            4
+                        ) AS hit_rate,
+
                         ROUND(AVG(odds)::numeric, 3) AS avg_odds,
-                        ROUND(AVG(confidence)::numeric, 4) AS avg_confidence,
-                        ROUND(AVG(value_score)::numeric, 4) AS avg_edge,
-                        ROUND(SUM(profit_loss)::numeric, 2) AS profit_loss,
-                        ROUND((SUM(profit_loss) / NULLIF(SUM(stake), 0))::numeric, 4) AS roi
+
+                        ROUND(
+                            AVG(confidence)::numeric,
+                            4
+                        ) AS avg_confidence,
+
+                        ROUND(
+                            AVG(value_score)::numeric,
+                            4
+                        ) AS avg_edge,
+
+                        ROUND(
+                            SUM(stake)::numeric,
+                            2
+                        ) AS total_staked,
+
+                        ROUND(
+                            SUM(profit)::numeric,
+                            2
+                        ) AS total_profit,
+
+                        ROUND(
+                            (SUM(profit) / NULLIF(SUM(stake), 0))::numeric,
+                            4
+                        ) AS roi
+
                     FROM historical_backtest_bets
+
                     WHERE {where_sql}
                       AND odds IS NOT NULL
                       AND confidence IS NOT NULL
-                      AND profit_loss IS NOT NULL
+                      AND profit IS NOT NULL
                       AND stake IS NOT NULL
+
                     HAVING COUNT(*) >= :min_sample_size
                     """
                 )
 
                 row = session.execute(query, params).fetchone()
+
                 if not row:
                     continue
 
                 data = dict(row._mapping)
-                if data["bets"] is None:
+
+                if not data.get("bets"):
                     continue
 
                 data.update(
@@ -308,7 +544,7 @@ def optimize_profit_thresholds_fast(
     results.sort(
         key=lambda x: (
             float(x["roi"] or 0),
-            float(x["profit_loss"] or 0),
+            float(x["total_profit"] or 0),
             int(x["bets"] or 0),
         ),
         reverse=True,

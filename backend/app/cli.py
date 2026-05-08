@@ -44,6 +44,20 @@ from app.backtest.historical_value_backtest import run_historical_value_backtest
 from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
+# backend/app/cli.py imports to add
+
+from app.analysis.backtest_cache_analytics import (
+    ProfitabilityFilters,
+    confidence_band_profitability_fast,
+    league_profitability_fast,
+    market_profitability_fast,
+    odds_band_profitability_fast,
+    optimize_profit_thresholds_fast,
+)
+from app.grouping.historical_group_optimizer import (
+    GroupOptimizerConfig,
+    build_historical_best_groups,
+)
 
 app = typer.Typer()
 
@@ -496,6 +510,235 @@ def historical_backtest_football(
     typer.echo("\n=== SAMPLE BETS ===")
     for bet in result["bets"][:20]:
         typer.echo(bet)
-        
+
+# backend/app/cli.py commands to add
+
+
+@app.command("market-profitability-fast")
+def cli_market_profitability_fast(
+    market: str | None = typer.Option(None),
+    league: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    min_confidence: float | None = typer.Option(None),
+    min_edge: float | None = typer.Option(None),
+    min_odds: float | None = typer.Option(None),
+    max_odds: float | None = typer.Option(None),
+    min_sample_size: int = typer.Option(20),
+    limit: int = typer.Option(50),
+):
+    session = get_cli_session()
+    try:
+        filters = ProfitabilityFilters(
+            market=market,
+            league=league,
+            run_tag=run_tag,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_odds=min_odds,
+            max_odds=max_odds,
+            min_sample_size=min_sample_size,
+        )
+
+        rows = market_profitability_fast(session, filters, limit=limit)
+
+        print("\n=== MARKET PROFITABILITY FAST ===")
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("league-profitability-fast")
+def cli_league_profitability_fast(
+    market: str | None = typer.Option(None),
+    league: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    min_confidence: float | None = typer.Option(None),
+    min_edge: float | None = typer.Option(None),
+    min_odds: float | None = typer.Option(None),
+    max_odds: float | None = typer.Option(None),
+    min_sample_size: int = typer.Option(20),
+    limit: int = typer.Option(100),
+):
+    session = get_cli_session()
+    try:
+        filters = ProfitabilityFilters(
+            market=market,
+            league=league,
+            run_tag=run_tag,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_odds=min_odds,
+            max_odds=max_odds,
+            min_sample_size=min_sample_size,
+        )
+
+        rows = league_profitability_fast(session, filters, limit=limit)
+
+        print("\n=== LEAGUE PROFITABILITY FAST ===")
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("odds-band-profitability-fast")
+def cli_odds_band_profitability_fast(
+    market: str | None = typer.Option(None),
+    league: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    min_confidence: float | None = typer.Option(None),
+    min_edge: float | None = typer.Option(None),
+    min_sample_size: int = typer.Option(20),
+):
+    session = get_cli_session()
+    try:
+        filters = ProfitabilityFilters(
+            market=market,
+            league=league,
+            run_tag=run_tag,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_sample_size=min_sample_size,
+        )
+
+        rows = odds_band_profitability_fast(session, filters)
+
+        print("\n=== ODDS BAND PROFITABILITY FAST ===")
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("confidence-band-profitability-fast")
+def cli_confidence_band_profitability_fast(
+    market: str | None = typer.Option(None),
+    league: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    min_edge: float | None = typer.Option(None),
+    min_sample_size: int = typer.Option(20),
+):
+    session = get_cli_session()
+    try:
+        filters = ProfitabilityFilters(
+            market=market,
+            league=league,
+            run_tag=run_tag,
+            min_edge=min_edge,
+            min_sample_size=min_sample_size,
+        )
+
+        rows = confidence_band_profitability_fast(session, filters)
+
+        print("\n=== CONFIDENCE BAND PROFITABILITY FAST ===")
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("optimize-profit-thresholds-fast")
+def cli_optimize_profit_thresholds_fast(
+    market: str | None = typer.Option(None),
+    league: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    min_sample_size: int = typer.Option(30),
+):
+    session = get_cli_session()
+    try:
+        rows = optimize_profit_thresholds_fast(
+            session=session,
+            market=market,
+            league=league,
+            run_tag=run_tag,
+            min_sample_size=min_sample_size,
+        )
+
+        print("\n=== OPTIMIZED PROFIT THRESHOLDS FAST ===")
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("historical-best-groups")
+def cli_historical_best_groups(
+    slate: str | None = typer.Option(None),
+    run_tag: str | None = typer.Option(None),
+    group_size: int = typer.Option(4),
+    max_groups: int = typer.Option(10),
+    min_confidence: float = typer.Option(0.60),
+    min_edge: float = typer.Option(0.00),
+    min_odds: float = typer.Option(1.25),
+    max_odds: float = typer.Option(3.50),
+    min_market_roi: float = typer.Option(0.00),
+    min_league_roi: float = typer.Option(0.00),
+    min_sample_size: int = typer.Option(20),
+):
+    session = get_cli_session()
+    try:
+        config = GroupOptimizerConfig(
+            group_size=group_size,
+            max_groups=max_groups,
+            min_confidence=min_confidence,
+            min_edge=min_edge,
+            min_odds=min_odds,
+            max_odds=max_odds,
+            min_market_roi=min_market_roi,
+            min_league_roi=min_league_roi,
+            min_sample_size=min_sample_size,
+        )
+
+        groups = build_historical_best_groups(
+            session=session,
+            slate=slate,
+            run_tag=run_tag,
+            config=config,
+        )
+
+        print("\n=== HISTORICAL BEST GROUPS ===")
+        print(f"groups_found={len(groups)}")
+
+        for group in groups:
+            print("\n------------------------------")
+            print(
+                {
+                    "group_number": group["group_number"],
+                    "combined_odds": group["combined_odds"],
+                    "avg_confidence": group["avg_confidence"],
+                    "avg_edge": group["avg_edge"],
+                    "avg_market_roi": group["avg_market_roi"],
+                    "avg_league_roi": group["avg_league_roi"],
+                    "historical_group_won": group["historical_group_won"],
+                    "legs_won": group["legs_won"],
+                    "legs_lost": group["legs_lost"],
+                }
+            )
+
+            for item in group["items"]:
+                print(
+                    {
+                        "match": f"{item['home_team']} vs {item['away_team']}",
+                        "league": item["league"],
+                        "market": item["market"],
+                        "pick": item["predicted_label"],
+                        "confidence": round(float(item["confidence"] or 0), 4),
+                        "odds": float(item["odds"] or 0),
+                        "edge": round(float(item["value_score"] or 0), 4),
+                        "market_roi": round(float(item["market_roi"] or 0), 4),
+                        "league_roi": round(float(item["league_roi"] or 0), 4),
+                        "result": item["derived_result"],
+                    }
+                )
+
+    finally:
+        session.close()
+
 if __name__ == "__main__":
     app()
