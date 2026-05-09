@@ -97,6 +97,7 @@ def cached_group_backtest(
     for bet in raw_candidates:
         if use_intelligence_filters:
             result = evaluate_pick_for_portfolio(
+                session=session,
                 league=bet.get("league"),
                 market=str(bet["market"]),
                 confidence=float(bet["confidence"]) if bet.get("confidence") is not None else None,

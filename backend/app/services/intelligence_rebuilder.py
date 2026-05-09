@@ -11,6 +11,99 @@ from app.db.models import (
     OddsBandIntelligenceSnapshot,
 )
 
+
+def calculate_recent_metrics(
+    session: Session,
+    run_tag: str,
+    market: str | None = None,
+    league: str | None = None,
+    limit: int = 50,
+):
+    conditions = [
+        "run_tag = :run_tag"
+    ]
+
+    params = {
+        "run_tag": run_tag,
+        "limit": limit,
+    }
+
+    if market:
+        conditions.append(
+            "market = :market"
+        )
+
+        params["market"] = market
+
+    if league:
+        conditions.append(
+            "league = :league"
+        )
+
+        params["league"] = league
+
+    where_clause = " AND ".join(conditions)
+
+    query = text(
+        f"""
+        WITH recent AS (
+            SELECT
+                won,
+                profit,
+                stake
+
+            FROM historical_backtest_bets
+
+            WHERE {where_clause}
+
+            ORDER BY id DESC
+
+            LIMIT :limit
+        )
+
+        SELECT
+            COUNT(*) AS bets,
+
+            ROUND(
+                AVG(
+                    CASE WHEN won = true THEN 1.0 ELSE 0.0 END
+                )::numeric,
+                4
+            ) AS recent_hit_rate,
+
+            ROUND(
+                (
+                    SUM(profit)
+                    / NULLIF(SUM(stake), 0)
+                )::numeric,
+                4
+            ) AS recent_roi
+
+        FROM recent
+        """
+    )
+
+    row = session.execute(
+        query,
+        params,
+    ).mappings().first()
+
+    if not row:
+        return {
+            "recent_hit_rate": 0.0,
+            "recent_roi": 0.0,
+        }
+
+    return {
+        "recent_hit_rate": float(
+            row["recent_hit_rate"] or 0
+        ),
+        "recent_roi": float(
+            row["recent_roi"] or 0
+        ),
+    }
+
+
 def rebuild_market_intelligence(
     session: Session,
     run_tag: str,
@@ -38,7 +131,10 @@ def rebuild_market_intelligence(
                 4
             ) AS roi,
 
-            ROUND(AVG(odds)::numeric, 4) AS avg_odds,
+            ROUND(
+                AVG(odds)::numeric,
+                4
+            ) AS avg_odds,
 
             ROUND(
                 AVG(confidence)::numeric,
@@ -101,6 +197,12 @@ def rebuild_market_intelligence(
         if hit_rate >= 0.60 and roi <= 0:
             verdict = "LOW_ODDS_TRAP"
 
+        recent = calculate_recent_metrics(
+            session=session,
+            run_tag=run_tag,
+            market=row["market"],
+        )
+
         session.add(
             MarketIntelligenceSnapshot(
                 sport="football",
@@ -112,6 +214,8 @@ def rebuild_market_intelligence(
                 avg_confidence=avg_confidence,
                 avg_value_score=avg_value_score,
                 survivability_score=survivability_score,
+                recent_roi=recent["recent_roi"],
+                recent_hit_rate=recent["recent_hit_rate"],
                 confidence_multiplier=round(confidence_multiplier, 4),
                 prediction_allowed=prediction_allowed,
                 verdict=verdict,
@@ -154,7 +258,10 @@ def rebuild_league_intelligence(
                 4
             ) AS roi,
 
-            ROUND(AVG(odds)::numeric, 4) AS avg_odds,
+            ROUND(
+                AVG(odds)::numeric,
+                4
+            ) AS avg_odds,
 
             ROUND(
                 AVG(confidence)::numeric,
@@ -224,6 +331,12 @@ def rebuild_league_intelligence(
         if avg_confidence >= 0.80 and roi <= 0:
             verdict = "FAKE_CONFIDENCE"
 
+        recent = calculate_recent_metrics(
+            session=session,
+            run_tag=run_tag,
+            league=row["league"],
+        )
+
         session.add(
             LeagueIntelligenceSnapshot(
                 sport="football",
@@ -235,6 +348,8 @@ def rebuild_league_intelligence(
                 avg_confidence=avg_confidence,
                 avg_value_score=avg_value_score,
                 survivability_score=survivability_score,
+                recent_roi=recent["recent_roi"],
+                recent_hit_rate=recent["recent_hit_rate"],
                 confidence_multiplier=round(confidence_multiplier, 4),
                 stats_quality_score=hit_rate,
                 safe_for_accumulators=safe_for_accumulators,
@@ -361,6 +476,7 @@ def rebuild_odds_band_intelligence(
         "odds_band_rows": inserted,
     }
 
+
 def rebuild_confidence_band_intelligence(
     session: Session,
     run_tag: str,
@@ -482,6 +598,7 @@ def rebuild_confidence_band_intelligence(
         "confidence_band_rows": inserted,
     }
 
+
 def rebuild_league_market_intelligence(
     session: Session,
     run_tag: str,
@@ -578,6 +695,13 @@ def rebuild_league_market_intelligence(
         if hit_rate >= 0.60 and roi <= 0:
             verdict = "CONFIDENCE_TRAP"
 
+        recent = calculate_recent_metrics(
+            session=session,
+            run_tag=run_tag,
+            market=row["market"],
+            league=row["league"],
+        )
+
         session.add(
             LeagueMarketIntelligenceSnapshot(
                 sport="football",
@@ -590,6 +714,8 @@ def rebuild_league_market_intelligence(
                 avg_confidence=avg_confidence,
                 avg_value_score=avg_value_score,
                 survivability_score=survivability_score,
+                recent_roi=recent["recent_roi"],
+                recent_hit_rate=recent["recent_hit_rate"],
                 confidence_multiplier=confidence_multiplier,
                 prediction_allowed=prediction_allowed,
                 verdict=verdict,

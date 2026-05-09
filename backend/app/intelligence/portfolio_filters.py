@@ -2,6 +2,16 @@
 
 from dataclasses import dataclass
 
+from sqlalchemy.orm import Session
+
+from app.db.models import (
+    ConfidenceBandIntelligenceSnapshot,
+    LeagueIntelligenceSnapshot,
+    LeagueMarketIntelligenceSnapshot,
+    MarketIntelligenceSnapshot,
+    OddsBandIntelligenceSnapshot,
+)
+
 
 @dataclass
 class PortfolioFilterResult:
@@ -9,89 +19,7 @@ class PortfolioFilterResult:
     reason: str
     risk_flags: list[str]
     risk_score: float
-
-
-CHAOS_LEAGUES = {
-    "Premier League",
-    "Bundesliga",
-    "League One",
-    "Championship",
-    "League Two",
-    "Ligue 2",
-    "Primeira Liga",
-    "La Liga",
-    "Primera Division",
-    "3. Liga",
-    "III Liga - Group 3",
-    "National 2 - Group A",
-}
-
-FAKE_CONFIDENCE_LEAGUES = {
-    "First League",
-    "2. Division",
-    "Liga Nacional",
-    "1. Lig",
-    "Segunda División",
-    "Premiership",
-    "Division 1",
-    "Primera División RFEF - Group 2",
-}
-
-SAFE_LEAGUES = {
-    "Serie B",
-    "Ekstraklasa",
-    "Regionalliga - Ost",
-    "1st Division",
-    "3. liga - CFL A",
-    "4. liga - Divizie E",
-    "1. Division",
-    "II Liga - East",
-}
-
-
-SAFE_MARKET_CONFIDENCE_ZONES = {
-    ("btts_no", "0.90+"),
-    ("btts_yes", "0.90+"),
-    ("under_2_5_goals", "0.80 - 0.89"),
-    ("under_2_5_goals", "0.90+"),
-    ("under_3_5_goals", "0.90+"),
-    ("home_win", "0.90+"),
-    ("double_chance_1x", "0.90+"),
-    ("double_chance_12", "0.90+"),
-    ("double_chance_x2", "0.60 - 0.69"),
-    ("double_chance_x2", "0.80 - 0.89"),
-}
-
-
-BAD_MARKET_CONFIDENCE_ZONES = {
-    ("double_chance_x2", "0.90+"),
-    ("over_1_5_goals", "0.90+"),
-    ("under_3_5_goals", "0.70 - 0.79"),
-}
-
-
-SAFE_MARKET_ODDS_ZONES = {
-    ("home_win", "1.50 - 1.79"),
-    ("under_2_5_goals", "1.50 - 1.79"),
-    ("under_2_5_goals", "1.80 - 2.19"),
-    ("under_3_5_goals", "1.00 - 1.29"),
-    ("under_3_5_goals", "1.50 - 1.79"),
-    ("double_chance_x2", "1.00 - 1.29"),
-    ("double_chance_x2", "1.30 - 1.49"),
-    ("btts_no", "2.20 - 2.99"),
-    ("under_1_5_goals", "3.00 - 4.49"),
-}
-
-
-BAD_MARKET_ODDS_ZONES = {
-    ("home_win", "2.20 - 2.99"),
-    ("over_2_5_goals", "1.50 - 1.79"),
-    ("over_2_5_goals", "1.80 - 2.19"),
-    ("btts_yes", "1.80 - 2.19"),
-    ("double_chance_1x", "1.00 - 1.29"),
-    ("double_chance_12", "1.00 - 1.29"),
-    ("over_1_5_goals", "1.00 - 1.29"),
-}
+    tier: str
 
 
 def get_odds_band(odds: float | None) -> str:
@@ -99,24 +27,24 @@ def get_odds_band(odds: float | None) -> str:
         return "UNKNOWN"
 
     if odds < 1.30:
-        return "1.00 - 1.29"
+        return "1.00-1.29"
 
     if odds < 1.50:
-        return "1.30 - 1.49"
+        return "1.30-1.49"
 
     if odds < 1.80:
-        return "1.50 - 1.79"
+        return "1.50-1.79"
 
     if odds < 2.20:
-        return "1.80 - 2.19"
+        return "1.80-2.19"
 
     if odds < 3.00:
-        return "2.20 - 2.99"
+        return "2.20-2.99"
 
-    if odds < 4.50:
-        return "3.00 - 4.49"
+    if odds < 5.00:
+        return "3.00-4.99"
 
-    return "4.50+"
+    return "5.00+"
 
 
 def get_confidence_band(confidence: float | None) -> str:
@@ -124,22 +52,36 @@ def get_confidence_band(confidence: float | None) -> str:
         return "UNKNOWN"
 
     if confidence < 0.60:
-        return "0.00 - 0.59"
+        return "0.00-0.59"
 
     if confidence < 0.70:
-        return "0.60 - 0.69"
+        return "0.60-0.69"
 
     if confidence < 0.80:
-        return "0.70 - 0.79"
+        return "0.70-0.79"
 
     if confidence < 0.90:
-        return "0.80 - 0.89"
+        return "0.80-0.89"
 
     return "0.90+"
 
 
+def resolve_risk_tier(risk_score: float) -> str:
+    if risk_score <= 10:
+        return "SAFE"
+
+    if risk_score <= 35:
+        return "MODERATE"
+
+    if risk_score <= 65:
+        return "AGGRESSIVE"
+
+    return "REJECTED"
+
+
 def evaluate_pick_for_portfolio(
     *,
+    session: Session | None = None,
     league: str | None,
     market: str,
     confidence: float | None,
@@ -151,85 +93,172 @@ def evaluate_pick_for_portfolio(
     risk_score = 0.0
 
     selected_league = league or "UNKNOWN"
-    odds_band = get_odds_band(odds)
-    confidence_band = get_confidence_band(confidence)
-
-    market_confidence_key = (market, confidence_band)
-    market_odds_key = (market, odds_band)
-
-    if selected_league in CHAOS_LEAGUES:
-        risk_flags.append("CHAOS_LEAGUE")
-        risk_score += 35
-
-    if selected_league in FAKE_CONFIDENCE_LEAGUES:
-        risk_flags.append("FAKE_CONFIDENCE_LEAGUE")
-        risk_score += 40
-
-    if selected_league in SAFE_LEAGUES:
-        risk_flags.append("SAFE_LEAGUE")
-        risk_score -= 15
-
-    if market_confidence_key in BAD_MARKET_CONFIDENCE_ZONES:
-        risk_flags.append("BAD_MARKET_CONFIDENCE_ZONE")
-        risk_score += 35
-
-    if market_odds_key in BAD_MARKET_ODDS_ZONES:
-        risk_flags.append("BAD_MARKET_ODDS_ZONE")
-        risk_score += 35
-
-    if market_confidence_key in SAFE_MARKET_CONFIDENCE_ZONES:
-        risk_flags.append("SAFE_MARKET_CONFIDENCE_ZONE")
-        risk_score -= 20
-
-    if market_odds_key in SAFE_MARKET_ODDS_ZONES:
-        risk_flags.append("SAFE_MARKET_ODDS_ZONE")
-        risk_score -= 20
+    selected_odds_band = get_odds_band(odds)
+    selected_confidence_band = get_confidence_band(confidence)
 
     if odds is None:
         risk_flags.append("NO_ODDS")
-        risk_score += 50
-
-    elif odds > 3.00:
-        risk_flags.append("HIGH_ODDS_VARIANCE")
-        risk_score += 25
-
-    elif odds < 1.20:
-        risk_flags.append("VERY_LOW_ODDS")
-        risk_score += 10
+        risk_score += 100
 
     if confidence is None:
         risk_flags.append("NO_CONFIDENCE")
-        risk_score += 40
+        risk_score += 100
 
-    elif confidence < 0.70:
-        risk_flags.append("LOW_CONFIDENCE")
-        risk_score += 20
+    if confidence is not None:
+        if confidence < 0.65:
+            risk_flags.append("VERY_LOW_CONFIDENCE")
+            risk_score += 35
+        elif confidence < 0.70:
+            risk_flags.append("LOW_CONFIDENCE")
+            risk_score += 20
+
+    if odds is not None:
+        if odds > 3.00:
+            risk_flags.append("HIGH_ODDS_VARIANCE")
+            risk_score += 25
+        elif odds < 1.20:
+            risk_flags.append("VERY_LOW_ODDS")
+            risk_score += 10
 
     if value_score is not None:
-        if value_score < 0:
+        if value_score < -0.10:
+            risk_flags.append("VERY_NEGATIVE_VALUE_SCORE")
+            risk_score += 40
+        elif value_score < 0:
             risk_flags.append("NEGATIVE_VALUE_SCORE")
-            risk_score += 30
+            risk_score += 20
         elif value_score >= 0.20:
             risk_flags.append("STRONG_VALUE_SCORE")
             risk_score -= 10
 
-    if strict:
-        if "CHAOS_LEAGUE" in risk_flags:
-            return PortfolioFilterResult(False, "Rejected: chaos league", risk_flags, risk_score)
+    if session is not None:
+        league_row = (
+            session.query(LeagueIntelligenceSnapshot)
+            .filter(LeagueIntelligenceSnapshot.league == selected_league)
+            .first()
+        )
 
-        if "FAKE_CONFIDENCE_LEAGUE" in risk_flags:
-            return PortfolioFilterResult(False, "Rejected: fake confidence league", risk_flags, risk_score)
+        if league_row:
+            if not league_row.prediction_allowed:
+                risk_flags.append("DB_LEAGUE_BLOCKED")
+                risk_score += 60
 
-        if "BAD_MARKET_CONFIDENCE_ZONE" in risk_flags:
-            return PortfolioFilterResult(False, "Rejected: bad market confidence zone", risk_flags, risk_score)
+            if league_row.stale:
+                risk_flags.append("STALE_LEAGUE_INTELLIGENCE")
+                risk_score += 25
 
-        if "BAD_MARKET_ODDS_ZONE" in risk_flags:
-            return PortfolioFilterResult(False, "Rejected: bad market odds zone", risk_flags, risk_score)
+            if float(league_row.recent_roi or 0.0) < 0:
+                risk_flags.append("NEGATIVE_RECENT_LEAGUE_ROI")
+                risk_score += 25
 
-        if odds is None:
-            return PortfolioFilterResult(False, "Rejected: missing odds", risk_flags, risk_score)
+            if float(league_row.survivability_score or 0.0) < 20:
+                risk_flags.append("LOW_LEAGUE_SURVIVABILITY")
+                risk_score += 35
 
-        if risk_score >= 35:
-            return PortfolioFilterResult(False, "Rejected: risk score too high", risk_flags, risk_score)
+            if league_row.safe_for_accumulators:
+                risk_flags.append("DB_SAFE_LEAGUE")
+                risk_score -= 15
 
-    return PortfolioFilterResult(True, "Allowed", risk_flags, risk_score)
+        market_row = (
+            session.query(MarketIntelligenceSnapshot)
+            .filter(MarketIntelligenceSnapshot.market == market)
+            .first()
+        )
+
+        if market_row:
+            if not market_row.prediction_allowed:
+                risk_flags.append("DB_MARKET_BLOCKED")
+                risk_score += 60
+
+            if market_row.stale:
+                risk_flags.append("STALE_MARKET_INTELLIGENCE")
+                risk_score += 25
+
+            if float(market_row.recent_roi or 0.0) < 0:
+                risk_flags.append("NEGATIVE_RECENT_MARKET_ROI")
+                risk_score += 25
+
+            if float(market_row.survivability_score or 0.0) < 20:
+                risk_flags.append("LOW_MARKET_SURVIVABILITY")
+                risk_score += 35
+
+        league_market_row = (
+            session.query(LeagueMarketIntelligenceSnapshot)
+            .filter(
+                LeagueMarketIntelligenceSnapshot.league == selected_league,
+                LeagueMarketIntelligenceSnapshot.market == market,
+            )
+            .first()
+        )
+
+        if league_market_row:
+            if not league_market_row.prediction_allowed:
+                risk_flags.append("DB_LEAGUE_MARKET_BLOCKED")
+                risk_score += 70
+
+            if league_market_row.stale:
+                risk_flags.append("STALE_LEAGUE_MARKET_INTELLIGENCE")
+                risk_score += 25
+
+            if float(league_market_row.recent_roi or 0.0) < 0:
+                risk_flags.append("NEGATIVE_RECENT_LEAGUE_MARKET_ROI")
+                risk_score += 30
+
+            if float(league_market_row.survivability_score or 0.0) < 20:
+                risk_flags.append("LOW_LEAGUE_MARKET_SURVIVABILITY")
+                risk_score += 40
+
+        odds_row = (
+            session.query(OddsBandIntelligenceSnapshot)
+            .filter(
+                OddsBandIntelligenceSnapshot.market == market,
+                OddsBandIntelligenceSnapshot.odds_band == selected_odds_band,
+            )
+            .first()
+        )
+
+        if odds_row:
+            if not odds_row.prediction_allowed:
+                risk_flags.append("DB_ODDS_BAND_BLOCKED")
+                risk_score += 50
+
+            if float(odds_row.roi or 0.0) < 0:
+                risk_flags.append("NEGATIVE_ODDS_BAND_ROI")
+                risk_score += 25
+
+        confidence_row = (
+            session.query(ConfidenceBandIntelligenceSnapshot)
+            .filter(
+                ConfidenceBandIntelligenceSnapshot.market == market,
+                ConfidenceBandIntelligenceSnapshot.confidence_band == selected_confidence_band,
+            )
+            .first()
+        )
+
+        if confidence_row:
+            if not confidence_row.prediction_allowed:
+                risk_flags.append("DB_CONFIDENCE_BAND_BLOCKED")
+                risk_score += 50
+
+            if float(confidence_row.roi or 0.0) < 0:
+                risk_flags.append("NEGATIVE_CONFIDENCE_BAND_ROI")
+                risk_score += 25
+
+    risk_score = round(risk_score, 2)
+    tier = resolve_risk_tier(risk_score)
+
+    allowed = tier != "REJECTED"
+
+    if strict and tier == "AGGRESSIVE":
+        allowed = True
+
+    if tier == "REJECTED":
+        allowed = False
+
+    return PortfolioFilterResult(
+        allowed=allowed,
+        reason=f"{tier.lower()} portfolio tier",
+        risk_flags=risk_flags,
+        risk_score=risk_score,
+        tier=tier,
+    )

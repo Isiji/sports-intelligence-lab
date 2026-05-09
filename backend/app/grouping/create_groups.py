@@ -9,6 +9,9 @@ from typing import Any
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
+from app.intelligence.correlation_rules import (
+    evaluate_group_correlation,
+)
 
 from app.db.models import Prediction, PredictionGroupItem
 from app.grouping.profitability_intelligence import (
@@ -523,8 +526,31 @@ def _candidate_fits_group(
     if same_league_count >= config.max_same_league_per_group:
         return False
 
-    return True
+    correlation = evaluate_group_correlation(
+        existing_group=group,
+        candidate=candidate,
+    )
 
+    candidate["correlation_score"] = (
+        correlation.correlation_score
+    )
+
+    candidate["correlation_reasons"] = (
+        correlation.reasons
+    )
+
+    if not correlation.allowed:
+        print(
+            "[CORRELATION BLOCKED]",
+            candidate["market"],
+            candidate.get("league"),
+            correlation.correlation_score,
+            correlation.reasons,
+        )
+
+        return False
+
+    return True
 
 def _save_groups(
     session: Session,
