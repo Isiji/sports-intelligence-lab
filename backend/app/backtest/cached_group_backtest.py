@@ -1,3 +1,5 @@
+# backend/app/backtest/cached_group_backtest.py
+
 from __future__ import annotations
 
 from collections import Counter
@@ -9,6 +11,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
+from app.intelligence.stake_engine import (
+    calculate_group_stake,
+    resolve_group_tier,
+)
 
 
 def cached_group_backtest(
@@ -24,7 +30,7 @@ def cached_group_backtest(
     limit: int = 100,
     max_same_league: int = 2,
     max_group_odds: float = 5.8,
-    use_intelligence_filters: bool = False,
+    use_intelligence_filters: bool = True,
 ) -> dict[str, Any]:
     filters = [
         "hbb.confidence >= :min_confidence",
@@ -100,9 +106,21 @@ def cached_group_backtest(
                 session=session,
                 league=bet.get("league"),
                 market=str(bet["market"]),
-                confidence=float(bet["confidence"]) if bet.get("confidence") is not None else None,
-                odds=float(bet["odds"]) if bet.get("odds") is not None else None,
-                value_score=float(bet["value_score"]) if bet.get("value_score") is not None else None,
+                confidence=(
+                    float(bet["confidence"])
+                    if bet.get("confidence") is not None
+                    else None
+                ),
+                odds=(
+                    float(bet["odds"])
+                    if bet.get("odds") is not None
+                    else None
+                ),
+                value_score=(
+                    float(bet["value_score"])
+                    if bet.get("value_score") is not None
+                    else None
+                ),
                 strict=True,
             )
 
@@ -110,11 +128,19 @@ def cached_group_backtest(
             bet["portfolio_filter_reason"] = result.reason
             bet["portfolio_risk_flags"] = result.risk_flags
             bet["portfolio_risk_score"] = result.risk_score
+            bet["portfolio_tier"] = result.tier
 
             if not result.allowed:
                 rejected_by_intelligence += 1
                 rejection_reasons[result.reason] += 1
                 continue
+
+        else:
+            bet["portfolio_allowed"] = True
+            bet["portfolio_filter_reason"] = "not_used"
+            bet["portfolio_risk_flags"] = []
+            bet["portfolio_risk_score"] = 0.0
+            bet["portfolio_tier"] = "SAFE"
 
         candidates.append(bet)
 
@@ -164,12 +190,15 @@ def cached_group_backtest(
         if len(groups) >= limit:
             break
 
-    bankroll = 10000.0
+    starting_bankroll = 10000.0
+    bankroll = starting_bankroll
+
     won_groups = 0
     lost_groups = 0
     total_profit = 0.0
+    total_staked = 0.0
 
-    group_reports = []
+    group_reports: list[dict[str, Any]] = []
 
     display_index = 1
 
@@ -181,19 +210,49 @@ def cached_group_backtest(
             skipped_group_odds += 1
             continue
 
+        risk_scores = [
+            float(bet.get("portfolio_risk_score") or 0.0)
+            for bet in group
+        ]
+
+        average_risk_score = mean(risk_scores) if risk_scores else 0.0
+        max_risk_score = max(risk_scores) if risk_scores else 0.0
+
+        group_tier = resolve_group_tier(
+            average_risk_score=average_risk_score,
+            max_risk_score=max_risk_score,
+        )
+
+        stake_decision = calculate_group_stake(
+            bankroll=bankroll,
+            odds_values=odds_values,
+            confidence_values=[
+                float(bet["confidence"])
+                for bet in group
+            ],
+            tier=group_tier,
+            flat_stake=stake,
+        )
+
+        group_stake = float(stake_decision.stake)
+
+        if group_stake <= 0:
+            continue
+
         group_won = all(bool(bet["won"]) for bet in group)
 
         if group_won:
             won_groups += 1
-            profit = round(stake * (total_odds - 1), 2)
+            profit = round(group_stake * (total_odds - 1.0), 2)
             outcome = "won"
         else:
             lost_groups += 1
-            profit = -stake
+            profit = -group_stake
             outcome = "lost"
 
         bankroll += profit
         total_profit += profit
+        total_staked += group_stake
 
         group_reports.append(
             {
@@ -201,6 +260,12 @@ def cached_group_backtest(
                 "date": str(group[0]["kickoff_date"]),
                 "outcome": outcome,
                 "games": len(group),
+                "group_tier": group_tier,
+                "stake": round(group_stake, 2),
+                "staking_method": stake_decision.method,
+                "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
+                "applied_fraction": stake_decision.applied_fraction,
+                "stake_reason": stake_decision.reason,
                 "markets": sorted({bet["market"] for bet in group}),
                 "leagues": sorted({bet["league"] for bet in group}),
                 "average_confidence": round(
@@ -211,10 +276,8 @@ def cached_group_backtest(
                     mean(float(bet["value_score"] or 0.0) for bet in group),
                     4,
                 ),
-                "average_risk_score": round(
-                    mean(float(bet.get("portfolio_risk_score") or 0.0) for bet in group),
-                    4,
-                ),
+                "average_risk_score": round(average_risk_score, 4),
+                "max_risk_score": round(max_risk_score, 4),
                 "risk_flags": sorted(
                     {
                         flag
@@ -223,7 +286,7 @@ def cached_group_backtest(
                     }
                 ),
                 "total_odds": total_odds,
-                "profit": profit,
+                "profit": round(profit, 2),
                 "bankroll": round(bankroll, 2),
             }
         )
@@ -240,16 +303,23 @@ def cached_group_backtest(
             "groups": total_groups,
             "won_groups": won_groups,
             "lost_groups": lost_groups,
-            "hit_rate": round(won_groups / total_groups, 4) if total_groups else 0.0,
-            "total_profit": round(total_profit, 2),
-            "roi": round(total_profit / (total_groups * stake), 4) if total_groups else 0.0,
+            "hit_rate": round(won_groups / total_groups, 4)
+            if total_groups
+            else 0.0,
+            "starting_bankroll": round(starting_bankroll, 2),
             "ending_bankroll": round(bankroll, 2),
+            "total_profit": round(total_profit, 2),
+            "total_staked": round(total_staked, 2),
+            "roi": round(total_profit / total_staked, 4)
+            if total_staked > 0
+            else 0.0,
             "group_size": group_size,
             "max_same_league": max_same_league,
             "market_limit": market or "none",
             "same_day_grouping": True,
             "max_group_odds": max_group_odds,
             "use_intelligence_filters": use_intelligence_filters,
+            "staking": "dynamic_fractional_kelly_with_tier_caps",
             "raw_candidates": len(raw_candidates),
             "approved_candidates": len(candidates),
             "rejected_by_intelligence": rejected_by_intelligence,

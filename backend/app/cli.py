@@ -375,7 +375,11 @@ def cached_group_backtest_cli(
     stake: float = typer.Option(100.0),
     limit: int = typer.Option(100),
     max_same_league: int = typer.Option(2),
-    use_intelligence_filters: bool = typer.Option(False, "--use-intelligence-filters"),
+    use_intelligence_filters: bool = typer.Option(
+        True,
+        "--use-intelligence-filters/--no-intelligence-filters",
+        help="Use DB-driven portfolio intelligence filters by default.",
+    ),
 ):
     session = get_cli_session()
 
@@ -405,7 +409,6 @@ def cached_group_backtest_cli(
 
     finally:
         session.close()
-
 
 @app.command("market-survivability-report")
 def market_survivability_report_command(

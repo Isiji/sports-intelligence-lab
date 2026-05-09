@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.intelligence.correlation_rules import (
     evaluate_group_correlation,
 )
+from app.intelligence.stake_engine import resolve_group_tier
 
 from app.db.models import Prediction, PredictionGroupItem
 from app.grouping.profitability_intelligence import (
@@ -141,6 +142,7 @@ def _build_profitability_aware_groups(
 
     for prediction in predictions:
         enriched = _enrich_candidate(
+            session=session,
             prediction=prediction,
             market_intel=market_intel,
             league_market_intel=league_market_intel,
@@ -167,6 +169,7 @@ def _build_profitability_aware_groups(
     enriched_candidates = sorted(
         best_by_match.values(),
         key=lambda item: (
+            item.get("portfolio_tier") == "AGGRESSIVE",
             -float(item["selection_score"]),
             float(item.get("portfolio_risk_score") or 0.0),
             -float(item["confidence"]),
@@ -244,6 +247,7 @@ def _load_live_prediction_candidates(
 
 
 def _enrich_candidate(
+    session: Session,
     prediction: dict[str, Any],
     market_intel: dict[str, dict[str, Any]],
     league_market_intel: dict[tuple[str, str], dict[str, Any]],
@@ -263,6 +267,7 @@ def _enrich_candidate(
 
     if config.use_intelligence_filters:
         filter_result = evaluate_pick_for_portfolio(
+            session=session,
             league=league,
             market=market,
             confidence=confidence,
@@ -275,6 +280,7 @@ def _enrich_candidate(
         prediction["portfolio_filter_reason"] = filter_result.reason
         prediction["portfolio_risk_flags"] = filter_result.risk_flags
         prediction["portfolio_risk_score"] = filter_result.risk_score
+        prediction["portfolio_tier"] = filter_result.tier
 
         if not filter_result.allowed:
             print(
@@ -590,6 +596,19 @@ def _summarize_portfolio_groups(
             if item.get("odds") is not None
         ]
 
+        risk_scores = [
+            float(item.get("portfolio_risk_score") or 0.0)
+            for item in group
+        ]
+
+        average_risk_score = mean(risk_scores) if risk_scores else 0.0
+        max_risk_score = max(risk_scores) if risk_scores else 0.0
+
+        group_tier = resolve_group_tier(
+            average_risk_score=average_risk_score,
+            max_risk_score=max_risk_score,
+        )
+
         cumulative_odds = (
             float(prod(odds_values))
             if len(odds_values) == len(group)
@@ -598,39 +617,38 @@ def _summarize_portfolio_groups(
 
         summaries[group_name] = {
             "group_type": "PROFITABILITY_PORTFOLIO",
+            "group_tier": group_tier,
             "games": float(len(group)),
             "average_confidence": round(
-                mean(float(item["confidence"] or 0) for item in group),
+                mean(float(item["confidence"] or 0.0) for item in group),
                 4,
             ),
             "average_value_score": round(
-                mean(float(item["value_score"] or 0) for item in group),
+                mean(float(item["value_score"] or 0.0) for item in group),
                 4,
             ),
             "average_market_roi": round(
-                mean(float(item["market_roi"] or 0) for item in group),
+                mean(float(item["market_roi"] or 0.0) for item in group),
                 4,
             ),
             "average_league_roi": round(
-                mean(float(item["league_roi"] or 0) for item in group),
+                mean(float(item["league_roi"] or 0.0) for item in group),
                 4,
             ),
             "average_odds_band_roi": round(
-                mean(float(item["odds_band_roi"] or 0) for item in group),
+                mean(float(item["odds_band_roi"] or 0.0) for item in group),
                 4,
             ),
             "average_confidence_band_roi": round(
-                mean(float(item["confidence_band_roi"] or 0) for item in group),
+                mean(float(item["confidence_band_roi"] or 0.0) for item in group),
                 4,
             ),
             "average_selection_score": round(
-                mean(float(item["selection_score"] or 0) for item in group),
+                mean(float(item["selection_score"] or 0.0) for item in group),
                 4,
             ),
-            "average_risk_score": round(
-                mean(float(item.get("portfolio_risk_score") or 0) for item in group),
-                4,
-            ),
+            "average_risk_score": round(average_risk_score, 4),
+            "max_risk_score": round(max_risk_score, 4),
             "risk_flags": ", ".join(
                 sorted(
                     {
@@ -645,7 +663,6 @@ def _summarize_portfolio_groups(
         }
 
     return summaries
-
 
 def _fallback_confidence_groups(
     session: Session,
