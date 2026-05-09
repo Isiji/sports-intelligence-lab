@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean,Column,func, Date, JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -327,53 +327,6 @@ class StatsQualitySnapshot(Base):
     )
     
     
-# backend/app/db/models.py
-# ADD THIS CLASS AT THE BOTTOM
-
-class LeagueIntelligenceSnapshot(Base):
-    __tablename__ = "league_intelligence_snapshots"
-    __table_args__ = (
-        UniqueConstraint(
-            "sport",
-            "competition_id",
-            "season",
-            name="uq_league_intel_sport_competition_season",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-
-    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
-    competition_id: Mapped[int | None] = mapped_column(
-        ForeignKey("competitions.id"),
-        nullable=True,
-        index=True,
-    )
-
-    league: Mapped[str] = mapped_column(String(160), index=True)
-    season: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-
-    stats_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
-    data_tier: Mapped[str] = mapped_column(String(40), default="poor", index=True)
-
-    prediction_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    training_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-
-    confidence_multiplier: Mapped[float] = mapped_column(Float, default=0.5)
-    risk_level: Mapped[str] = mapped_column(String(40), default="high", index=True)
-
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-    )
-    
-    
-# backend/app/db/models.py
-# ADD THIS CLASS AT THE BOTTOM
 
 class MarketReliabilitySnapshot(Base):
     __tablename__ = "market_reliability_snapshots"
@@ -527,3 +480,239 @@ class HistoricalBacktestBet(Base):
     stake: Mapped[float] = mapped_column(Float, default=100.0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+# =========================================================
+# ADVANCED INTELLIGENCE SNAPSHOTS
+# =========================================================
+
+class MarketIntelligenceSnapshot(Base):
+    __tablename__ = "market_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+
+    market: Mapped[str] = mapped_column(
+        String(80),
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    avg_odds: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+
+    prediction_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        index=True,
+    )
+
+    verdict: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class LeagueIntelligenceSnapshot(Base):
+    __tablename__ = "league_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+
+    competition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitions.id"),
+        nullable=True,
+        index=True,
+    )
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+
+    season: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    avg_odds: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+
+    stats_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    safe_for_accumulators: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+
+    prediction_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        index=True,
+    )
+
+    verdict: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class LeagueMarketIntelligenceSnapshot(Base):
+    __tablename__ = "league_market_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+
+    competition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitions.id"),
+        nullable=True,
+        index=True,
+    )
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+
+    season: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+    )
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    avg_odds: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+
+    prediction_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        index=True,
+    )
+
+    verdict: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class OddsBandIntelligenceSnapshot(Base):
+    __tablename__ = "odds_band_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+
+    odds_band: Mapped[str] = mapped_column(String(40), index=True)
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+
+    prediction_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        index=True,
+    )
+
+    verdict: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class ConfidenceBandIntelligenceSnapshot(Base):
+    __tablename__ = "confidence_band_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+
+    confidence_band: Mapped[str] = mapped_column(String(40), index=True)
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+
+    prediction_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        index=True,
+    )
+
+    verdict: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )

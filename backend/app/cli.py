@@ -58,7 +58,11 @@ from app.backtest.market_profitability import (
 )
 # backend/app/cli.py imports to add
 from app.analysis.test_portfolio_filters import test_portfolio_filters
-
+from app.services.intelligence_rebuilder import (
+    rebuild_league_intelligence,
+    rebuild_market_intelligence,
+    rebuild_odds_band_intelligence,
+)
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
     confidence_band_profitability_fast,
@@ -176,6 +180,76 @@ def confidence_band_survivability_report_command(
             run_tag=run_tag,
             min_bets=min_bets,
         )
+    finally:
+        session.close()
+
+@app.command("rebuild-market-intelligence")
+def rebuild_market_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_market_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("rebuild-league-intelligence")
+def rebuild_league_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_league_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("rebuild-odds-band-intelligence")
+def rebuild_odds_band_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_odds_band_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
+    finally:
+        session.close()
+
+@app.command("rebuild-league-intelligence")
+def rebuild_league_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_league_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
     finally:
         session.close()
 
