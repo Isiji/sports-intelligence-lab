@@ -56,12 +56,15 @@ from app.backtest.historical_value_backtest import run_historical_value_backtest
 from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
+
 # backend/app/cli.py imports to add
 from app.analysis.test_portfolio_filters import test_portfolio_filters
 from app.services.intelligence_rebuilder import (
     rebuild_league_intelligence,
     rebuild_market_intelligence,
     rebuild_odds_band_intelligence,
+    rebuild_confidence_band_intelligence,
+    rebuild_league_market_intelligence,
 )
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
@@ -1079,6 +1082,43 @@ def cli_historical_best_groups(
 
     finally:
         session.close()
+
+@app.command("rebuild-confidence-band-intelligence")
+def rebuild_confidence_band_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_confidence_band_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("rebuild-league-market-intelligence")
+def rebuild_league_market_intelligence_command(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_league_market_intelligence(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print(result)
+
+    finally:
+        session.close()
+
+
 
 if __name__ == "__main__":
     app()

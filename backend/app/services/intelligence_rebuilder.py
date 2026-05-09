@@ -11,7 +11,6 @@ from app.db.models import (
     OddsBandIntelligenceSnapshot,
 )
 
-
 def rebuild_market_intelligence(
     session: Session,
     run_tag: str,
@@ -360,4 +359,247 @@ def rebuild_odds_band_intelligence(
 
     return {
         "odds_band_rows": inserted,
+    }
+
+def rebuild_confidence_band_intelligence(
+    session: Session,
+    run_tag: str,
+):
+    session.execute(delete(ConfidenceBandIntelligenceSnapshot))
+
+    query = text(
+        """
+        WITH banded AS (
+            SELECT
+                market,
+
+                CASE
+                    WHEN confidence < 0.60 THEN '0.00-0.59'
+                    WHEN confidence < 0.70 THEN '0.60-0.69'
+                    WHEN confidence < 0.80 THEN '0.70-0.79'
+                    WHEN confidence < 0.90 THEN '0.80-0.89'
+                    ELSE '0.90+'
+                END AS confidence_band,
+
+                won,
+                confidence,
+                profit,
+                stake
+
+            FROM historical_backtest_bets
+
+            WHERE run_tag = :run_tag
+              AND confidence IS NOT NULL
+        )
+
+        SELECT
+            market,
+            confidence_band,
+
+            COUNT(*) AS bets,
+
+            ROUND(
+                AVG(
+                    CASE WHEN won = true THEN 1.0 ELSE 0.0 END
+                )::numeric,
+                4
+            ) AS hit_rate,
+
+            ROUND(
+                (
+                    SUM(profit)
+                    / NULLIF(SUM(stake), 0)
+                )::numeric,
+                4
+            ) AS roi
+
+        FROM banded
+
+        GROUP BY market, confidence_band
+        """
+    )
+
+    rows = session.execute(
+        query,
+        {"run_tag": run_tag},
+    ).mappings().all()
+
+    inserted = 0
+
+    for row in rows:
+        hit_rate = float(row["hit_rate"] or 0)
+        roi = float(row["roi"] or 0)
+
+        survivability_score = round(
+            (hit_rate * 60)
+            + (max(roi, -1) * 40),
+            4,
+        )
+
+        confidence_multiplier = max(
+            min(
+                survivability_score / 100,
+                1.10,
+            ),
+            0.25,
+        )
+
+        prediction_allowed = (
+            row["bets"] >= 10
+            and roi > -0.12
+        )
+
+        verdict = "SAFE"
+
+        if roi <= 0:
+            verdict = "RISKY"
+
+        if (
+            row["confidence_band"] == "0.90+"
+            and roi <= 0
+        ):
+            verdict = "FAKE_CONFIDENCE"
+
+        session.add(
+            ConfidenceBandIntelligenceSnapshot(
+                market=row["market"],
+                confidence_band=row["confidence_band"],
+                bets=row["bets"],
+                hit_rate=hit_rate,
+                roi=roi,
+                survivability_score=survivability_score,
+                confidence_multiplier=confidence_multiplier,
+                prediction_allowed=prediction_allowed,
+                verdict=verdict,
+            )
+        )
+
+        inserted += 1
+
+    session.commit()
+
+    return {
+        "confidence_band_rows": inserted,
+    }
+
+def rebuild_league_market_intelligence(
+    session: Session,
+    run_tag: str,
+):
+    session.execute(delete(LeagueMarketIntelligenceSnapshot))
+
+    query = text(
+        """
+        SELECT
+            league,
+            market,
+
+            COUNT(*) AS bets,
+
+            ROUND(
+                AVG(
+                    CASE WHEN won = true THEN 1.0 ELSE 0.0 END
+                )::numeric,
+                4
+            ) AS hit_rate,
+
+            ROUND(
+                (
+                    SUM(profit)
+                    / NULLIF(SUM(stake), 0)
+                )::numeric,
+                4
+            ) AS roi,
+
+            ROUND(
+                AVG(odds)::numeric,
+                4
+            ) AS avg_odds,
+
+            ROUND(
+                AVG(confidence)::numeric,
+                4
+            ) AS avg_confidence,
+
+            ROUND(
+                AVG(value_score)::numeric,
+                4
+            ) AS avg_value_score
+
+        FROM historical_backtest_bets
+
+        WHERE run_tag = :run_tag
+          AND league IS NOT NULL
+
+        GROUP BY league, market
+        """
+    )
+
+    rows = session.execute(
+        query,
+        {"run_tag": run_tag},
+    ).mappings().all()
+
+    inserted = 0
+
+    for row in rows:
+        hit_rate = float(row["hit_rate"] or 0)
+        roi = float(row["roi"] or 0)
+        avg_confidence = float(row["avg_confidence"] or 0)
+        avg_value_score = float(row["avg_value_score"] or 0)
+
+        survivability_score = round(
+            (hit_rate * 45)
+            + (max(roi, -1) * 35)
+            + (avg_confidence * 10)
+            + (avg_value_score * 10),
+            4,
+        )
+
+        confidence_multiplier = max(
+            min(
+                survivability_score / 100,
+                1.15,
+            ),
+            0.20,
+        )
+
+        prediction_allowed = (
+            row["bets"] >= 8
+            and roi > -0.15
+            and hit_rate >= 0.40
+        )
+
+        verdict = "SAFE"
+
+        if roi <= 0:
+            verdict = "RISKY"
+
+        if hit_rate >= 0.60 and roi <= 0:
+            verdict = "CONFIDENCE_TRAP"
+
+        session.add(
+            LeagueMarketIntelligenceSnapshot(
+                sport="football",
+                league=row["league"],
+                market=row["market"],
+                bets=row["bets"],
+                hit_rate=hit_rate,
+                roi=roi,
+                avg_odds=float(row["avg_odds"] or 0),
+                avg_confidence=avg_confidence,
+                avg_value_score=avg_value_score,
+                survivability_score=survivability_score,
+                confidence_multiplier=confidence_multiplier,
+                prediction_allowed=prediction_allowed,
+                verdict=verdict,
+            )
+        )
+
+        inserted += 1
+
+    session.commit()
+
+    return {
+        "league_market_rows": inserted,
     }
