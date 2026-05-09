@@ -485,6 +485,9 @@ class HistoricalBacktestBet(Base):
 # ADVANCED INTELLIGENCE SNAPSHOTS
 # =========================================================
 
+# backend/app/db/models.py
+# ONLY REPLACE THESE SECTIONS
+
 class MarketIntelligenceSnapshot(Base):
     __tablename__ = "market_intelligence_snapshots"
 
@@ -507,6 +510,31 @@ class MarketIntelligenceSnapshot(Base):
     avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
 
     survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    recent_roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    recent_hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    decay_factor: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        server_default="1",
+    )
+
+    stale: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        index=True,
+    )
 
     confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
 
@@ -560,6 +588,31 @@ class LeagueIntelligenceSnapshot(Base):
     avg_value_score: Mapped[float] = mapped_column(Float, default=0.0)
 
     survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    recent_roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    recent_hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    decay_factor: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        server_default="1",
+    )
+
+    stale: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        index=True,
+    )
 
     confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
 
@@ -623,6 +676,31 @@ class LeagueMarketIntelligenceSnapshot(Base):
 
     survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
 
+    recent_roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    recent_hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        server_default="0",
+    )
+
+    decay_factor: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        server_default="1",
+    )
+
+    stale: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        index=True,
+    )
+
     confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
 
     prediction_allowed: Mapped[bool] = mapped_column(
@@ -642,7 +720,6 @@ class LeagueMarketIntelligenceSnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
-
 
 class OddsBandIntelligenceSnapshot(Base):
     __tablename__ = "odds_band_intelligence_snapshots"

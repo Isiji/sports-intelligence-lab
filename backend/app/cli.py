@@ -78,6 +78,11 @@ from app.grouping.historical_group_optimizer import (
     GroupOptimizerConfig,
     build_historical_best_groups,
 )
+from app.services.intelligence_decay_service import (
+    apply_league_decay,
+    apply_league_market_decay,
+    apply_market_decay,
+)
 
 app = typer.Typer()
 
@@ -1009,6 +1014,43 @@ def cli_optimize_profit_thresholds_fast(
     finally:
         session.close()
 
+@app.command("apply-market-decay")
+def apply_market_decay_command():
+    session = get_cli_session()
+
+    try:
+        result = apply_market_decay(session)
+
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("apply-league-decay")
+def apply_league_decay_command():
+    session = get_cli_session()
+
+    try:
+        result = apply_league_decay(session)
+
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("apply-league-market-decay")
+def apply_league_market_decay_command():
+    session = get_cli_session()
+
+    try:
+        result = apply_league_market_decay(session)
+
+        print(result)
+
+    finally:
+        session.close()
 
 @app.command("historical-best-groups")
 def cli_historical_best_groups(

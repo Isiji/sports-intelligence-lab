@@ -16,6 +16,9 @@ from app.features.football_features import (
 from app.ml.registry import load_model_metadata
 from app.ml.train_football import metadata_path_for_market, model_path_for_market
 from app.services.prediction_guard_service import apply_prediction_guard
+from app.services.prediction_intelligence_service import (
+    apply_prediction_intelligence,
+)
 
 
 def predict_all_football_markets(
@@ -25,11 +28,15 @@ def predict_all_football_markets(
     min_confidence: float = 0.6,
 ) -> int:
     session.execute(
-        delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
+        delete(PredictionGroupItem).where(
+            PredictionGroupItem.slate == slate
+        )
     )
 
     session.execute(
-        delete(Prediction).where(Prediction.slate == slate)
+        delete(Prediction).where(
+            Prediction.slate == slate
+        )
     )
 
     session.commit()
@@ -37,8 +44,13 @@ def predict_all_football_markets(
     inserted = 0
 
     for market in MARKET_TARGETS.keys():
-        if is_market_weak(session=session, market=market):
-            print(f"[SKIPPED OLD WEAK MARKET CHECK] {market}")
+        if is_market_weak(
+            session=session,
+            market=market,
+        ):
+            print(
+                f"[SKIPPED OLD WEAK MARKET CHECK] {market}"
+            )
             continue
 
         inserted += predict_football_market(
@@ -63,26 +75,43 @@ def predict_football_market(
     metadata_path = metadata_path_for_market(market)
 
     if not model_path.exists():
-        print(f"[SKIPPED] Ensemble model file not found for {market}: {model_path}")
+        print(
+            f"[SKIPPED] Ensemble model file not found "
+            f"for {market}: {model_path}"
+        )
         return 0
 
     metadata = load_model_metadata(metadata_path)
-    selected_model_name = metadata.get("selected_model_name", "WeightedEnsemble")
+
+    selected_model_name = metadata.get(
+        "selected_model_name",
+        "WeightedEnsemble",
+    )
 
     with model_path.open("rb") as file:
         bundle = pickle.load(file)
 
-    df = load_upcoming_frame(session, limit=limit)
+    df = load_upcoming_frame(
+        session,
+        limit=limit,
+    )
 
     if df.empty:
         return 0
 
     df = df.reset_index(drop=True)
 
-    model_feature_columns = bundle.get("feature_columns", feature_columns())
+    model_feature_columns = bundle.get(
+        "feature_columns",
+        feature_columns(),
+    )
+
     x = df[model_feature_columns].fillna(0.0)
 
-    probabilities = _predict_ensemble_probabilities(bundle=bundle, x=x)
+    probabilities = _predict_ensemble_probabilities(
+        bundle=bundle,
+        x=x,
+    )
 
     positive_label, negative_label = MARKET_LABELS[market]
 
@@ -92,13 +121,17 @@ def predict_football_market(
         match_id = int(row["match_id"])
 
         match = session.scalar(
-            select(Match).where(Match.id == match_id)
+            select(Match).where(
+                Match.id == match_id
+            )
         )
 
         if match is None:
             continue
 
-        probability = float(probabilities[row_index])
+        probability = float(
+            probabilities[row_index]
+        )
 
         if probability >= 0.5:
             predicted_label = positive_label
@@ -116,15 +149,16 @@ def predict_football_market(
 
         if not guard["allowed"]:
             print(
-                f"[GUARD BLOCKED] match_id={match_id}, "
-                f"market={market}, reasons={guard['reasons']}"
+                f"[GUARD BLOCKED] "
+                f"match_id={match_id}, "
+                f"market={market}, "
+                f"reasons={guard['reasons']}"
             )
             continue
 
-        confidence = float(guard["adjusted_confidence"])
-
-        if confidence < min_confidence:
-            continue
+        confidence = float(
+            guard["adjusted_confidence"]
+        )
 
         odds = _find_odds(
             session=session,
@@ -133,12 +167,49 @@ def predict_football_market(
             selection=predicted_label,
         )
 
+        intelligence = apply_prediction_intelligence(
+            session=session,
+            match=match,
+            market=market,
+            raw_confidence=confidence,
+            odds=odds,
+        )
+
+        if not intelligence["allowed"]:
+            print(
+                f"[INTELLIGENCE BLOCKED] "
+                f"match_id={match_id}, "
+                f"market={market}, "
+                f"reasons={intelligence['reasons']}"
+            )
+            continue
+
+        confidence = float(
+            intelligence["adjusted_confidence"]
+        )
+
+        if confidence < min_confidence:
+            print(
+                f"[LOW CONFIDENCE AFTER INTELLIGENCE] "
+                f"match_id={match_id}, "
+                f"market={market}, "
+                f"confidence={confidence}"
+            )
+            continue
+
         implied_probability = None
         value_score = None
 
         if odds:
-            implied_probability = round(1 / odds, 4)
-            value_score = round(confidence - implied_probability, 4)
+            implied_probability = round(
+                1 / odds,
+                4,
+            )
+
+            value_score = round(
+                confidence - implied_probability,
+                4,
+            )
 
         session.add(
             Prediction(
@@ -162,15 +233,23 @@ def predict_football_market(
     return inserted
 
 
-def _predict_ensemble_probabilities(bundle: dict, x):
+def _predict_ensemble_probabilities(
+    bundle: dict,
+    x,
+):
     models = bundle["models"]
+
     weights = bundle["weights"]
 
     final_probability = None
 
     for model_name, model in models.items():
         probability = model.predict_proba(x)[:, 1]
-        weighted_probability = probability * weights[model_name]
+
+        weighted_probability = (
+            probability
+            * weights[model_name]
+        )
 
         if final_probability is None:
             final_probability = weighted_probability
@@ -187,44 +266,111 @@ def _find_odds(
     selection: str,
 ) -> float | None:
     odds_lookup_mapping = {
-        # 1X2 direction fixes
-        ("home_win", "HOME_WIN"): ("home_win", "HOME_WIN"),
-        ("home_win", "NOT_HOME_WIN"): ("away_win", "AWAY_WIN"),
+        ("home_win", "HOME_WIN"): (
+            "home_win",
+            "HOME_WIN",
+        ),
 
-        ("away_win", "AWAY_WIN"): ("away_win", "AWAY_WIN"),
-        ("away_win", "NOT_AWAY_WIN"): ("home_win", "HOME_WIN"),
+        ("home_win", "NOT_HOME_WIN"): (
+            "away_win",
+            "AWAY_WIN",
+        ),
 
-        ("draw", "DRAW"): ("draw", "DRAW"),
-        ("draw", "NOT_DRAW"): ("double_chance_12", "DOUBLE_CHANCE_12"),
+        ("away_win", "AWAY_WIN"): (
+            "away_win",
+            "AWAY_WIN",
+        ),
 
-        # Goals direction fixes
-        ("over_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
-        ("over_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
+        ("away_win", "NOT_AWAY_WIN"): (
+            "home_win",
+            "HOME_WIN",
+        ),
 
-        ("under_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
-        ("under_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
+        ("draw", "DRAW"): (
+            "draw",
+            "DRAW",
+        ),
 
-        ("over_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
-        ("over_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
+        ("draw", "NOT_DRAW"): (
+            "double_chance_12",
+            "DOUBLE_CHANCE_12",
+        ),
 
-        ("under_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
-        ("under_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
+        ("over_1_5_goals", "OVER_1_5"): (
+            "over_1_5_goals",
+            "OVER_1_5",
+        ),
 
-        ("over_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
-        ("over_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
+        ("over_1_5_goals", "UNDER_1_5"): (
+            "under_1_5_goals",
+            "UNDER_1_5",
+        ),
 
-        ("under_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
-        ("under_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
+        ("under_1_5_goals", "UNDER_1_5"): (
+            "under_1_5_goals",
+            "UNDER_1_5",
+        ),
 
-        # BTTS
-        ("btts_yes", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
-        ("btts_yes", "BTTS_NO"): ("btts_no", "BTTS_NO"),
+        ("under_1_5_goals", "OVER_1_5"): (
+            "over_1_5_goals",
+            "OVER_1_5",
+        ),
 
-        # Double chance logical opposites
+        ("over_2_5_goals", "OVER_2_5"): (
+            "over_2_5_goals",
+            "OVER_2_5",
+        ),
+
+        ("over_2_5_goals", "UNDER_2_5"): (
+            "under_2_5_goals",
+            "UNDER_2_5",
+        ),
+
+        ("under_2_5_goals", "UNDER_2_5"): (
+            "under_2_5_goals",
+            "UNDER_2_5",
+        ),
+
+        ("under_2_5_goals", "OVER_2_5"): (
+            "over_2_5_goals",
+            "OVER_2_5",
+        ),
+
+        ("over_3_5_goals", "OVER_3_5"): (
+            "over_3_5_goals",
+            "OVER_3_5",
+        ),
+
+        ("over_3_5_goals", "UNDER_3_5"): (
+            "under_3_5_goals",
+            "UNDER_3_5",
+        ),
+
+        ("under_3_5_goals", "UNDER_3_5"): (
+            "under_3_5_goals",
+            "UNDER_3_5",
+        ),
+
+        ("under_3_5_goals", "OVER_3_5"): (
+            "over_3_5_goals",
+            "OVER_3_5",
+        ),
+
+        ("btts_yes", "BTTS_YES"): (
+            "btts_yes",
+            "BTTS_YES",
+        ),
+
+        ("btts_yes", "BTTS_NO"): (
+            "btts_no",
+            "BTTS_NO",
+        ),
+
         ("double_chance_x2", "DOUBLE_CHANCE_X2"): (
             "double_chance_x2",
             "DOUBLE_CHANCE_X2",
         ),
+
         ("double_chance_x2", "NOT_DOUBLE_CHANCE_X2"): (
             "home_win",
             "HOME_WIN",
@@ -234,6 +380,7 @@ def _find_odds(
             "double_chance_1x",
             "DOUBLE_CHANCE_1X",
         ),
+
         ("double_chance_1x", "NOT_DOUBLE_CHANCE_1X"): (
             "away_win",
             "AWAY_WIN",
@@ -243,6 +390,7 @@ def _find_odds(
             "double_chance_12",
             "DOUBLE_CHANCE_12",
         ),
+
         ("double_chance_12", "NOT_DOUBLE_CHANCE_12"): (
             "draw",
             "DRAW",
@@ -261,7 +409,9 @@ def _find_odds(
             MatchOdds.market == lookup_market,
             MatchOdds.selection == lookup_selection,
         )
-        .order_by(MatchOdds.retrieved_at.desc())
+        .order_by(
+            MatchOdds.retrieved_at.desc()
+        )
     )
 
     if odds_row is None:
@@ -273,6 +423,7 @@ def _find_odds(
             f"lookup_selection={lookup_selection}",
             f"match_id={match_id}",
         )
+
         return None
 
     return float(odds_row.odds)
