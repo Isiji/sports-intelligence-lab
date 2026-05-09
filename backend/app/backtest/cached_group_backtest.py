@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.backtest.portfolio_analytics import build_portfolio_analytics
 
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
 from app.intelligence.stake_engine import (
@@ -295,6 +296,11 @@ def cached_group_backtest(
 
     total_groups = len(group_reports)
 
+    analytics = build_portfolio_analytics(
+        groups=group_reports,
+        starting_bankroll=starting_bankroll,
+    )
+
     return {
         "summary": {
             "source": "historical_backtest_bets",
@@ -327,4 +333,5 @@ def cached_group_backtest(
             "skipped_group_odds": skipped_group_odds,
         },
         "groups": group_reports,
+        "analytics": analytics,
     }

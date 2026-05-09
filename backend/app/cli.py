@@ -2,6 +2,7 @@ from datetime import date
 
 import typer
 
+from app.backtest.portfolio_profiles import run_portfolio_profiles
 from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
 from app.db.session import get_cli_session
@@ -61,7 +62,7 @@ from app.backtest.historical_value_backtest import run_historical_value_backtest
 from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
-
+from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 # backend/app/cli.py imports to add
 from app.analysis.test_portfolio_filters import test_portfolio_filters
 from app.services.intelligence_rebuilder import (
@@ -70,6 +71,9 @@ from app.services.intelligence_rebuilder import (
     rebuild_odds_band_intelligence,
     rebuild_confidence_band_intelligence,
     rebuild_league_market_intelligence,
+)
+from app.analysis.live_rejection_report import (
+    build_live_rejection_report,
 )
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
@@ -269,10 +273,31 @@ def rebuild_league_intelligence_command(
 @app.command("create-groups")
 def create_groups_command(
     slate: str | None = typer.Option(None, "--slate"),
-    min_confidence: float = typer.Option(0.65, "--min-confidence"),
-    min_group_odds: float = typer.Option(3.0, "--min-group-odds"),
-    use_intelligence_filters: bool = typer.Option(True, "--use-intelligence-filters/--no-intelligence-filters"),
-    require_odds: bool = typer.Option(False, "--require-odds"),
+
+    min_confidence: float = typer.Option(
+        0.65,
+        "--min-confidence",
+    ),
+
+    min_group_odds: float = typer.Option(
+        3.0,
+        "--min-group-odds",
+    ),
+
+    use_intelligence_filters: bool = typer.Option(
+        True,
+        "--use-intelligence-filters/--no-intelligence-filters",
+    ),
+
+    require_odds: bool = typer.Option(
+        False,
+        "--require-odds",
+    ),
+
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+    ),
 ):
     """
     Create prediction groups for a slate.
@@ -293,14 +318,40 @@ def create_groups_command(
             min_group_odds=min_group_odds,
             require_odds=require_odds,
             use_intelligence_filters=use_intelligence_filters,
+            profile=profile,
         )
 
         print("\n=== GROUPS CREATED ===")
         print(f"Slate: {selected_slate}")
 
+        if profile:
+            print(f"Profile: {profile}")
+
         for group_name, summary in summaries.items():
             print(f"\n{group_name}")
             print(summary)
+
+    finally:
+        session.close()
+
+@app.command("live-rejection-report")
+def live_rejection_report(
+    slate: str | None = typer.Option(None),
+    profile: str | None = typer.Option("AUTO_SAFE"),
+    require_odds: bool = typer.Option(True),
+):
+    session = get_cli_session()
+
+    try:
+        report = build_live_rejection_report(
+            session=session,
+            slate=slate,
+            profile=profile,
+            require_odds=require_odds,
+        )
+
+        print("\n=== LIVE REJECTION REPORT ===")
+        print(report)
 
     finally:
         session.close()
@@ -371,24 +422,44 @@ def rolling_group_backtest_cli(
 def cached_group_backtest_cli(
     run_tag: str | None = typer.Option(None),
     market: str | None = typer.Option(None),
+
+    profile: str | None = typer.Option(
+        None,
+        help="Named portfolio profile.",
+    ),
+
     min_confidence: float = typer.Option(0.60),
     min_edge: float | None = typer.Option(None),
     min_odds: float = typer.Option(1.0),
     max_odds: float = typer.Option(10.0),
     max_group_odds: float = typer.Option(5.8),
+
     group_size: int = typer.Option(4),
     stake: float = typer.Option(100.0),
     limit: int = typer.Option(100),
     max_same_league: int = typer.Option(2),
+
     use_intelligence_filters: bool = typer.Option(
         True,
         "--use-intelligence-filters/--no-intelligence-filters",
-        help="Use DB-driven portfolio intelligence filters by default.",
+        help="Use DB-driven portfolio intelligence filters.",
     ),
 ):
     session = get_cli_session()
 
     try:
+        if profile:
+            profile_config = PROFILE_CONFIGS.get(profile)
+
+            if not profile_config:
+                raise typer.BadParameter(
+                    f"Unknown profile: {profile}"
+                )
+
+            min_confidence = profile_config["min_confidence"]
+            max_odds = profile_config["max_odds"]
+            max_group_odds = profile_config["max_group_odds"]
+
         result = cached_group_backtest(
             session=session,
             run_tag=run_tag,
@@ -407,6 +478,8 @@ def cached_group_backtest_cli(
 
         print("\n=== CACHED GROUP BACKTEST ===")
         print(result["summary"])
+        print("\n=== PORTFOLIO ANALYTICS ===")
+        print(result["analytics"]["summary"])
 
         print("\n=== GROUPS ===")
         for row in result["groups"]:
@@ -816,7 +889,26 @@ def backtest_football(
     for bet in result["bets"][:20]:
         typer.echo(bet)
         
-        
+@app.command("portfolio-profile-backtest")
+def portfolio_profile_backtest(
+    run_tag: str = typer.Option("research_all_v1"),
+):
+    session = get_cli_session()
+
+    try:
+        rows = run_portfolio_profiles(
+            session=session,
+            run_tag=run_tag,
+        )
+
+        print("\n=== PORTFOLIO PROFILE COMPARISON ===")
+
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
 @app.command("historical-backtest-football")
 def historical_backtest_football(
     market: str = typer.Option("home_win", help="Market to backtest."),

@@ -26,7 +26,14 @@ from app.grouping.profitability_intelligence import (
 )
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
 
-
+AUTO_PROFILE_LADDERS = {
+    "AUTO_SAFE": [
+        "SAFE_B_CURRENT_BEST",
+        "SAFE_D_MORE_ROOM",
+        "SAFE_C_HIGHER_CONF",
+        "BALANCED_REFERENCE",
+    ],
+}
 @dataclass(frozen=True)
 class PortfolioGroupConfig:
     max_groups: int = 10
@@ -58,11 +65,61 @@ def group_predictions(
     min_group_odds: float = 3.0,
     require_odds: bool = False,
     use_intelligence_filters: bool = True,
+    profile: str | None = None,
 ) -> dict[str, dict[str, float | str]]:
+    from app.backtest.portfolio_profiles import PROFILE_CONFIGS
+
+    profile_config = None
+
+    if profile in AUTO_PROFILE_LADDERS:
+        for candidate_profile in AUTO_PROFILE_LADDERS[profile]:
+            result = group_predictions(
+                session=session,
+                slate=slate,
+                min_confidence=min_confidence,
+                min_group_odds=min_group_odds,
+                require_odds=require_odds,
+                use_intelligence_filters=use_intelligence_filters,
+                profile=candidate_profile,
+            )
+
+            message = result.get("message")
+
+            if not isinstance(message, dict):
+                result["selected_profile"] = {
+                    "profile": candidate_profile,
+                    "mode": profile,
+                }
+                return result
+
+        return {
+            "message": {
+                "status": "no_auto_profile_qualified_groups",
+                "profile": profile,
+                "reason": "No approved profile produced a valid group.",
+            }
+        }
+
+    if profile:
+        profile_config = PROFILE_CONFIGS.get(profile)
+        
+
+        if profile_config is None:
+            raise ValueError(
+                f"Unknown profile: {profile}"
+            )
+
+        min_confidence = float(profile_config["min_confidence"])
+
     config = PortfolioGroupConfig(
         min_confidence=min_confidence,
         min_sample_size=10,
         use_intelligence_filters=use_intelligence_filters,
+        max_odds=(
+            float(profile_config["max_odds"])
+            if profile_config
+            else 3.50
+        ),
     )
 
     portfolio_groups = _build_profitability_aware_groups(
@@ -83,7 +140,18 @@ def group_predictions(
 
         return _summarize_portfolio_groups(portfolio_groups)
 
+    if profile:
+        return {
+            "message": {
+                "status": "no_profile_qualified_groups",
+                "profile": profile,
+                "reason": "No picks passed portfolio profile filters.",
+            }
+        }
+
     print("[PORTFOLIO DEBUG] No profitability portfolio created. Falling back.")
+
+
 
     return _fallback_confidence_groups(
         session=session,
@@ -92,7 +160,6 @@ def group_predictions(
         min_group_odds=min_group_odds,
         require_odds=require_odds,
     )
-
 
 def _build_profitability_aware_groups(
     session: Session,
