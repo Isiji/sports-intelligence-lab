@@ -30,6 +30,11 @@ from app.ingest.football_stats_ingestion import (
     ingest_fixture_statistics,
     ingest_missing_statistics,
 )
+from app.backtest.calibration import (
+    evaluate_cached_backtest_calibration,
+    evaluate_cached_backtest_calibration_by_market,
+    evaluate_confidence_calibration,
+)
 from app.backtest.profit_threshold_optimizer import (
     optimize_profit_thresholds,
     optimize_all_profit_thresholds,
@@ -899,6 +904,75 @@ def cli_market_profitability_fast(
     finally:
         session.close()
 
+@app.command("calibration-report")
+def calibration_report(
+    slate: str = typer.Option("demo"),
+):
+    session = get_cli_session()
+
+    try:
+        rows = evaluate_confidence_calibration(
+            session=session,
+            slate=slate,
+        )
+
+        print("\n=== CONFIDENCE CALIBRATION REPORT ===")
+        print(f"Slate: {slate}")
+
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("cached-calibration-report")
+def cached_calibration_report(
+    run_tag: str = typer.Option("research_all_v1"),
+    market: str | None = typer.Option(None),
+):
+    session = get_cli_session()
+
+    try:
+        rows = evaluate_cached_backtest_calibration(
+            session=session,
+            run_tag=run_tag,
+            market=market,
+        )
+
+        print("\n=== CACHED BACKTEST CALIBRATION REPORT ===")
+        print(f"Run tag: {run_tag}")
+        print(f"Market: {market or 'all'}")
+
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
+
+
+@app.command("cached-calibration-by-market")
+def cached_calibration_by_market(
+    run_tag: str = typer.Option("research_all_v1"),
+    min_bets: int = typer.Option(20),
+):
+    session = get_cli_session()
+
+    try:
+        rows = evaluate_cached_backtest_calibration_by_market(
+            session=session,
+            run_tag=run_tag,
+            min_bets=min_bets,
+        )
+
+        print("\n=== CACHED CALIBRATION BY MARKET ===")
+        print(f"Run tag: {run_tag}")
+
+        for row in rows:
+            print(row)
+
+    finally:
+        session.close()
 
 @app.command("league-profitability-fast")
 def cli_league_profitability_fast(

@@ -65,50 +65,50 @@ def calculate_group_stake(
 ) -> StakeDecision:
     if bankroll <= 0:
         return StakeDecision(
-            0.0,
-            "blocked",
-            tier,
-            0.0,
-            0.0,
-            "No bankroll available.",
+            stake=0.0,
+            method="blocked",
+            tier=tier,
+            raw_kelly_fraction=0.0,
+            applied_fraction=0.0,
+            reason="No bankroll available.",
         )
 
     if tier == "REJECTED":
         return StakeDecision(
-            0.0,
-            "blocked",
-            tier,
-            0.0,
-            0.0,
-            "Rejected risk tier.",
+            stake=0.0,
+            method="blocked",
+            tier=tier,
+            raw_kelly_fraction=0.0,
+            applied_fraction=0.0,
+            reason="Rejected risk tier.",
         )
 
-    tier_max_bankroll_pct = TIER_MAX_BANKROLL_PCT.get(tier, 0.0)
+    tier_max_pct = TIER_MAX_BANKROLL_PCT.get(tier, 0.0)
 
     effective_max_bankroll_pct = (
-        tier_max_bankroll_pct
+        tier_max_pct
         if max_bankroll_pct is None
-        else min(max_bankroll_pct, tier_max_bankroll_pct)
+        else min(max_bankroll_pct, tier_max_pct)
     )
 
     if effective_max_bankroll_pct <= 0:
         return StakeDecision(
-            0.0,
-            "blocked",
-            tier,
-            0.0,
-            0.0,
-            "Tier has zero bankroll allocation.",
+            stake=0.0,
+            method="blocked",
+            tier=tier,
+            raw_kelly_fraction=0.0,
+            applied_fraction=0.0,
+            reason="Tier bankroll cap is zero.",
         )
 
     if not odds_values or len(odds_values) != len(confidence_values):
-        stake = min(
+        fallback_stake = min(
             flat_stake * TIER_STAKE_MULTIPLIERS.get(tier, 0.25),
             bankroll * effective_max_bankroll_pct,
         )
 
         return StakeDecision(
-            stake=round(max(stake, min_stake), 2),
+            stake=round(max(fallback_stake, min_stake), 2),
             method="flat_fallback",
             tier=tier,
             raw_kelly_fraction=0.0,
@@ -125,12 +125,12 @@ def calculate_group_stake(
 
     if total_odds <= 1.0:
         return StakeDecision(
-            0.0,
-            "blocked",
-            tier,
-            0.0,
-            0.0,
-            "Invalid group odds.",
+            stake=0.0,
+            method="blocked",
+            tier=tier,
+            raw_kelly_fraction=0.0,
+            applied_fraction=0.0,
+            reason="Invalid group odds.",
         )
 
     raw_kelly = ((total_odds * estimated_probability) - 1.0) / (total_odds - 1.0)
@@ -155,8 +155,5 @@ def calculate_group_stake(
         tier=tier,
         raw_kelly_fraction=round(raw_kelly, 6),
         applied_fraction=round(applied_fraction, 6),
-        reason=(
-            "Dynamic stake calculated with fractional Kelly, "
-            "tier multiplier, and tier bankroll cap."
-        ),
+        reason="Dynamic stake calculated with tier-specific bankroll cap.",
     )
