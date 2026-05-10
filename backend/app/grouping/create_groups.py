@@ -9,10 +9,6 @@ from typing import Any
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
-from app.intelligence.correlation_rules import (
-    evaluate_group_correlation,
-)
-from app.intelligence.stake_engine import resolve_group_tier
 
 from app.db.models import Prediction, PredictionGroupItem
 from app.grouping.profitability_intelligence import (
@@ -24,7 +20,13 @@ from app.grouping.profitability_intelligence import (
     load_odds_band_intelligence,
     odds_band,
 )
+from app.intelligence.correlation_rules import (
+    evaluate_group_correlation,
+)
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
+from app.intelligence.stake_engine import resolve_group_tier
+from app.odds.market_quality_engine import get_enabled_markets
+
 
 AUTO_PROFILE_LADDERS = {
     "AUTO_SAFE": [
@@ -34,6 +36,8 @@ AUTO_PROFILE_LADDERS = {
         "BALANCED_REFERENCE",
     ],
 }
+
+
 @dataclass(frozen=True)
 class PortfolioGroupConfig:
     max_groups: int = 10
@@ -61,7 +65,7 @@ class PortfolioGroupConfig:
 def group_predictions(
     session: Session,
     slate: str,
-    min_confidence: float = 0.65,
+    min_confidence: float = 0.52,
     min_group_odds: float = 3.0,
     require_odds: bool = False,
     use_intelligence_filters: bool = True,
@@ -102,7 +106,6 @@ def group_predictions(
 
     if profile:
         profile_config = PROFILE_CONFIGS.get(profile)
-        
 
         if profile_config is None:
             raise ValueError(
@@ -112,7 +115,7 @@ def group_predictions(
         min_confidence = float(profile_config["min_confidence"])
 
     config = PortfolioGroupConfig(
-        min_confidence=min_confidence,
+        min_confidence=max(min_confidence, 0.50),
         min_sample_size=10,
         use_intelligence_filters=use_intelligence_filters,
         max_odds=(
@@ -151,8 +154,6 @@ def group_predictions(
 
     print("[PORTFOLIO DEBUG] No profitability portfolio created. Falling back.")
 
-
-
     return _fallback_confidence_groups(
         session=session,
         slate=slate,
@@ -160,6 +161,7 @@ def group_predictions(
         min_group_odds=min_group_odds,
         require_odds=require_odds,
     )
+
 
 def _build_profitability_aware_groups(
     session: Session,
@@ -204,7 +206,6 @@ def _build_profitability_aware_groups(
     )
 
     best_by_match: dict[int, dict[str, Any]] = {}
-
     rejected_by_filter = 0
 
     for prediction in predictions:
@@ -223,7 +224,6 @@ def _build_profitability_aware_groups(
             continue
 
         match_id = int(enriched["match_id"])
-
         current_best = best_by_match.get(match_id)
 
         if current_best is None:
@@ -273,6 +273,12 @@ def _load_live_prediction_candidates(
     min_confidence: float,
     require_odds: bool,
 ) -> list[dict[str, Any]]:
+    enabled_markets = get_enabled_markets(session)
+
+    if not enabled_markets:
+        print("[MARKET QUALITY] No enabled markets found.")
+        return []
+
     odds_filter = "AND p.odds IS NOT NULL" if require_odds else ""
 
     query = text(
@@ -297,6 +303,7 @@ def _load_live_prediction_candidates(
             ON m.id = p.match_id
         WHERE p.slate = :slate
           AND p.confidence >= :min_confidence
+          AND p.market = ANY(:enabled_markets)
           {odds_filter}
         ORDER BY p.confidence DESC, p.id ASC
         """
@@ -307,6 +314,7 @@ def _load_live_prediction_candidates(
         {
             "slate": slate,
             "min_confidence": min_confidence,
+            "enabled_markets": enabled_markets,
         },
     ).fetchall()
 
@@ -324,6 +332,12 @@ def _enrich_candidate(
 ) -> dict[str, Any] | None:
     market = prediction["market"]
     league = prediction.get("league") or "unknown"
+
+    enabled_markets = set(get_enabled_markets(session))
+
+    if market not in enabled_markets:
+        print("[FILTER] market quality disabled", market)
+        return None
 
     confidence = float(prediction["confidence"] or 0.0)
     value_score = float(prediction["value_score"] or 0.0)
@@ -398,50 +412,23 @@ def _enrich_candidate(
     odds_band_hit_rate = float(odds_data.get("hit_rate") or 0.0) if odds_data else 0.0
     odds_band_sample_size = int(odds_data.get("sample_size") or 0) if odds_data else 0
 
-    confidence_band_roi = (
-        float(confidence_data.get("roi") or 0.0)
-        if confidence_data
-        else 0.0
-    )
-    confidence_band_hit_rate = (
-        float(confidence_data.get("hit_rate") or 0.0)
-        if confidence_data
-        else 0.0
-    )
-    confidence_band_sample_size = (
-        int(confidence_data.get("sample_size") or 0)
-        if confidence_data
-        else 0
-    )
+    confidence_band_roi = float(confidence_data.get("roi") or 0.0) if confidence_data else 0.0
+    confidence_band_hit_rate = float(confidence_data.get("hit_rate") or 0.0) if confidence_data else 0.0
+    confidence_band_sample_size = int(confidence_data.get("sample_size") or 0) if confidence_data else 0
 
     if market_roi < config.min_market_roi:
         print("[FILTER] negative market roi", market, market_roi)
         return None
 
     if league_sample_size >= config.min_sample_size and league_roi < config.min_league_roi:
-        print(
-            "[FILTER] weak league roi",
-            league,
-            market,
-            league_roi,
-            league_sample_size,
-        )
+        print("[FILTER] weak league roi", league, market, league_roi, league_sample_size)
         return None
 
     if odds_band_sample_size >= config.min_sample_size and odds_band_roi < config.min_band_roi:
-        print(
-            "[FILTER] weak odds band",
-            market,
-            odds_band(odds),
-            odds_band_roi,
-            odds_band_sample_size,
-        )
+        print("[FILTER] weak odds band", market, odds_band(odds), odds_band_roi, odds_band_sample_size)
         return None
 
-    if (
-        confidence_band_sample_size >= config.min_sample_size
-        and confidence_band_roi < config.min_band_roi
-    ):
+    if confidence_band_sample_size >= config.min_sample_size and confidence_band_roi < config.min_band_roi:
         print(
             "[FILTER] weak confidence band",
             market,
@@ -604,13 +591,8 @@ def _candidate_fits_group(
         candidate=candidate,
     )
 
-    candidate["correlation_score"] = (
-        correlation.correlation_score
-    )
-
-    candidate["correlation_reasons"] = (
-        correlation.reasons
-    )
+    candidate["correlation_score"] = correlation.correlation_score
+    candidate["correlation_reasons"] = correlation.reasons
 
     if not correlation.allowed:
         print(
@@ -624,6 +606,7 @@ def _candidate_fits_group(
         return False
 
     return True
+
 
 def _save_groups(
     session: Session,
@@ -686,34 +669,13 @@ def _summarize_portfolio_groups(
             "group_type": "PROFITABILITY_PORTFOLIO",
             "group_tier": group_tier,
             "games": float(len(group)),
-            "average_confidence": round(
-                mean(float(item["confidence"] or 0.0) for item in group),
-                4,
-            ),
-            "average_value_score": round(
-                mean(float(item["value_score"] or 0.0) for item in group),
-                4,
-            ),
-            "average_market_roi": round(
-                mean(float(item["market_roi"] or 0.0) for item in group),
-                4,
-            ),
-            "average_league_roi": round(
-                mean(float(item["league_roi"] or 0.0) for item in group),
-                4,
-            ),
-            "average_odds_band_roi": round(
-                mean(float(item["odds_band_roi"] or 0.0) for item in group),
-                4,
-            ),
-            "average_confidence_band_roi": round(
-                mean(float(item["confidence_band_roi"] or 0.0) for item in group),
-                4,
-            ),
-            "average_selection_score": round(
-                mean(float(item["selection_score"] or 0.0) for item in group),
-                4,
-            ),
+            "average_confidence": round(mean(float(item["confidence"] or 0.0) for item in group), 4),
+            "average_value_score": round(mean(float(item["value_score"] or 0.0) for item in group), 4),
+            "average_market_roi": round(mean(float(item["market_roi"] or 0.0) for item in group), 4),
+            "average_league_roi": round(mean(float(item["league_roi"] or 0.0) for item in group), 4),
+            "average_odds_band_roi": round(mean(float(item["odds_band_roi"] or 0.0) for item in group), 4),
+            "average_confidence_band_roi": round(mean(float(item["confidence_band_roi"] or 0.0) for item in group), 4),
+            "average_selection_score": round(mean(float(item["selection_score"] or 0.0) for item in group), 4),
             "average_risk_score": round(average_risk_score, 4),
             "max_risk_score": round(max_risk_score, 4),
             "risk_flags": ", ".join(
@@ -731,6 +693,7 @@ def _summarize_portfolio_groups(
 
     return summaries
 
+
 def _fallback_confidence_groups(
     session: Session,
     slate: str,
@@ -738,11 +701,14 @@ def _fallback_confidence_groups(
     min_group_odds: float = 3.0,
     require_odds: bool = False,
 ) -> dict[str, dict[str, float | str]]:
+    enabled_markets = set(get_enabled_markets(session))
+
     query = (
         select(Prediction)
         .where(
             Prediction.slate == slate,
             Prediction.confidence >= min_confidence,
+            Prediction.market.in_(enabled_markets),
         )
         .order_by(
             Prediction.confidence.desc(),
@@ -873,19 +839,11 @@ def _fallback_confidence_groups(
 
         group_summaries[group_name] = {
             "group_type": group_type,
-            "average_confidence": round(
-                mean([p.confidence for p in selected_games]),
-                4,
-            ),
-            "cumulative_odds": (
-                round(cumulative_odds, 4)
-                if cumulative_odds is not None
-                else 0.0
-            ),
+            "average_confidence": round(mean([p.confidence for p in selected_games]), 4),
+            "cumulative_odds": round(cumulative_odds, 4) if cumulative_odds is not None else 0.0,
             "games": float(len(selected_games)),
             "odds_coverage": round(
-                sum(1 for p in selected_games if p.odds is not None)
-                / len(selected_games),
+                sum(1 for p in selected_games if p.odds is not None) / len(selected_games),
                 4,
             ),
         }
@@ -897,7 +855,6 @@ def _fallback_confidence_groups(
 
 def _fallback_ranking_score(prediction: Prediction) -> float:
     value_score = prediction.value_score or 0.0
-
     odds_bonus = 0.0
 
     if prediction.odds:
@@ -959,10 +916,7 @@ def _boost_group_to_min_odds(
 
         final_odds = _cumulative_odds(current)
 
-        if (
-            final_odds
-            and final_odds >= min_group_odds
-        ):
+        if final_odds and final_odds >= min_group_odds:
             break
 
     return current

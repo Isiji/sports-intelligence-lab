@@ -5,7 +5,6 @@ import pickle
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.analysis.weak_markets import is_market_weak
 from app.db.models import Match, MatchOdds, Prediction, PredictionGroupItem
 from app.features.football_features import (
     MARKET_LABELS,
@@ -15,6 +14,7 @@ from app.features.football_features import (
 )
 from app.ml.registry import load_model_metadata
 from app.ml.train_football import metadata_path_for_market, model_path_for_market
+from app.odds.market_quality_engine import get_enabled_markets
 from app.services.prediction_guard_service import apply_prediction_guard
 from app.services.prediction_intelligence_service import (
     apply_prediction_intelligence,
@@ -42,16 +42,20 @@ def predict_all_football_markets(
     session.commit()
 
     inserted = 0
+    enabled_markets = set(get_enabled_markets(session))
+
+    print(
+        "[MARKET QUALITY]",
+        f"enabled_markets={sorted(enabled_markets)}",
+    )
 
     for market in MARKET_TARGETS.keys():
-        if is_market_weak(
-            session=session,
-            market=market,
-        ):
+        if market not in enabled_markets:
             print(
-                f"[SKIPPED OLD WEAK MARKET CHECK] {market}"
+                f"[SKIPPED MARKET QUALITY DISABLED] {market}"
             )
             continue
+
 
         inserted += predict_football_market(
             session=session,
@@ -71,6 +75,14 @@ def predict_football_market(
     limit: int = 30,
     min_confidence: float = 0.6,
 ) -> int:
+    enabled_markets = set(get_enabled_markets(session))
+
+    if market not in enabled_markets:
+        print(
+            f"[SKIPPED MARKET QUALITY DISABLED] {market}"
+        )
+        return 0
+
     model_path = model_path_for_market(market)
     metadata_path = metadata_path_for_market(market)
 
@@ -238,7 +250,6 @@ def _predict_ensemble_probabilities(
     x,
 ):
     models = bundle["models"]
-
     weights = bundle["weights"]
 
     final_probability = None
@@ -266,135 +277,43 @@ def _find_odds(
     selection: str,
 ) -> float | None:
     odds_lookup_mapping = {
-        ("home_win", "HOME_WIN"): (
-            "home_win",
-            "HOME_WIN",
-        ),
+        ("home_win", "HOME_WIN"): ("home_win", "HOME_WIN"),
+        ("home_win", "NOT_HOME_WIN"): ("away_win", "AWAY_WIN"),
 
-        ("home_win", "NOT_HOME_WIN"): (
-            "away_win",
-            "AWAY_WIN",
-        ),
+        ("away_win", "AWAY_WIN"): ("away_win", "AWAY_WIN"),
+        ("away_win", "NOT_AWAY_WIN"): ("home_win", "HOME_WIN"),
 
-        ("away_win", "AWAY_WIN"): (
-            "away_win",
-            "AWAY_WIN",
-        ),
+        ("draw", "DRAW"): ("draw", "DRAW"),
+        ("draw", "NOT_DRAW"): ("double_chance_12", "DOUBLE_CHANCE_12"),
 
-        ("away_win", "NOT_AWAY_WIN"): (
-            "home_win",
-            "HOME_WIN",
-        ),
+        ("over_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
+        ("over_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
+        ("under_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
+        ("under_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
 
-        ("draw", "DRAW"): (
-            "draw",
-            "DRAW",
-        ),
+        ("over_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
+        ("over_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
+        ("under_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
+        ("under_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
 
-        ("draw", "NOT_DRAW"): (
-            "double_chance_12",
-            "DOUBLE_CHANCE_12",
-        ),
+        ("over_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
+        ("over_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
+        ("under_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
+        ("under_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
 
-        ("over_1_5_goals", "OVER_1_5"): (
-            "over_1_5_goals",
-            "OVER_1_5",
-        ),
+        ("btts_yes", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
+        ("btts_yes", "BTTS_NO"): ("btts_no", "BTTS_NO"),
+        ("btts_no", "BTTS_NO"): ("btts_no", "BTTS_NO"),
+        ("btts_no", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
 
-        ("over_1_5_goals", "UNDER_1_5"): (
-            "under_1_5_goals",
-            "UNDER_1_5",
-        ),
+        ("double_chance_x2", "DOUBLE_CHANCE_X2"): ("double_chance_x2", "DOUBLE_CHANCE_X2"),
+        ("double_chance_x2", "NOT_DOUBLE_CHANCE_X2"): ("home_win", "HOME_WIN"),
 
-        ("under_1_5_goals", "UNDER_1_5"): (
-            "under_1_5_goals",
-            "UNDER_1_5",
-        ),
+        ("double_chance_1x", "DOUBLE_CHANCE_1X"): ("double_chance_1x", "DOUBLE_CHANCE_1X"),
+        ("double_chance_1x", "NOT_DOUBLE_CHANCE_1X"): ("away_win", "AWAY_WIN"),
 
-        ("under_1_5_goals", "OVER_1_5"): (
-            "over_1_5_goals",
-            "OVER_1_5",
-        ),
-
-        ("over_2_5_goals", "OVER_2_5"): (
-            "over_2_5_goals",
-            "OVER_2_5",
-        ),
-
-        ("over_2_5_goals", "UNDER_2_5"): (
-            "under_2_5_goals",
-            "UNDER_2_5",
-        ),
-
-        ("under_2_5_goals", "UNDER_2_5"): (
-            "under_2_5_goals",
-            "UNDER_2_5",
-        ),
-
-        ("under_2_5_goals", "OVER_2_5"): (
-            "over_2_5_goals",
-            "OVER_2_5",
-        ),
-
-        ("over_3_5_goals", "OVER_3_5"): (
-            "over_3_5_goals",
-            "OVER_3_5",
-        ),
-
-        ("over_3_5_goals", "UNDER_3_5"): (
-            "under_3_5_goals",
-            "UNDER_3_5",
-        ),
-
-        ("under_3_5_goals", "UNDER_3_5"): (
-            "under_3_5_goals",
-            "UNDER_3_5",
-        ),
-
-        ("under_3_5_goals", "OVER_3_5"): (
-            "over_3_5_goals",
-            "OVER_3_5",
-        ),
-
-        ("btts_yes", "BTTS_YES"): (
-            "btts_yes",
-            "BTTS_YES",
-        ),
-
-        ("btts_yes", "BTTS_NO"): (
-            "btts_no",
-            "BTTS_NO",
-        ),
-
-        ("double_chance_x2", "DOUBLE_CHANCE_X2"): (
-            "double_chance_x2",
-            "DOUBLE_CHANCE_X2",
-        ),
-
-        ("double_chance_x2", "NOT_DOUBLE_CHANCE_X2"): (
-            "home_win",
-            "HOME_WIN",
-        ),
-
-        ("double_chance_1x", "DOUBLE_CHANCE_1X"): (
-            "double_chance_1x",
-            "DOUBLE_CHANCE_1X",
-        ),
-
-        ("double_chance_1x", "NOT_DOUBLE_CHANCE_1X"): (
-            "away_win",
-            "AWAY_WIN",
-        ),
-
-        ("double_chance_12", "DOUBLE_CHANCE_12"): (
-            "double_chance_12",
-            "DOUBLE_CHANCE_12",
-        ),
-
-        ("double_chance_12", "NOT_DOUBLE_CHANCE_12"): (
-            "draw",
-            "DRAW",
-        ),
+        ("double_chance_12", "DOUBLE_CHANCE_12"): ("double_chance_12", "DOUBLE_CHANCE_12"),
+        ("double_chance_12", "NOT_DOUBLE_CHANCE_12"): ("draw", "DRAW"),
     }
 
     lookup_market, lookup_selection = odds_lookup_mapping.get(
@@ -402,19 +321,21 @@ def _find_odds(
         (market, selection),
     )
 
-    odds_row = session.scalar(
-        select(MatchOdds)
-        .where(
+    odds_rows = (
+        session.query(MatchOdds)
+        .filter(
             MatchOdds.match_id == match_id,
             MatchOdds.market == lookup_market,
             MatchOdds.selection == lookup_selection,
         )
         .order_by(
-            MatchOdds.retrieved_at.desc()
+            MatchOdds.retrieved_at.desc(),
+            MatchOdds.id.desc(),
         )
+        .all()
     )
 
-    if odds_row is None:
+    if not odds_rows:
         print(
             "[ODDS MISS]",
             f"prediction_market={market}",
@@ -426,4 +347,36 @@ def _find_odds(
 
         return None
 
-    return float(odds_row.odds)
+    valid_odds = []
+
+    for row in odds_rows:
+        if row.odds is None:
+            continue
+
+        try:
+            odds_value = float(row.odds)
+        except Exception:
+            continue
+
+        if odds_value <= 1.01:
+            continue
+
+        if odds_value > 100:
+            continue
+
+        valid_odds.append(odds_value)
+
+    if not valid_odds:
+        print(
+            "[ODDS INVALID]",
+            f"market={lookup_market}",
+            f"selection={lookup_selection}",
+            f"match_id={match_id}",
+            f"rows_found={len(odds_rows)}",
+        )
+
+        return None
+
+    selected_odds = max(valid_odds)
+
+    return round(selected_odds, 4)

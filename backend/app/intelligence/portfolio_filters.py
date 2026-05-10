@@ -11,6 +11,7 @@ from app.db.models import (
     MarketIntelligenceSnapshot,
     OddsBandIntelligenceSnapshot,
 )
+from app.odds.market_quality_engine import get_enabled_markets
 
 
 @dataclass
@@ -90,6 +91,15 @@ def evaluate_pick_for_portfolio(
     selected_league = league or "UNKNOWN"
     selected_odds_band = get_odds_band(odds)
     selected_confidence_band = get_confidence_band(confidence)
+
+    if session is not None:
+        enabled_markets = set(get_enabled_markets(session))
+
+        if market not in enabled_markets:
+            return _rejected(
+                "market disabled by odds quality engine",
+                "MARKET_QUALITY_DISABLED",
+            )
 
     if odds is None:
         return _rejected("missing odds", "NO_ODDS")

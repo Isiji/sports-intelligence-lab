@@ -11,6 +11,25 @@ from app.db.models import (
 from app.services.confidence_recalibration_service import recalibrate_confidence
 
 
+MIN_ALLOWED_CONFIDENCE_MULTIPLIER = 0.72
+MAX_ALLOWED_CONFIDENCE_MULTIPLIER = 1.18
+
+HARD_BLOCK_NEGATIVE_ROI = -0.35
+SOFT_BLOCK_NEGATIVE_ROI = -0.15
+
+MIN_SURVIVABILITY_SCORE = 6
+
+
+def clamp_multiplier(value: float) -> float:
+    return max(
+        MIN_ALLOWED_CONFIDENCE_MULTIPLIER,
+        min(
+            value,
+            MAX_ALLOWED_CONFIDENCE_MULTIPLIER,
+        ),
+    )
+
+
 def resolve_odds_band(
     odds: float | None,
 ) -> str | None:
@@ -56,6 +75,72 @@ def resolve_confidence_band(
     return "0.90+"
 
 
+def _safe_float_attr(row, names: list[str], default: float = 0.0) -> float:
+    for name in names:
+        if hasattr(row, name):
+            value = getattr(row, name)
+            if value is not None:
+                return float(value)
+
+    return default
+
+
+def _evaluate_market_row(
+    row,
+    scope: str,
+    reasons: list[str],
+) -> tuple[bool, float]:
+    if not row:
+        return True, 1.0
+
+    multiplier = clamp_multiplier(
+        _safe_float_attr(
+            row,
+            ["confidence_multiplier"],
+            1.0,
+        )
+    )
+
+    roi = _safe_float_attr(
+        row,
+        ["recent_roi", "roi"],
+        0.0,
+    )
+
+    survivability = _safe_float_attr(
+        row,
+        ["survivability_score"],
+        50.0,
+    )
+
+    if survivability < MIN_SURVIVABILITY_SCORE:
+        reasons.append(
+            f"{scope}: survivability too low"
+        )
+        return False, multiplier
+
+    if roi <= HARD_BLOCK_NEGATIVE_ROI:
+        reasons.append(
+            f"{scope}: extremely negative ROI"
+        )
+        return False, multiplier
+
+    if (
+        hasattr(row, "prediction_allowed")
+        and row.prediction_allowed is False
+    ):
+        if roi <= SOFT_BLOCK_NEGATIVE_ROI:
+            reasons.append(
+                f"{scope}: blocked by intelligence"
+            )
+            return False, multiplier
+
+        reasons.append(
+            f"{scope}: soft override applied"
+        )
+
+    return True, multiplier
+
 def apply_prediction_intelligence(
     session: Session,
     match: Match,
@@ -67,7 +152,8 @@ def apply_prediction_intelligence(
 
     reasons: list[str] = []
     allowed = True
-    multiplier = 1.0
+
+    multipliers: list[float] = []
 
     market_row = (
         session.query(MarketIntelligenceSnapshot)
@@ -77,16 +163,18 @@ def apply_prediction_intelligence(
         .first()
     )
 
-    if market_row:
-        multiplier *= float(
-            market_row.confidence_multiplier or 1.0
+    market_allowed, market_multiplier = (
+        _evaluate_market_row(
+            market_row,
+            "market",
+            reasons,
         )
+    )
 
-        if not market_row.prediction_allowed:
-            allowed = False
-            reasons.append(
-                "Market intelligence blocked prediction."
-            )
+    if not market_allowed:
+        allowed = False
+
+    multipliers.append(market_multiplier)
 
     league_row = (
         session.query(LeagueIntelligenceSnapshot)
@@ -96,16 +184,18 @@ def apply_prediction_intelligence(
         .first()
     )
 
-    if league_row:
-        multiplier *= float(
-            league_row.confidence_multiplier or 1.0
+    league_allowed, league_multiplier = (
+        _evaluate_market_row(
+            league_row,
+            "league",
+            reasons,
         )
+    )
 
-        if not league_row.prediction_allowed:
-            allowed = False
-            reasons.append(
-                "League intelligence blocked prediction."
-            )
+    if not league_allowed:
+        allowed = False
+
+    multipliers.append(league_multiplier)
 
     league_market_row = (
         session.query(LeagueMarketIntelligenceSnapshot)
@@ -116,22 +206,28 @@ def apply_prediction_intelligence(
         .first()
     )
 
-    if league_market_row:
-        multiplier *= float(
-            league_market_row.confidence_multiplier or 1.0
+    league_market_allowed, league_market_multiplier = (
+        _evaluate_market_row(
+            league_market_row,
+            "league_market",
+            reasons,
         )
+    )
 
-        if not league_market_row.prediction_allowed:
-            allowed = False
-            reasons.append(
-                "League-market intelligence blocked prediction."
-            )
+    if not league_market_allowed:
+        allowed = False
+
+    multipliers.append(
+        league_market_multiplier
+    )
 
     odds_band = resolve_odds_band(odds)
 
     if odds_band:
         odds_row = (
-            session.query(OddsBandIntelligenceSnapshot)
+            session.query(
+                OddsBandIntelligenceSnapshot
+            )
             .filter(
                 OddsBandIntelligenceSnapshot.market == market,
                 OddsBandIntelligenceSnapshot.odds_band == odds_band,
@@ -139,21 +235,27 @@ def apply_prediction_intelligence(
             .first()
         )
 
-        if odds_row:
-            multiplier *= float(
-                odds_row.confidence_multiplier or 1.0
+        odds_allowed, odds_multiplier = (
+            _evaluate_market_row(
+                odds_row,
+                "odds_band",
+                reasons,
             )
+        )
 
-            if not odds_row.prediction_allowed:
-                allowed = False
-                reasons.append(
-                    "Odds band intelligence blocked prediction."
-                )
+        if not odds_allowed:
+            allowed = False
 
-    confidence_band = resolve_confidence_band(confidence)
+        multipliers.append(odds_multiplier)
+
+    confidence_band = resolve_confidence_band(
+        confidence
+    )
 
     confidence_row = (
-        session.query(ConfidenceBandIntelligenceSnapshot)
+        session.query(
+            ConfidenceBandIntelligenceSnapshot
+        )
         .filter(
             ConfidenceBandIntelligenceSnapshot.market == market,
             ConfidenceBandIntelligenceSnapshot.confidence_band == confidence_band,
@@ -161,25 +263,41 @@ def apply_prediction_intelligence(
         .first()
     )
 
-    if confidence_row:
-        multiplier *= float(
-            confidence_row.confidence_multiplier or 1.0
+    confidence_allowed, confidence_multiplier = (
+        _evaluate_market_row(
+            confidence_row,
+            "confidence_band",
+            reasons,
         )
+    )
 
-        if not confidence_row.prediction_allowed:
-            allowed = False
-            reasons.append(
-                "Confidence band intelligence blocked prediction."
-            )
+    if not confidence_allowed:
+        allowed = False
+
+    multipliers.append(
+        confidence_multiplier
+    )
+
+    if multipliers:
+        combined_multiplier = (
+            sum(multipliers)
+            / len(multipliers)
+        )
+    else:
+        combined_multiplier = 1.0
+
+    combined_multiplier = clamp_multiplier(
+        combined_multiplier
+    )
 
     adjusted_confidence = round(
-        confidence * multiplier,
+        confidence * combined_multiplier,
         4,
     )
 
     adjusted_confidence = max(
-        min(adjusted_confidence, 0.99),
-        0.01,
+        min(adjusted_confidence, 0.97),
+        0.05,
     )
 
     recalibration = recalibrate_confidence(
@@ -188,8 +306,20 @@ def apply_prediction_intelligence(
         confidence=adjusted_confidence,
     )
 
-    final_confidence = float(
-        recalibration["recalibrated_confidence"]
+    recalibrated_confidence = float(
+        recalibration[
+            "recalibrated_confidence"
+        ]
+    )
+
+    final_confidence = max(
+        recalibrated_confidence,
+        confidence * 0.70,
+    )
+
+    final_confidence = round(
+        min(final_confidence, 0.97),
+        4,
     )
 
     reasons.extend(
@@ -201,7 +331,14 @@ def apply_prediction_intelligence(
         "raw_confidence": confidence,
         "adjusted_confidence": final_confidence,
         "pre_recalibration_confidence": adjusted_confidence,
-        "multiplier": round(multiplier, 4),
+        "combined_multiplier": round(
+            combined_multiplier,
+            4,
+        ),
+        "multipliers": [
+            round(x, 4)
+            for x in multipliers
+        ],
         "recalibration": recalibration,
         "reasons": reasons,
         "league": match.league,
