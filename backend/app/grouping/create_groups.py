@@ -44,15 +44,15 @@ class PortfolioGroupConfig:
     min_group_size: int = 4
     max_group_size: int = 5
 
-    min_confidence: float = 0.60
-    min_value_score: float = 0.00
+    min_confidence: float = 0.50
+    min_value_score: float = -0.08
 
-    min_odds: float = 1.25
-    max_odds: float = 3.50
+    min_odds: float = 1.15
+    max_odds: float = 4.50
 
-    min_market_roi: float = 0.00
-    min_league_roi: float = -0.15
-    min_band_roi: float = -0.15
+    min_market_roi: float = -0.20
+    min_league_roi: float = -0.25
+    min_band_roi: float = -0.25
 
     min_sample_size: int = 10
 
@@ -115,13 +115,13 @@ def group_predictions(
         min_confidence = float(profile_config["min_confidence"])
 
     config = PortfolioGroupConfig(
-        min_confidence=max(min_confidence, 0.50),
+        min_confidence=max(float(min_confidence), 0.50),
         min_sample_size=10,
         use_intelligence_filters=use_intelligence_filters,
         max_odds=(
             float(profile_config["max_odds"])
             if profile_config
-            else 3.50
+            else 4.50
         ),
     )
 
@@ -313,7 +313,7 @@ def _load_live_prediction_candidates(
         query,
         {
             "slate": slate,
-            "min_confidence": min_confidence,
+            "min_confidence": float(min_confidence),
             "enabled_markets": enabled_markets,
         },
     ).fetchall()
@@ -381,6 +381,7 @@ def _enrich_candidate(
         prediction["portfolio_filter_reason"] = "Not used"
         prediction["portfolio_risk_flags"] = []
         prediction["portfolio_risk_score"] = 0.0
+        prediction["portfolio_tier"] = "UNFILTERED"
 
     if market not in market_intel:
         print("[FILTER] no market intel", market)
@@ -451,16 +452,16 @@ def _enrich_candidate(
     if odds is not None:
         odds_quality = min(odds / 5.0, 0.50)
 
-    risk_penalty = max(float(prediction.get("portfolio_risk_score") or 0.0), 0.0) / 100.0
+    risk_penalty = max(float(prediction.get("portfolio_risk_score") or 0.0), 0.0) / 140.0
 
     selection_score = (
-        confidence * 0.25
-        + value_score * 0.20
-        + market_roi * 0.20
-        + league_roi * 0.15
-        + odds_band_roi * 0.10
-        + confidence_band_roi * 0.10
-        + odds_quality * 0.05
+        confidence * 0.32
+        + value_score * 0.22
+        + market_roi * 0.14
+        + league_roi * 0.10
+        + odds_band_roi * 0.08
+        + confidence_band_roi * 0.08
+        + odds_quality * 0.08
         - sample_penalty
         - risk_penalty
     )
@@ -509,18 +510,18 @@ def _sample_penalty(
     penalty = 0.0
 
     if market_sample_size < min_sample_size * 2:
-        penalty += 0.03
+        penalty += 0.02
 
     if league_sample_size == 0:
-        penalty += 0.05
-    elif league_sample_size < min_sample_size:
         penalty += 0.03
+    elif league_sample_size < min_sample_size:
+        penalty += 0.02
 
     if odds_band_sample_size == 0:
-        penalty += 0.03
+        penalty += 0.02
 
     if confidence_band_sample_size == 0:
-        penalty += 0.03
+        penalty += 0.02
 
     return penalty
 

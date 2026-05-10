@@ -66,11 +66,11 @@ def get_confidence_band(confidence: float | None) -> str:
 
 
 def resolve_risk_tier(risk_score: float) -> str:
-    if risk_score <= 12:
+    if risk_score <= 18:
         return "SAFE"
-    if risk_score <= 35:
+    if risk_score <= 42:
         return "MODERATE"
-    if risk_score <= 65:
+    if risk_score <= 72:
         return "AGGRESSIVE"
     return "REJECTED"
 
@@ -107,39 +107,59 @@ def evaluate_pick_for_portfolio(
     if confidence is None:
         return _rejected("missing confidence", "NO_CONFIDENCE")
 
-    if confidence < 0.60:
-        risk_flags.append("VERY_LOW_CONFIDENCE")
-        risk_score += 35
-    elif confidence < 0.70:
+    if odds <= 1.01:
+        return _rejected("invalid odds", "INVALID_ODDS")
+
+    if odds > 6.00:
+        return _rejected("extreme odds rejected", "EXTREME_ODDS_REJECTED")
+
+    if confidence < 0.50:
+        return _rejected("confidence below portfolio floor", "CONFIDENCE_TOO_LOW")
+
+    if confidence < 0.56:
         risk_flags.append("LOW_CONFIDENCE")
-        risk_score += 18
+        risk_score += 22
+    elif confidence < 0.62:
+        risk_flags.append("MEDIUM_LOW_CONFIDENCE")
+        risk_score += 12
+    elif confidence >= 0.80:
+        risk_flags.append("HIGH_CONFIDENCE")
+        risk_score -= 5
     elif confidence >= 0.90:
         risk_flags.append("ELITE_CONFIDENCE")
         risk_score -= 8
 
     if odds > 4.50:
-        risk_flags.append("EXTREME_ODDS")
-        risk_score += 35
-    elif odds > 3.00:
         risk_flags.append("HIGH_ODDS_VARIANCE")
-        risk_score += 18
+        risk_score += 24
+    elif odds > 3.00:
+        risk_flags.append("MODERATE_ODDS_VARIANCE")
+        risk_score += 12
     elif odds < 1.20:
         risk_flags.append("VERY_LOW_ODDS")
-        risk_score += 6
+        risk_score += 8
 
     if value_score is not None:
-        if value_score < -0.15:
-            risk_flags.append("VERY_NEGATIVE_VALUE_SCORE")
-            risk_score += 40
-        elif value_score < 0:
+        if value_score < -0.25:
+            return _rejected(
+                "very negative value score",
+                "VERY_NEGATIVE_VALUE_SCORE",
+            )
+        if value_score < -0.10:
             risk_flags.append("NEGATIVE_VALUE_SCORE")
-            risk_score += 15
+            risk_score += 18
+        elif value_score < 0:
+            risk_flags.append("SLIGHTLY_NEGATIVE_VALUE_SCORE")
+            risk_score += 7
         elif value_score >= 0.25:
             risk_flags.append("STRONG_VALUE_SCORE")
-            risk_score -= 10
+            risk_score -= 12
         elif value_score >= 0.15:
             risk_flags.append("GOOD_VALUE_SCORE")
-            risk_score -= 5
+            risk_score -= 7
+        elif value_score >= 0.05:
+            risk_flags.append("POSITIVE_VALUE_SCORE")
+            risk_score -= 3
 
     if session is not None:
         league_row = (
@@ -149,35 +169,43 @@ def evaluate_pick_for_portfolio(
         )
 
         if league_row:
+            league_roi = float(league_row.recent_roi or 0.0)
+            league_survivability = float(league_row.survivability_score or 0.0)
+
             if not league_row.prediction_allowed:
-                return _rejected(
-                    "league blocked by DB intelligence",
-                    "DB_LEAGUE_BLOCKED",
-                )
+                if league_roi <= -0.35 or league_survivability < 5:
+                    return _rejected(
+                        "league hard-blocked by DB intelligence",
+                        "DB_LEAGUE_HARD_BLOCKED",
+                    )
+
+                risk_flags.append("DB_LEAGUE_SOFT_BLOCK")
+                risk_score += 18
 
             if league_row.stale:
                 risk_flags.append("STALE_LEAGUE_INTELLIGENCE")
                 risk_score += 3
 
-            if float(league_row.recent_roi or 0.0) < -0.10:
+            if league_roi < -0.20:
+                risk_flags.append("VERY_NEGATIVE_RECENT_LEAGUE_ROI")
+                risk_score += 18
+            elif league_roi < -0.10:
                 risk_flags.append("NEGATIVE_RECENT_LEAGUE_ROI")
-                risk_score += 12
+                risk_score += 10
 
-            survivability = float(league_row.survivability_score or 0.0)
-
-            if survivability < 10:
+            if league_survivability < 10:
                 risk_flags.append("VERY_LOW_LEAGUE_SURVIVABILITY")
-                risk_score += 25
-            elif survivability < 20:
+                risk_score += 18
+            elif league_survivability < 20:
                 risk_flags.append("LOW_LEAGUE_SURVIVABILITY")
-                risk_score += 12
-            elif survivability >= 60:
+                risk_score += 8
+            elif league_survivability >= 60:
                 risk_flags.append("STRONG_LEAGUE_SURVIVABILITY")
                 risk_score -= 8
 
             if league_row.safe_for_accumulators:
                 risk_flags.append("SAFE_ACCUMULATOR_LEAGUE")
-                risk_score -= 10
+                risk_score -= 8
 
         market_row = (
             session.query(MarketIntelligenceSnapshot)
@@ -186,29 +214,37 @@ def evaluate_pick_for_portfolio(
         )
 
         if market_row:
+            market_roi = float(market_row.recent_roi or 0.0)
+            market_survivability = float(market_row.survivability_score or 0.0)
+
             if not market_row.prediction_allowed:
-                return _rejected(
-                    "market blocked by DB intelligence",
-                    "DB_MARKET_BLOCKED",
-                )
+                if market_roi <= -0.35 or market_survivability < 5:
+                    return _rejected(
+                        "market hard-blocked by DB intelligence",
+                        "DB_MARKET_HARD_BLOCKED",
+                    )
+
+                risk_flags.append("DB_MARKET_SOFT_BLOCK")
+                risk_score += 18
 
             if market_row.stale:
                 risk_flags.append("STALE_MARKET_INTELLIGENCE")
                 risk_score += 3
 
-            if float(market_row.recent_roi or 0.0) < -0.10:
+            if market_roi < -0.20:
+                risk_flags.append("VERY_NEGATIVE_RECENT_MARKET_ROI")
+                risk_score += 18
+            elif market_roi < -0.10:
                 risk_flags.append("NEGATIVE_RECENT_MARKET_ROI")
-                risk_score += 12
+                risk_score += 10
 
-            survivability = float(market_row.survivability_score or 0.0)
-
-            if survivability < 10:
+            if market_survivability < 10:
                 risk_flags.append("VERY_LOW_MARKET_SURVIVABILITY")
-                risk_score += 25
-            elif survivability < 20:
+                risk_score += 18
+            elif market_survivability < 20:
                 risk_flags.append("LOW_MARKET_SURVIVABILITY")
-                risk_score += 12
-            elif survivability >= 60:
+                risk_score += 8
+            elif market_survivability >= 60:
                 risk_flags.append("STRONG_MARKET_SURVIVABILITY")
                 risk_score -= 8
 
@@ -222,29 +258,39 @@ def evaluate_pick_for_portfolio(
         )
 
         if league_market_row:
+            league_market_roi = float(league_market_row.recent_roi or 0.0)
+            league_market_survivability = float(
+                league_market_row.survivability_score or 0.0
+            )
+
             if not league_market_row.prediction_allowed:
-                return _rejected(
-                    "league-market blocked by DB intelligence",
-                    "DB_LEAGUE_MARKET_BLOCKED",
-                )
+                if league_market_roi <= -0.35 or league_market_survivability < 5:
+                    return _rejected(
+                        "league-market hard-blocked by DB intelligence",
+                        "DB_LEAGUE_MARKET_HARD_BLOCKED",
+                    )
+
+                risk_flags.append("DB_LEAGUE_MARKET_SOFT_BLOCK")
+                risk_score += 20
 
             if league_market_row.stale:
                 risk_flags.append("STALE_LEAGUE_MARKET")
                 risk_score += 3
 
-            if float(league_market_row.recent_roi or 0.0) < -0.10:
+            if league_market_roi < -0.20:
+                risk_flags.append("VERY_NEGATIVE_LEAGUE_MARKET_ROI")
+                risk_score += 20
+            elif league_market_roi < -0.10:
                 risk_flags.append("NEGATIVE_LEAGUE_MARKET_ROI")
-                risk_score += 15
-
-            survivability = float(league_market_row.survivability_score or 0.0)
-
-            if survivability < 10:
-                risk_flags.append("VERY_LOW_LEAGUE_MARKET_SURVIVABILITY")
-                risk_score += 25
-            elif survivability < 20:
-                risk_flags.append("LOW_LEAGUE_MARKET_SURVIVABILITY")
                 risk_score += 12
-            elif survivability >= 60:
+
+            if league_market_survivability < 10:
+                risk_flags.append("VERY_LOW_LEAGUE_MARKET_SURVIVABILITY")
+                risk_score += 18
+            elif league_market_survivability < 20:
+                risk_flags.append("LOW_LEAGUE_MARKET_SURVIVABILITY")
+                risk_score += 8
+            elif league_market_survivability >= 60:
                 risk_flags.append("STRONG_LEAGUE_MARKET_SURVIVABILITY")
                 risk_score -= 8
 
@@ -258,15 +304,24 @@ def evaluate_pick_for_portfolio(
         )
 
         if odds_row:
-            if not odds_row.prediction_allowed:
-                return _rejected(
-                    "odds band blocked by DB intelligence",
-                    "DB_ODDS_BAND_BLOCKED",
-                )
+            odds_roi = float(odds_row.roi or 0.0)
 
-            if float(odds_row.roi or 0.0) < -0.15:
+            if not odds_row.prediction_allowed:
+                if odds_roi <= -0.35:
+                    return _rejected(
+                        "odds band hard-blocked by DB intelligence",
+                        "DB_ODDS_BAND_HARD_BLOCKED",
+                    )
+
+                risk_flags.append("DB_ODDS_BAND_SOFT_BLOCK")
+                risk_score += 18
+
+            if odds_roi < -0.20:
+                risk_flags.append("VERY_NEGATIVE_ODDS_BAND_ROI")
+                risk_score += 15
+            elif odds_roi < -0.10:
                 risk_flags.append("NEGATIVE_ODDS_BAND_ROI")
-                risk_score += 10
+                risk_score += 8
 
         confidence_row = (
             session.query(ConfidenceBandIntelligenceSnapshot)
@@ -278,15 +333,24 @@ def evaluate_pick_for_portfolio(
         )
 
         if confidence_row:
-            if not confidence_row.prediction_allowed:
-                return _rejected(
-                    "confidence band blocked by DB intelligence",
-                    "DB_CONFIDENCE_BAND_BLOCKED",
-                )
+            confidence_roi = float(confidence_row.roi or 0.0)
 
-            if float(confidence_row.roi or 0.0) < -0.15:
+            if not confidence_row.prediction_allowed:
+                if confidence_roi <= -0.35:
+                    return _rejected(
+                        "confidence band hard-blocked by DB intelligence",
+                        "DB_CONFIDENCE_BAND_HARD_BLOCKED",
+                    )
+
+                risk_flags.append("DB_CONFIDENCE_BAND_SOFT_BLOCK")
+                risk_score += 16
+
+            if confidence_roi < -0.20:
+                risk_flags.append("VERY_NEGATIVE_CONFIDENCE_BAND_ROI")
+                risk_score += 15
+            elif confidence_roi < -0.10:
                 risk_flags.append("NEGATIVE_CONFIDENCE_BAND_ROI")
-                risk_score += 10
+                risk_score += 8
 
     risk_score = round(max(risk_score, 0.0), 2)
     tier = resolve_risk_tier(risk_score)
