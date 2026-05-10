@@ -16,6 +16,13 @@ from app.ingest.football_ingestion import (
     ingest_fixtures_for_date,
     ingest_fixtures_for_league_season,
 )
+from app.odds.synonym_intelligence import (
+    ensure_odds_synonym_table,
+    rebuild_odds_synonym_intelligence,
+    synonym_summary,
+)
+
+from app.odds.market_quality_engine import calculate_market_quality, get_enabled_markets
 from app.ingest.football_odds_ingestion import (
     ingest_odds_for_fixture,
     ingest_odds_for_upcoming_matches,
@@ -76,6 +83,9 @@ from app.services.intelligence_rebuilder import (
 from app.analysis.live_rejection_report import (
     build_live_rejection_report,
 )
+from app.odds.availability_scanner import scan_market_availability
+from app.odds.canonical_markets import supported_market_keys
+from app.odds.odds_matcher import find_best_odds_for_prediction
 from app.analysis.prediction_review_report import build_prediction_review_report
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
@@ -994,6 +1004,59 @@ def portfolio_profile_backtest(
     finally:
         session.close()
 
+@app.command("supported-markets")
+def supported_markets():
+    print("\n=== SUPPORTED CANONICAL MARKETS ===")
+    for market in supported_market_keys():
+        print(market)
+
+
+@app.command("scan-market-availability")
+def scan_market_availability_command(limit: int = 50000):
+    session = get_cli_session()
+    try:
+        result = scan_market_availability(session=session, limit=limit)
+        print("\n=== MARKET AVAILABILITY SCAN ===")
+        print(result)
+    finally:
+        session.close()
+
+
+@app.command("debug-odds-match")
+def debug_odds_match(
+    match_id: int,
+    market: str,
+):
+    session = get_cli_session()
+    try:
+        match = session.execute(
+            text(
+                """
+                SELECT id, home_team, away_team
+                FROM matches
+                WHERE id = :match_id
+                """
+            ),
+            {"match_id": match_id},
+        ).mappings().first()
+
+        if not match:
+            print({"matched": False, "reason": "match_not_found"})
+            return
+
+        result = find_best_odds_for_prediction(
+            session=session,
+            match_id=match_id,
+            target_market=market,
+            home_team=match["home_team"],
+            away_team=match["away_team"],
+        )
+
+        print("\n=== ODDS MATCH DEBUG ===")
+        print(result)
+    finally:
+        session.close()
+
 @app.command("historical-backtest-football")
 def historical_backtest_football(
     market: str = typer.Option("home_win", help="Market to backtest."),
@@ -1243,6 +1306,59 @@ def cli_confidence_band_profitability_fast(
     finally:
         session.close()
 
+@app.command("init-odds-intelligence")
+def init_odds_intelligence():
+    session = get_cli_session()
+    try:
+        ensure_odds_synonym_table(session)
+        print("\n=== ODDS INTELLIGENCE INITIALIZED ===")
+        print({"status": "ok"})
+    finally:
+        session.close()
+
+
+@app.command("rebuild-odds-synonyms")
+def rebuild_odds_synonyms(limit: int = 100000):
+    session = get_cli_session()
+    try:
+        result = rebuild_odds_synonym_intelligence(session=session, limit=limit)
+        print("\n=== ODDS SYNONYM INTELLIGENCE REBUILT ===")
+        print(result)
+    finally:
+        session.close()
+
+
+@app.command("odds-synonym-summary")
+def odds_synonym_summary():
+    session = get_cli_session()
+    try:
+        result = synonym_summary(session)
+        print("\n=== ODDS SYNONYM SUMMARY ===")
+        print(result)
+    finally:
+        session.close()
+
+
+@app.command("market-quality-report")
+def market_quality_report():
+    session = get_cli_session()
+    try:
+        result = calculate_market_quality(session)
+        print("\n=== MARKET QUALITY REPORT ===")
+        print(result)
+    finally:
+        session.close()
+
+
+@app.command("enabled-markets")
+def enabled_markets():
+    session = get_cli_session()
+    try:
+        result = get_enabled_markets(session)
+        print("\n=== ENABLED MARKETS ===")
+        print(result)
+    finally:
+        session.close()
 
 @app.command("optimize-profit-thresholds-fast")
 def cli_optimize_profit_thresholds_fast(
