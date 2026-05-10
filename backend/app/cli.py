@@ -62,6 +62,7 @@ from app.backtest.historical_value_backtest import run_historical_value_backtest
 from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
+from app.analysis.data_coverage_report import build_data_coverage_report
 from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 # backend/app/cli.py imports to add
 from app.analysis.test_portfolio_filters import test_portfolio_filters
@@ -75,6 +76,7 @@ from app.services.intelligence_rebuilder import (
 from app.analysis.live_rejection_report import (
     build_live_rejection_report,
 )
+from app.analysis.prediction_review_report import build_prediction_review_report
 from app.analysis.backtest_cache_analytics import (
     ProfitabilityFilters,
     confidence_band_profitability_fast,
@@ -703,6 +705,89 @@ def ingest_match_stats(
 
     typer.echo(result)
 
+@app.command("prediction-review-report")
+def prediction_review_report(
+    slate: str | None = typer.Option(None, "--slate"),
+    limit: int = typer.Option(80, "--limit"),
+    require_odds: bool = typer.Option(
+        False,
+        "--require-odds",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        report = build_prediction_review_report(
+            session=session,
+            slate=slate,
+            limit=limit,
+            require_odds=require_odds,
+        )
+
+        print("\n=== PREDICTION REVIEW REPORT ===")
+        print(
+            {
+                "slate": report["slate"],
+                "total_predictions_reviewed": report["total_predictions_reviewed"],
+                "approved_predictions": report["approved_predictions"],
+                "rejected_predictions": report["rejected_predictions"],
+                "require_odds": report["require_odds"],
+            }
+        )
+
+        print("\n=== PREDICTIONS ===")
+
+        for item in report["predictions"]:
+            print(
+                {
+                    "match_id": item["match_id"],
+                    "league": item["league"],
+                    "match": f"{item['home_team']} vs {item['away_team']}",
+                    "kickoff": item["kickoff_date"],
+                    "market": item["market"],
+                    "pick": item["predicted_label"],
+                    "confidence": float(item["confidence"] or 0.0),
+                    "odds": (
+                        float(item["odds"])
+                        if item["odds"] is not None
+                        else None
+                    ),
+                    "value_score": (
+                        float(item["value_score"])
+                        if item["value_score"] is not None
+                        else None
+                    ),
+                    "portfolio_allowed": item["portfolio_allowed"],
+                    "portfolio_tier": item["portfolio_tier"],
+                    "portfolio_risk_score": item["portfolio_risk_score"],
+                    "portfolio_reason": item["portfolio_reason"],
+                    "portfolio_flags": item["portfolio_flags"],
+                }
+            )
+
+    finally:
+        session.close()
+
+@app.command("data-coverage-report")
+def data_coverage_report():
+    session = get_cli_session()
+
+    try:
+        report = build_data_coverage_report(session)
+
+        print("\n=== DATA COVERAGE SUMMARY ===")
+        print(report["summary"])
+
+        print("\n=== WORST LEAGUES BY MISSING DATA ===")
+        for row in report["by_league"]:
+            print(row)
+
+        print("\n=== UPDATE PRIORITY MATCHES ===")
+        for row in report["update_priority"]:
+            print(row)
+
+    finally:
+        session.close()
 
 @app.command("competition-coverage-report")
 def competition_coverage_report(

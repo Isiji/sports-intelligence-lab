@@ -8,6 +8,7 @@ from app.db.models import (
     Match,
     OddsBandIntelligenceSnapshot,
 )
+from app.services.confidence_recalibration_service import recalibrate_confidence
 
 
 def resolve_odds_band(
@@ -65,9 +66,7 @@ def apply_prediction_intelligence(
     confidence = float(raw_confidence or 0)
 
     reasons: list[str] = []
-
     allowed = True
-
     multiplier = 1.0
 
     market_row = (
@@ -183,11 +182,27 @@ def apply_prediction_intelligence(
         0.01,
     )
 
+    recalibration = recalibrate_confidence(
+        session=session,
+        market=market,
+        confidence=adjusted_confidence,
+    )
+
+    final_confidence = float(
+        recalibration["recalibrated_confidence"]
+    )
+
+    reasons.extend(
+        recalibration.get("reasons", [])
+    )
+
     return {
         "allowed": allowed,
         "raw_confidence": confidence,
-        "adjusted_confidence": adjusted_confidence,
+        "adjusted_confidence": final_confidence,
+        "pre_recalibration_confidence": adjusted_confidence,
         "multiplier": round(multiplier, 4),
+        "recalibration": recalibration,
         "reasons": reasons,
         "league": match.league,
         "market": market,

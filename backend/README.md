@@ -55,6 +55,8 @@ python -m app.cli historical-group-backtest --slate football_2026-05-08
 
 python -m app.cli create-groups
 
+psql -U postgres -d sports_intelligence_lab
+
 COMPETITIONS = [
     # =========================
     # INTERNATIONAL
