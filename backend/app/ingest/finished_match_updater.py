@@ -208,9 +208,53 @@ def _apply_fixture_row_to_match(
         match.is_valid_for_training = False
 
     else:
-        match.is_finished = False
-        match.is_valid_for_training = False
+        # =====================================================
+        # PRODUCTION SAFETY FALLBACK
+        #
+        # Sometimes providers return scores before status
+        # synchronization becomes FT/AET/PEN.
+        #
+        # If we already have real scores and the match is not
+        # explicitly postponed/cancelled/live, force-finish it.
+        # =====================================================
 
+        LIVE_STATUS_CODES = {
+            "1H",
+            "2H",
+            "HT",
+            "ET",
+            "BT",
+            "LIVE",
+            "INT",
+        }
+
+        has_real_scores = (
+            home_goals is not None
+            and away_goals is not None
+        )
+
+        is_live_state = (
+            str(status_short).upper()
+            in LIVE_STATUS_CODES
+        )
+
+        if has_real_scores and not is_live_state:
+            match.is_finished = True
+            match.is_postponed = False
+            match.is_cancelled = False
+            match.is_valid_for_training = True
+
+            match.home_goals = int(home_goals)
+            match.away_goals = int(away_goals)
+
+            # normalize broken provider statuses
+            if status_short not in FINISHED_STATUS_CODES:
+                match.status = "FT"
+
+        else:
+            match.is_finished = False
+            match.is_valid_for_training = False
+            
     new_state = _snapshot_match(match)
 
     return {

@@ -17,6 +17,15 @@ class PredictionResponse(BaseModel):
     odds: float | None = None
     implied_probability: float | None = None
     value_score: float | None = None
+
+    is_correct: bool | None = None
+    result_label: str | None = None
+    profit_loss: float | None = None
+    stake: float | None = None
+    settled_at: datetime | None = None
+    closing_odds: float | None = None
+    clv: float | None = None
+
     created_at: datetime
 
     model_config = {

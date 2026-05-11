@@ -23,6 +23,10 @@ from app.grouping.profitability_intelligence import (
 from app.intelligence.correlation_rules import (
     evaluate_group_correlation,
 )
+from app.services.production_pick_scoring_service import score_pick_list
+from app.intelligence.exposure_control import apply_exposure_controls
+from app.intelligence.pick_recommendation_engine import build_recommendation_layer
+
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
 from app.intelligence.stake_engine import resolve_group_tier
 from app.odds.market_quality_engine import get_enabled_markets
@@ -255,12 +259,37 @@ def _build_profitability_aware_groups(
 
     if len(enriched_candidates) < config.min_group_size:
         return []
+    scored_candidates = score_pick_list(enriched_candidates)
 
-    groups = _construct_diversified_groups(
-        candidates=enriched_candidates,
-        config=config,
+    exposure_result = apply_exposure_controls(
+        picks=scored_candidates,
+        max_per_league=config.max_same_league_per_group,
+        max_per_market=config.max_same_market_per_group,
+        max_per_market_family=config.max_same_family_per_group,
     )
 
+    recommendation_layer = build_recommendation_layer(
+        exposure_result=exposure_result,
+    )
+
+    approved_candidates = recommendation_layer["approved_picks"]
+
+    print(
+        "[RECOMMENDATION FILTER]",
+        f"approved={len(recommendation_layer['approved_picks'])}",
+        f"watchlist={len(recommendation_layer['watchlist_picks'])}",
+        f"rejected={len(recommendation_layer['rejected_picks'])}",
+    )
+
+    if len(approved_candidates) < config.min_group_size:
+        print("[RECOMMENDATION FILTER] Not enough approved picks for grouping.")
+        return []
+
+    groups = _construct_diversified_groups(
+        candidates=approved_candidates,
+        config=config,
+    )
+    
     print(
         "[PORTFOLIO DEBUG]",
         f"portfolio_groups_created={len(groups)}",

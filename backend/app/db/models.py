@@ -147,6 +147,9 @@ class MatchOdds(Base):
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+# backend/app/db/models.py
+# REPLACE ONLY THE Prediction CLASS WITH THIS VERSION
+
 class Prediction(Base):
     __tablename__ = "predictions"
 
@@ -166,8 +169,49 @@ class Prediction(Base):
     implied_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # =====================================================
+    # PRODUCTION SETTLEMENT FIELDS
+    # =====================================================
 
+    is_correct: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+        index=True,
+    )
+
+    result_label: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
+
+    profit_loss: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    stake: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        index=True,
+    )
+
+    closing_odds: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    clv: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class PredictionGroupItem(Base):
     __tablename__ = "prediction_group_items"
@@ -795,6 +839,9 @@ class ConfidenceBandIntelligenceSnapshot(Base):
 # LIVE PREDICTION OUTCOMES
 # =========================================================
 
+# backend/app/db/models.py
+# REPLACE ONLY THE PredictionOutcome CLASS WITH THIS VERSION
+
 class PredictionOutcome(Base):
     __tablename__ = "prediction_outcomes"
 
@@ -817,11 +864,21 @@ class PredictionOutcome(Base):
 
     market: Mapped[str] = mapped_column(String(80), index=True)
 
-    predicted_label: Mapped[str] = mapped_column(String(80))
+    predicted_label: Mapped[str] = mapped_column(String(80), index=True)
+
+    result_label: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
 
     confidence: Mapped[float] = mapped_column(Float)
 
     odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    closing_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    clv: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     implied_probability: Mapped[float | None] = mapped_column(
         Float,
@@ -833,16 +890,21 @@ class PredictionOutcome(Base):
         nullable=True,
     )
 
-    won: Mapped[bool] = mapped_column(Boolean, index=True)
+    won: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+        index=True,
+    )
 
     profit: Mapped[float] = mapped_column(Float, default=0.0)
+
+    stake: Mapped[float] = mapped_column(Float, default=100.0)
 
     settled_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
         index=True,
     )
-
 
 # =========================================================
 # DYNAMIC LEAGUE TIERS

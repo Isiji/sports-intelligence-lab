@@ -44,6 +44,12 @@ from app.backtest.calibration import (
     evaluate_cached_backtest_calibration_by_market,
     evaluate_confidence_calibration,
 )
+# backend/app/cli.py
+# ADD IMPORT
+
+from app.services.prediction_settlement_service import (
+    settle_production_predictions,
+)
 from app.backtest.profit_threshold_optimizer import (
     optimize_profit_thresholds,
     optimize_all_profit_thresholds,
@@ -1375,6 +1381,35 @@ def run_daily_cycle_command(
 
     print("\n=== DAILY PRODUCTION CYCLE SUMMARY ===")
     print(result)
+    
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("settle-production-predictions")
+def settle_production_predictions_command(
+    slate: str = typer.Option(..., "--slate"),
+    stake: float = typer.Option(100.0, "--stake"),
+    rebuild_intelligence: bool = typer.Option(
+        True,
+        "--rebuild-intelligence/--no-rebuild-intelligence",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        result = settle_production_predictions(
+            session=session,
+            slate=slate,
+            stake=stake,
+            rebuild_intelligence=rebuild_intelligence,
+        )
+
+        print("\n=== PRODUCTION PREDICTIONS SETTLED ===")
+        print(result)
+
+    finally:
+        session.close()
+        
 @app.command("confidence-band-profitability-fast")
 def cli_confidence_band_profitability_fast(
     market: str | None = typer.Option(None),
