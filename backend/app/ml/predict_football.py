@@ -1,11 +1,9 @@
-# backend/app/ml/predict_football.py
-
 import pickle
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Match, MatchOdds, Prediction, PredictionGroupItem
+from app.db.models import Match, Prediction, PredictionGroupItem
 from app.features.football_features import (
     MARKET_LABELS,
     MARKET_TARGETS,
@@ -15,6 +13,7 @@ from app.features.football_features import (
 from app.ml.registry import load_model_metadata
 from app.ml.train_football import metadata_path_for_market, model_path_for_market
 from app.odds.market_quality_engine import get_enabled_markets
+from app.services.odds_lookup_service import find_best_odds
 from app.services.prediction_guard_service import apply_prediction_guard
 from app.services.prediction_intelligence_service import (
     apply_prediction_intelligence,
@@ -55,7 +54,6 @@ def predict_all_football_markets(
                 f"[SKIPPED MARKET QUALITY DISABLED] {market}"
             )
             continue
-
 
         inserted += predict_football_market(
             session=session,
@@ -125,7 +123,7 @@ def predict_football_market(
         x=x,
     )
 
-    positive_label, negative_label = MARKET_LABELS[market]
+    positive_label, _negative_label = MARKET_LABELS[market]
 
     inserted = 0
 
@@ -171,12 +169,14 @@ def predict_football_market(
             guard["adjusted_confidence"]
         )
 
-        odds = _find_odds(
+        odds_result = find_best_odds(
             session=session,
             match_id=match_id,
             market=market,
             selection=predicted_label,
         )
+
+        odds = odds_result.odds
 
         intelligence = apply_prediction_intelligence(
             session=session,
@@ -267,115 +267,3 @@ def _predict_ensemble_probabilities(
             final_probability += weighted_probability
 
     return final_probability
-
-
-def _find_odds(
-    session: Session,
-    match_id: int,
-    market: str,
-    selection: str,
-) -> float | None:
-    odds_lookup_mapping = {
-        ("home_win", "HOME_WIN"): ("home_win", "HOME_WIN"),
-        ("home_win", "NOT_HOME_WIN"): ("away_win", "AWAY_WIN"),
-
-        ("away_win", "AWAY_WIN"): ("away_win", "AWAY_WIN"),
-        ("away_win", "NOT_AWAY_WIN"): ("home_win", "HOME_WIN"),
-
-        ("draw", "DRAW"): ("draw", "DRAW"),
-        ("draw", "NOT_DRAW"): ("double_chance_12", "DOUBLE_CHANCE_12"),
-
-        ("over_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
-        ("over_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
-        ("under_1_5_goals", "UNDER_1_5"): ("under_1_5_goals", "UNDER_1_5"),
-        ("under_1_5_goals", "OVER_1_5"): ("over_1_5_goals", "OVER_1_5"),
-
-        ("over_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
-        ("over_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
-        ("under_2_5_goals", "UNDER_2_5"): ("under_2_5_goals", "UNDER_2_5"),
-        ("under_2_5_goals", "OVER_2_5"): ("over_2_5_goals", "OVER_2_5"),
-
-        ("over_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
-        ("over_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
-        ("under_3_5_goals", "UNDER_3_5"): ("under_3_5_goals", "UNDER_3_5"),
-        ("under_3_5_goals", "OVER_3_5"): ("over_3_5_goals", "OVER_3_5"),
-
-        ("btts_yes", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
-        ("btts_yes", "BTTS_NO"): ("btts_no", "BTTS_NO"),
-        ("btts_no", "BTTS_NO"): ("btts_no", "BTTS_NO"),
-        ("btts_no", "BTTS_YES"): ("btts_yes", "BTTS_YES"),
-
-        ("double_chance_x2", "DOUBLE_CHANCE_X2"): ("double_chance_x2", "DOUBLE_CHANCE_X2"),
-        ("double_chance_x2", "NOT_DOUBLE_CHANCE_X2"): ("home_win", "HOME_WIN"),
-
-        ("double_chance_1x", "DOUBLE_CHANCE_1X"): ("double_chance_1x", "DOUBLE_CHANCE_1X"),
-        ("double_chance_1x", "NOT_DOUBLE_CHANCE_1X"): ("away_win", "AWAY_WIN"),
-
-        ("double_chance_12", "DOUBLE_CHANCE_12"): ("double_chance_12", "DOUBLE_CHANCE_12"),
-        ("double_chance_12", "NOT_DOUBLE_CHANCE_12"): ("draw", "DRAW"),
-    }
-
-    lookup_market, lookup_selection = odds_lookup_mapping.get(
-        (market, selection),
-        (market, selection),
-    )
-
-    odds_rows = (
-        session.query(MatchOdds)
-        .filter(
-            MatchOdds.match_id == match_id,
-            MatchOdds.market == lookup_market,
-            MatchOdds.selection == lookup_selection,
-        )
-        .order_by(
-            MatchOdds.retrieved_at.desc(),
-            MatchOdds.id.desc(),
-        )
-        .all()
-    )
-
-    if not odds_rows:
-        print(
-            "[ODDS MISS]",
-            f"prediction_market={market}",
-            f"prediction_selection={selection}",
-            f"lookup_market={lookup_market}",
-            f"lookup_selection={lookup_selection}",
-            f"match_id={match_id}",
-        )
-
-        return None
-
-    valid_odds = []
-
-    for row in odds_rows:
-        if row.odds is None:
-            continue
-
-        try:
-            odds_value = float(row.odds)
-        except Exception:
-            continue
-
-        if odds_value <= 1.01:
-            continue
-
-        if odds_value > 100:
-            continue
-
-        valid_odds.append(odds_value)
-
-    if not valid_odds:
-        print(
-            "[ODDS INVALID]",
-            f"market={lookup_market}",
-            f"selection={lookup_selection}",
-            f"match_id={match_id}",
-            f"rows_found={len(odds_rows)}",
-        )
-
-        return None
-
-    selected_odds = max(valid_odds)
-
-    return round(selected_odds, 4)

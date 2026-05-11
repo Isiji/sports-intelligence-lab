@@ -1,7 +1,37 @@
+from __future__ import annotations
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.odds.canonical_markets import supported_market_keys
+
+PRODUCTION_MARKETS = [
+    "home_win",
+    "away_win",
+    "draw",
+
+    "double_chance_1x",
+    "double_chance_x2",
+    "double_chance_12",
+
+    "over_1_5_goals",
+    "under_1_5_goals",
+    "over_2_5_goals",
+    "under_2_5_goals",
+    "over_3_5_goals",
+    "under_3_5_goals",
+
+    "btts_yes",
+    "btts_no",
+
+    "home_over_0_5_goals",
+    "away_over_0_5_goals",
+
+    "home_clean_sheet",
+    "away_clean_sheet",
+
+    "corners_over_8_5",
+    "shots_on_target_over_8_5",
+]
 
 
 def calculate_market_quality(session: Session) -> dict:
@@ -9,61 +39,47 @@ def calculate_market_quality(session: Session) -> dict:
         text(
             """
             SELECT
-                canonical_market,
-                SUM(usage_count) AS odds_rows,
-                COUNT(*) AS synonym_pairs
-            FROM odds_market_synonyms
-            WHERE active = TRUE
-            GROUP BY canonical_market
+                market,
+                COUNT(*) AS odds_rows,
+                COUNT(DISTINCT match_id) AS matches_with_odds
+            FROM match_odds
+            GROUP BY market
+            ORDER BY COUNT(*) DESC
             """
         )
     ).mappings().all()
 
-    by_market = {
-        row["canonical_market"]: {
-            "odds_rows": int(row["odds_rows"] or 0),
-            "synonym_pairs": int(row["synonym_pairs"] or 0),
-        }
-        for row in rows
-    }
+    markets: dict[str, dict] = {}
 
-    report = {}
-
-    for market in supported_market_keys():
-        odds_rows = by_market.get(market, {}).get("odds_rows", 0)
-        synonym_pairs = by_market.get(market, {}).get("synonym_pairs", 0)
-
-        if odds_rows >= 25000:
-            tier = "ELITE"
-            enabled = True
-        elif odds_rows >= 10000:
-            tier = "STRONG"
-            enabled = True
-        elif odds_rows >= 3000:
-            tier = "EXPERIMENTAL"
-            enabled = True
-        else:
-            tier = "DISABLED"
-            enabled = False
-
-        report[market] = {
+    for market in PRODUCTION_MARKETS:
+        markets[market] = {
             "market": market,
-            "odds_rows": odds_rows,
-            "synonym_pairs": synonym_pairs,
-            "tier": tier,
-            "enabled": enabled,
+            "odds_rows": 0,
+            "matches_with_odds": 0,
+            "enabled": True,
+            "quality_tier": "production_enabled",
         }
+
+    for row in rows:
+        market = str(row["market"])
+
+        if market not in markets:
+            markets[market] = {
+                "market": market,
+                "odds_rows": int(row["odds_rows"] or 0),
+                "matches_with_odds": int(row["matches_with_odds"] or 0),
+                "enabled": True,
+                "quality_tier": "production_enabled_from_odds_db",
+            }
+        else:
+            markets[market]["odds_rows"] = int(row["odds_rows"] or 0)
+            markets[market]["matches_with_odds"] = int(row["matches_with_odds"] or 0)
 
     return {
-        "status": "ok",
-        "markets": report,
+        "markets": markets,
+        "production_markets": PRODUCTION_MARKETS,
     }
 
 
 def get_enabled_markets(session: Session) -> list[str]:
-    quality = calculate_market_quality(session)
-    return [
-        market
-        for market, data in quality["markets"].items()
-        if data["enabled"]
-    ]
+    return PRODUCTION_MARKETS

@@ -21,6 +21,7 @@ from app.odds.synonym_intelligence import (
     rebuild_odds_synonym_intelligence,
     synonym_summary,
 )
+from app.analysis.league_strength_report import build_league_strength_report
 
 from app.odds.market_quality_engine import calculate_market_quality, get_enabled_markets
 from app.ingest.football_odds_ingestion import (
@@ -714,6 +715,32 @@ def ingest_match_stats(
         )
 
     typer.echo(result)
+    
+@app.command("league-strength-report")
+def league_strength_report(
+    limit: int = typer.Option(80),
+):
+    session = get_cli_session()
+
+    try:
+        report = build_league_strength_report(
+            session=session,
+            limit=limit,
+        )
+
+        print("\n=== GLOBAL DATA SUMMARY ===")
+        print(report["summary"])
+
+        print("\n=== LEAGUE STRENGTH REPORT ===")
+        for row in report["leagues"]:
+            print(row)
+
+        print("\n=== MISSING ODDS PRIORITY ===")
+        for row in report["missing_odds_priority"]:
+            print(row)
+
+    finally:
+        session.close()
 
 @app.command("prediction-review-report")
 def prediction_review_report(
