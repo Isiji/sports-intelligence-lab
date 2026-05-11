@@ -18,13 +18,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("matches", sa.Column("stats_attempted_at", sa.DateTime(), nullable=True))
-    op.add_column("matches", sa.Column("stats_attempt_count", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("matches", sa.Column("stats_unavailable", sa.Boolean(), nullable=False, server_default=sa.false()))
+    #op.add_column("matches", sa.Column("stats_attempted_at", sa.DateTime(), nullable=True))
+    #op.add_column("matches", sa.Column("stats_attempt_count", sa.Integer(), nullable=False, server_default="0"))
+    #op.add_column("matches", sa.Column("stats_unavailable", sa.Boolean(), nullable=False, server_default=sa.false()))
 
-    op.add_column("matches", sa.Column("odds_attempted_at", sa.DateTime(), nullable=True))
-    op.add_column("matches", sa.Column("odds_attempt_count", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("matches", sa.Column("odds_unavailable", sa.Boolean(), nullable=False, server_default=sa.false()))
+    #op.add_column("matches", sa.Column("odds_attempted_at", sa.DateTime(), nullable=True))
+    #op.add_column("matches", sa.Column("odds_attempt_count", sa.Integer(), nullable=False, server_default="0"))
+    #op.add_column("matches", sa.Column("odds_unavailable", sa.Boolean(), nullable=False, server_default=sa.false()))
 
     op.create_index("ix_matches_stats_attempted_at", "matches", ["stats_attempted_at"])
     op.create_index("ix_matches_stats_unavailable", "matches", ["stats_unavailable"])

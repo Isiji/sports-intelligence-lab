@@ -10,6 +10,13 @@ from app.db.models import (
     MarketIntelligenceSnapshot,
     OddsBandIntelligenceSnapshot,
 )
+from sqlalchemy import delete, text
+
+from app.db.models import (
+    DynamicLeagueTier,
+    MarketFamilySnapshot,
+)
+
 
 
 def calculate_recent_metrics(
@@ -531,3 +538,100 @@ def rebuild_league_market_intelligence(session: Session, run_tag: str):
 
     session.commit()
     return {"league_market_rows": inserted}
+
+
+
+def rebuild_market_family_intelligence(
+    session,
+):
+    session.execute(
+        delete(MarketFamilySnapshot)
+    )
+
+    rows = session.execute(
+        text(
+            """
+            WITH classified AS (
+                SELECT
+                    CASE
+                        WHEN market LIKE '%over%'
+                             OR market LIKE '%under%'
+                             OR market LIKE '%btts%'
+                        THEN 'GOALS'
+
+                        WHEN market LIKE '%corner%'
+                        THEN 'CORNERS'
+
+                        WHEN market LIKE '%handicap%'
+                        THEN 'HANDICAP'
+
+                        WHEN market LIKE '%draw%'
+                             OR market LIKE '%win%'
+                        THEN 'RESULT'
+
+                        ELSE 'OTHER'
+                    END AS family_name,
+
+                    won,
+                    profit
+
+                FROM prediction_outcomes
+            )
+
+            SELECT
+                family_name,
+                COUNT(*) AS bets,
+                ROUND(
+                    AVG(
+                        CASE
+                            WHEN won = true THEN 1.0
+                            ELSE 0.0
+                        END
+                    )::numeric,
+                    4
+                ) AS hit_rate,
+
+                ROUND(
+                    AVG(profit)::numeric,
+                    4
+                ) AS roi
+
+            FROM classified
+            GROUP BY family_name
+            """
+        )
+    ).mappings().all()
+
+    for row in rows:
+        hit_rate = float(
+            row["hit_rate"] or 0
+        )
+
+        roi = float(
+            row["roi"] or 0
+        )
+
+        survivability_score = round(
+            (hit_rate * 60)
+            + (max(roi, -1) * 40),
+            4,
+        )
+
+        session.add(
+            MarketFamilySnapshot(
+                family_name=row["family_name"],
+                bets=int(row["bets"] or 0),
+                hit_rate=hit_rate,
+                roi=roi,
+                survivability_score=survivability_score,
+                confidence_multiplier=max(
+                    min(
+                        survivability_score / 100,
+                        1.15,
+                    ),
+                    0.40,
+                ),
+            )
+        )
+
+    session.commit()

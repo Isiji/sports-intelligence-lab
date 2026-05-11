@@ -485,9 +485,6 @@ class HistoricalBacktestBet(Base):
 # ADVANCED INTELLIGENCE SNAPSHOTS
 # =========================================================
 
-# backend/app/db/models.py
-# ONLY REPLACE THESE SECTIONS
-
 class MarketIntelligenceSnapshot(Base):
     __tablename__ = "market_intelligence_snapshots"
 
@@ -786,6 +783,154 @@ class ConfidenceBandIntelligenceSnapshot(Base):
         String(60),
         nullable=True,
         index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    
+# =========================================================
+# LIVE PREDICTION OUTCOMES
+# =========================================================
+
+class PredictionOutcome(Base):
+    __tablename__ = "prediction_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    prediction_id: Mapped[int] = mapped_column(
+        ForeignKey("predictions.id"),
+        index=True,
+        unique=True,
+    )
+
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id"),
+        index=True,
+    )
+
+    slate: Mapped[str] = mapped_column(String(120), index=True)
+
+    league: Mapped[str] = mapped_column(String(160), index=True)
+
+    market: Mapped[str] = mapped_column(String(80), index=True)
+
+    predicted_label: Mapped[str] = mapped_column(String(80))
+
+    confidence: Mapped[float] = mapped_column(Float)
+
+    odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    implied_probability: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    value_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    won: Mapped[bool] = mapped_column(Boolean, index=True)
+
+    profit: Mapped[float] = mapped_column(Float, default=0.0)
+
+    settled_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        index=True,
+    )
+
+
+# =========================================================
+# DYNAMIC LEAGUE TIERS
+# =========================================================
+
+class DynamicLeagueTier(Base):
+    __tablename__ = "dynamic_league_tiers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    league: Mapped[str] = mapped_column(
+        String(160),
+        unique=True,
+        index=True,
+    )
+
+    tier: Mapped[str] = mapped_column(
+        String(40),
+        default="WEAK",
+        index=True,
+    )
+
+    strength_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    profitability_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    stats_quality_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    odds_quality_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    survivability_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    prediction_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+# =========================================================
+# MARKET FAMILY INTELLIGENCE
+# =========================================================
+
+class MarketFamilySnapshot(Base):
+    __tablename__ = "market_family_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    family_name: Mapped[str] = mapped_column(
+        String(80),
+        unique=True,
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    survivability_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    confidence_multiplier: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
     )
 
     updated_at: Mapped[datetime] = mapped_column(

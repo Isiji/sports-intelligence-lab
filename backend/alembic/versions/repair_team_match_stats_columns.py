@@ -86,19 +86,6 @@ def upgrade() -> None:
         nullable=False,
     )
 
-    op.create_index(
-        "ix_team_match_stats_source",
-        "team_match_stats",
-        ["source"],
-        unique=False,
-    )
-
-    op.create_index(
-        "ix_team_match_stats_is_real",
-        "team_match_stats",
-        ["is_real"],
-        unique=False,
-    )
 
 
 def downgrade() -> None:
