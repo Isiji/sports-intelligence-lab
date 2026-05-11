@@ -145,12 +145,11 @@ def predict_football_market(
             probabilities[row_index]
         )
 
-        if probability >= 0.5:
-            predicted_label = positive_label
-            confidence = probability
-        else:
-            predicted_label = negative_label
-            confidence = 1 - probability
+        if probability < 0.5:
+            continue
+
+        predicted_label = positive_label
+        confidence = probability
 
         guard = apply_prediction_guard(
             session=session,
