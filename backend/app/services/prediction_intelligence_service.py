@@ -1,15 +1,19 @@
+# backend/app/services/prediction_intelligence_service.py
+
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    BookmakerIntelligenceSnapshot,
     ConfidenceBandIntelligenceSnapshot,
+    DynamicLeagueTier,
     LeagueIntelligenceSnapshot,
     LeagueMarketIntelligenceSnapshot,
+    MarketFamilySnapshot,
     MarketIntelligenceSnapshot,
     Match,
     OddsBandIntelligenceSnapshot,
 )
 from app.services.confidence_recalibration_service import recalibrate_confidence
-
 
 MIN_ALLOWED_CONFIDENCE_MULTIPLIER = 0.72
 MAX_ALLOWED_CONFIDENCE_MULTIPLIER = 1.18
@@ -28,6 +32,35 @@ def clamp_multiplier(value: float) -> float:
             MAX_ALLOWED_CONFIDENCE_MULTIPLIER,
         ),
     )
+
+
+def resolve_market_family(
+    market: str,
+) -> str:
+    market = market.lower()
+
+    if (
+        "over" in market
+        or "under" in market
+        or "goal" in market
+        or "btts" in market
+    ):
+        return "GOALS"
+
+    if "corner" in market:
+        return "CORNERS"
+
+    if "handicap" in market:
+        return "HANDICAP"
+
+    if (
+        "win" in market
+        or "draw" in market
+        or "chance" in market
+    ):
+        return "RESULT"
+
+    return "OTHER"
 
 
 def resolve_odds_band(
@@ -75,10 +108,15 @@ def resolve_confidence_band(
     return "0.90+"
 
 
-def _safe_float_attr(row, names: list[str], default: float = 0.0) -> float:
+def _safe_float_attr(
+    row,
+    names: list[str],
+    default: float = 0.0,
+) -> float:
     for name in names:
         if hasattr(row, name):
             value = getattr(row, name)
+
             if value is not None:
                 return float(value)
 
@@ -117,12 +155,14 @@ def _evaluate_market_row(
         reasons.append(
             f"{scope}: survivability too low"
         )
+
         return False, multiplier
 
     if roi <= HARD_BLOCK_NEGATIVE_ROI:
         reasons.append(
             f"{scope}: extremely negative ROI"
         )
+
         return False, multiplier
 
     if (
@@ -133,6 +173,7 @@ def _evaluate_market_row(
             reasons.append(
                 f"{scope}: blocked by intelligence"
             )
+
             return False, multiplier
 
         reasons.append(
@@ -141,24 +182,40 @@ def _evaluate_market_row(
 
     return True, multiplier
 
+
 def apply_prediction_intelligence(
     session: Session,
     match: Match,
     market: str,
     raw_confidence: float,
     odds: float | None,
+    bookmaker: str | None = None,
 ):
-    confidence = float(raw_confidence or 0)
+    confidence = float(
+        raw_confidence or 0
+    )
 
     reasons: list[str] = []
+
     allowed = True
 
     multipliers: list[float] = []
 
+    market_family = resolve_market_family(
+        market
+    )
+
+    # =====================================================
+    # MARKET
+    # =====================================================
+
     market_row = (
-        session.query(MarketIntelligenceSnapshot)
+        session.query(
+            MarketIntelligenceSnapshot
+        )
         .filter(
-            MarketIntelligenceSnapshot.market == market,
+            MarketIntelligenceSnapshot.market
+            == market
         )
         .first()
     )
@@ -174,12 +231,21 @@ def apply_prediction_intelligence(
     if not market_allowed:
         allowed = False
 
-    multipliers.append(market_multiplier)
+    multipliers.append(
+        market_multiplier
+    )
+
+    # =====================================================
+    # LEAGUE
+    # =====================================================
 
     league_row = (
-        session.query(LeagueIntelligenceSnapshot)
+        session.query(
+            LeagueIntelligenceSnapshot
+        )
         .filter(
-            LeagueIntelligenceSnapshot.league == match.league,
+            LeagueIntelligenceSnapshot.league
+            == match.league
         )
         .first()
     )
@@ -195,23 +261,34 @@ def apply_prediction_intelligence(
     if not league_allowed:
         allowed = False
 
-    multipliers.append(league_multiplier)
+    multipliers.append(
+        league_multiplier
+    )
+
+    # =====================================================
+    # LEAGUE MARKET
+    # =====================================================
 
     league_market_row = (
-        session.query(LeagueMarketIntelligenceSnapshot)
+        session.query(
+            LeagueMarketIntelligenceSnapshot
+        )
         .filter(
-            LeagueMarketIntelligenceSnapshot.league == match.league,
-            LeagueMarketIntelligenceSnapshot.market == market,
+            LeagueMarketIntelligenceSnapshot.league
+            == match.league,
+            LeagueMarketIntelligenceSnapshot.market
+            == market,
         )
         .first()
     )
 
-    league_market_allowed, league_market_multiplier = (
-        _evaluate_market_row(
-            league_market_row,
-            "league_market",
-            reasons,
-        )
+    (
+        league_market_allowed,
+        league_market_multiplier,
+    ) = _evaluate_market_row(
+        league_market_row,
+        "league_market",
+        reasons,
     )
 
     if not league_market_allowed:
@@ -221,7 +298,13 @@ def apply_prediction_intelligence(
         league_market_multiplier
     )
 
-    odds_band = resolve_odds_band(odds)
+    # =====================================================
+    # ODDS BAND
+    # =====================================================
+
+    odds_band = resolve_odds_band(
+        odds
+    )
 
     if odds_band:
         odds_row = (
@@ -229,8 +312,10 @@ def apply_prediction_intelligence(
                 OddsBandIntelligenceSnapshot
             )
             .filter(
-                OddsBandIntelligenceSnapshot.market == market,
-                OddsBandIntelligenceSnapshot.odds_band == odds_band,
+                OddsBandIntelligenceSnapshot.market
+                == market,
+                OddsBandIntelligenceSnapshot.odds_band
+                == odds_band,
             )
             .first()
         )
@@ -246,10 +331,18 @@ def apply_prediction_intelligence(
         if not odds_allowed:
             allowed = False
 
-        multipliers.append(odds_multiplier)
+        multipliers.append(
+            odds_multiplier
+        )
 
-    confidence_band = resolve_confidence_band(
-        confidence
+    # =====================================================
+    # CONFIDENCE BAND
+    # =====================================================
+
+    confidence_band = (
+        resolve_confidence_band(
+            confidence
+        )
     )
 
     confidence_row = (
@@ -257,18 +350,21 @@ def apply_prediction_intelligence(
             ConfidenceBandIntelligenceSnapshot
         )
         .filter(
-            ConfidenceBandIntelligenceSnapshot.market == market,
-            ConfidenceBandIntelligenceSnapshot.confidence_band == confidence_band,
+            ConfidenceBandIntelligenceSnapshot.market
+            == market,
+            ConfidenceBandIntelligenceSnapshot.confidence_band
+            == confidence_band,
         )
         .first()
     )
 
-    confidence_allowed, confidence_multiplier = (
-        _evaluate_market_row(
-            confidence_row,
-            "confidence_band",
-            reasons,
-        )
+    (
+        confidence_allowed,
+        confidence_multiplier,
+    ) = _evaluate_market_row(
+        confidence_row,
+        "confidence_band",
+        reasons,
     )
 
     if not confidence_allowed:
@@ -278,11 +374,123 @@ def apply_prediction_intelligence(
         confidence_multiplier
     )
 
+    # =====================================================
+    # DYNAMIC LEAGUE TIER
+    # =====================================================
+
+    dynamic_league = (
+        session.query(
+            DynamicLeagueTier
+        )
+        .filter(
+            DynamicLeagueTier.league
+            == match.league
+        )
+        .first()
+    )
+
+    if dynamic_league:
+        if (
+            dynamic_league.tier
+            == "VERY_STRONG"
+        ):
+            multipliers.append(1.08)
+
+            reasons.append(
+                "very_strong_league"
+            )
+
+        elif (
+            dynamic_league.tier
+            == "STRONG"
+        ):
+            multipliers.append(1.03)
+
+            reasons.append(
+                "strong_league"
+            )
+
+        elif (
+            dynamic_league.tier
+            == "WEAK"
+        ):
+            multipliers.append(0.92)
+
+            reasons.append(
+                "weak_league"
+            )
+
+    # =====================================================
+    # MARKET FAMILY
+    # =====================================================
+
+    family_row = (
+        session.query(
+            MarketFamilySnapshot
+        )
+        .filter(
+            MarketFamilySnapshot.family_name
+            == market_family
+        )
+        .first()
+    )
+
+    if family_row:
+        family_multiplier = float(
+            family_row.confidence_multiplier
+            or 1.0
+        )
+
+        multipliers.append(
+            family_multiplier
+        )
+
+        reasons.append(
+            f"market_family:{market_family}"
+        )
+
+    # =====================================================
+    # BOOKMAKER INTELLIGENCE
+    # =====================================================
+
+    bookmaker_multiplier = 1.0
+
+    if bookmaker:
+        bookmaker_row = (
+            session.query(
+                BookmakerIntelligenceSnapshot
+            )
+            .filter(
+                BookmakerIntelligenceSnapshot.bookmaker
+                == bookmaker
+            )
+            .first()
+        )
+
+        if bookmaker_row:
+            bookmaker_multiplier = float(
+                bookmaker_row.confidence_multiplier
+                or 1.0
+            )
+
+            multipliers.append(
+                bookmaker_multiplier
+            )
+
+            reasons.append(
+                f"bookmaker:{bookmaker}"
+            )
+
+    # =====================================================
+    # FINAL MULTIPLIER
+    # =====================================================
+
     if multipliers:
         combined_multiplier = (
             sum(multipliers)
             / len(multipliers)
         )
+
     else:
         combined_multiplier = 1.0
 
@@ -291,7 +499,8 @@ def apply_prediction_intelligence(
     )
 
     adjusted_confidence = round(
-        confidence * combined_multiplier,
+        confidence
+        * combined_multiplier,
         4,
     )
 
@@ -299,6 +508,10 @@ def apply_prediction_intelligence(
         min(adjusted_confidence, 0.97),
         0.05,
     )
+
+    # =====================================================
+    # RECALIBRATION
+    # =====================================================
 
     recalibration = recalibrate_confidence(
         session=session,
@@ -323,7 +536,10 @@ def apply_prediction_intelligence(
     )
 
     reasons.extend(
-        recalibration.get("reasons", [])
+        recalibration.get(
+            "reasons",
+            [],
+        )
     )
 
     return {
@@ -343,6 +559,8 @@ def apply_prediction_intelligence(
         "reasons": reasons,
         "league": match.league,
         "market": market,
+        "market_family": market_family,
+        "bookmaker": bookmaker,
         "odds_band": odds_band,
         "confidence_band": confidence_band,
     }

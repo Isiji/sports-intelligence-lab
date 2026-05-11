@@ -12,7 +12,10 @@ from app.db.models import (
     OddsBandIntelligenceSnapshot,
 )
 from app.odds.market_quality_engine import get_enabled_markets
-
+from app.db.models import (
+    DynamicLeagueTier,
+    MarketFamilySnapshot,
+)
 
 @dataclass
 class PortfolioFilterResult:
@@ -74,6 +77,33 @@ def resolve_risk_tier(risk_score: float) -> str:
         return "AGGRESSIVE"
     return "REJECTED"
 
+def resolve_market_family(
+    market: str,
+) -> str:
+    market = market.lower()
+
+    if (
+        "over" in market
+        or "under" in market
+        or "btts" in market
+        or "goal" in market
+    ):
+        return "GOALS"
+
+    if "corner" in market:
+        return "CORNERS"
+
+    if "handicap" in market:
+        return "HANDICAP"
+
+    if (
+        "win" in market
+        or "draw" in market
+        or "chance" in market
+    ):
+        return "RESULT"
+
+    return "OTHER"
 
 def evaluate_pick_for_portfolio(
     *,
@@ -91,6 +121,7 @@ def evaluate_pick_for_portfolio(
     selected_league = league or "UNKNOWN"
     selected_odds_band = get_odds_band(odds)
     selected_confidence_band = get_confidence_band(confidence)
+    selected_market_family = resolve_market_family(market)
 
     if session is not None:
         enabled_markets = set(get_enabled_markets(session))
@@ -351,7 +382,74 @@ def evaluate_pick_for_portfolio(
             elif confidence_roi < -0.10:
                 risk_flags.append("NEGATIVE_CONFIDENCE_BAND_ROI")
                 risk_score += 8
+        # ============================================
+        # DYNAMIC LEAGUE TIERS
+        # ============================================
 
+        tier_row = (
+            session.query(DynamicLeagueTier)
+            .filter(
+                DynamicLeagueTier.league == selected_league
+            )
+            .first()
+        )
+
+        if tier_row:
+            if tier_row.tier == "VERY_STRONG":
+                risk_flags.append("VERY_STRONG_LEAGUE")
+                risk_score -= 10
+
+            elif tier_row.tier == "STRONG":
+                risk_flags.append("STRONG_LEAGUE")
+                risk_score -= 4
+
+            elif tier_row.tier == "WEAK":
+                risk_flags.append("WEAK_LEAGUE")
+                risk_score += 8
+
+        # ============================================
+        # MARKET FAMILY INTELLIGENCE
+        # ============================================
+
+        family_row = (
+            session.query(MarketFamilySnapshot)
+            .filter(
+                MarketFamilySnapshot.family_name
+                == selected_market_family
+            )
+            .first()
+        )
+
+        if family_row:
+            family_roi = float(
+                family_row.roi or 0.0
+            )
+
+            family_survivability = float(
+                family_row.survivability_score or 0.0
+            )
+
+            if family_roi < -0.15:
+                risk_flags.append(
+                    "NEGATIVE_MARKET_FAMILY"
+                )
+
+                risk_score += 10
+
+            elif family_roi > 0.10:
+                risk_flags.append(
+                    "PROFITABLE_MARKET_FAMILY"
+                )
+
+                risk_score -= 6
+
+            if family_survivability >= 60:
+                risk_flags.append(
+                    "STRONG_MARKET_FAMILY"
+                )
+
+                risk_score -= 6
+                
     risk_score = round(max(risk_score, 0.0), 2)
     tier = resolve_risk_tier(risk_score)
     allowed = tier != "REJECTED"

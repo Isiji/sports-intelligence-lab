@@ -16,6 +16,9 @@ from app.db.models import (
     DynamicLeagueTier,
     MarketFamilySnapshot,
 )
+from app.db.models import (
+    BookmakerIntelligenceSnapshot,
+)
 
 
 
@@ -631,6 +634,121 @@ def rebuild_market_family_intelligence(
                     ),
                     0.40,
                 ),
+            )
+        )
+
+    session.commit()
+    
+def rebuild_bookmaker_intelligence(
+    session,
+):
+    session.execute(
+        delete(BookmakerIntelligenceSnapshot)
+    )
+
+    rows = session.execute(
+        text(
+            """
+            SELECT
+                mo.bookmaker,
+
+                COUNT(*) AS bets,
+
+                ROUND(
+                    AVG(
+                        CASE
+                            WHEN po.won = true
+                            THEN 1.0
+                            ELSE 0.0
+                        END
+                    )::numeric,
+                    4
+                ) AS hit_rate,
+
+                ROUND(
+                    AVG(po.profit)::numeric,
+                    4
+                ) AS roi,
+
+                ROUND(
+                    AVG(po.odds)::numeric,
+                    4
+                ) AS avg_odds
+
+            FROM prediction_outcomes po
+
+            JOIN match_odds mo
+                ON mo.match_id = po.match_id
+               AND mo.market = po.market
+               AND mo.selection = po.predicted_label
+
+            WHERE mo.bookmaker IS NOT NULL
+
+            GROUP BY mo.bookmaker
+            HAVING COUNT(*) >= 20
+            """
+        )
+    ).mappings().all()
+
+    for row in rows:
+        hit_rate = float(
+            row["hit_rate"] or 0.0
+        )
+
+        roi = float(
+            row["roi"] or 0.0
+        )
+
+        avg_odds = float(
+            row["avg_odds"] or 0.0
+        )
+
+        survivability_score = round(
+            (hit_rate * 70)
+            + (max(roi, -1) * 30),
+            4,
+        )
+
+        sharpness_score = round(
+            (
+                hit_rate * 0.45
+                + roi * 0.35
+                + min(avg_odds / 5, 1) * 0.20
+            ) * 100,
+            4,
+        )
+
+        if sharpness_score >= 70:
+            tier = "VERY_SHARP"
+        elif sharpness_score >= 55:
+            tier = "SHARP"
+        elif sharpness_score >= 40:
+            tier = "USABLE"
+        else:
+            tier = "WEAK"
+
+        confidence_multiplier = 1.0
+
+        if tier == "VERY_SHARP":
+            confidence_multiplier = 0.92
+
+        elif tier == "SHARP":
+            confidence_multiplier = 0.96
+
+        elif tier == "WEAK":
+            confidence_multiplier = 1.08
+
+        session.add(
+            BookmakerIntelligenceSnapshot(
+                bookmaker=row["bookmaker"],
+                bets=int(row["bets"] or 0),
+                hit_rate=hit_rate,
+                roi=roi,
+                avg_odds=avg_odds,
+                survivability_score=survivability_score,
+                sharpness_score=sharpness_score,
+                bookmaker_tier=tier,
+                confidence_multiplier=confidence_multiplier,
             )
         )
 

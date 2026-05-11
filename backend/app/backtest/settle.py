@@ -280,4 +280,121 @@ def is_prediction_correct(
             or away_goals == 0
         )
 
+    # ============================================
+    # DRAW NO BET
+    # ============================================
+
+    if label == "DRAW_NO_BET_HOME":
+        return home_goals > away_goals
+
+    if label == "DRAW_NO_BET_AWAY":
+        return away_goals > home_goals
+
+    # ============================================
+    # WIN TO NIL
+    # ============================================
+
+    if label == "HOME_WIN_TO_NIL":
+        return (
+            home_goals > away_goals
+            and away_goals == 0
+        )
+
+    if label == "AWAY_WIN_TO_NIL":
+        return (
+            away_goals > home_goals
+            and home_goals == 0
+        )
+
+    # ============================================
+    # HIGHEST SCORING HALF
+    # ============================================
+
+    # TEMPORARY:
+    # provider half stats not yet ingested
+    # so currently unsupported safely
+
+    if label.startswith(
+        "HIGHEST_SCORING_HALF"
+    ):
+        return False
+
+    # ============================================
+    # FIRST HALF PLACEHOLDER
+    # ============================================
+
+    # Until first-half score ingestion exists,
+    # do NOT falsely settle them.
+
+    if label.startswith("FIRST_HALF_"):
+        return False
+
+    # ============================================
+    # ASIAN HANDICAP
+    # ============================================
+
+    if label.startswith("ASIAN_HANDICAP_"):
+        return _settle_asian_handicap(
+            label=label,
+            home_goals=home_goals,
+            away_goals=away_goals,
+        )
+
     return False
+
+def _settle_asian_handicap(
+    label: str,
+    home_goals: int,
+    away_goals: int,
+) -> bool:
+    goal_diff = (
+        home_goals - away_goals
+    )
+
+    try:
+        parts = label.split("_")
+
+        side = parts[2]
+
+        handicap_part = "_".join(parts[3:])
+
+        handicap = _parse_handicap(
+            handicap_part
+        )
+
+    except Exception:
+        return False
+
+    adjusted = (
+        goal_diff + handicap
+        if side == "HOME"
+        else (-goal_diff) + handicap
+    )
+
+    return adjusted > 0
+
+
+def _parse_handicap(
+    handicap_text: str,
+) -> float:
+    if handicap_text.startswith(
+        "PLUS_"
+    ):
+        return float(
+            handicap_text.replace(
+                "PLUS_",
+                "",
+            ).replace("_", ".")
+        )
+
+    if handicap_text.startswith(
+        "MINUS_"
+    ):
+        return -float(
+            handicap_text.replace(
+                "MINUS_",
+                "",
+            ).replace("_", ".")
+        )
+
+    return 0.0

@@ -53,6 +53,8 @@ class PortfolioGroupConfig:
     min_market_roi: float = -0.20
     min_league_roi: float = -0.25
     min_band_roi: float = -0.25
+    
+    max_same_family_per_group: int = 2
 
     min_sample_size: int = 10
 
@@ -569,6 +571,25 @@ def _candidate_fits_group(
     market = candidate["market"]
     league = candidate.get("league") or "unknown"
 
+    market_family = (
+        "GOALS"
+        if (
+            "over" in market
+            or "under" in market
+            or "btts" in market
+            or "goal" in market
+        )
+        else "HANDICAP"
+        if "handicap" in market
+        else "RESULT"
+        if (
+            "win" in market
+            or "draw" in market
+            or "chance" in market
+        )
+        else "OTHER"
+    )
+    
     same_market_count = sum(
         1
         for item in group
@@ -580,6 +601,13 @@ def _candidate_fits_group(
         for item in group
         if (item.get("league") or "unknown") == league
     )
+    
+    same_family_count = sum(
+        1
+        for item in group
+        if item.get("market_family")
+        == market_family
+    )
 
     if same_market_count >= config.max_same_market_per_group:
         return False
@@ -587,6 +615,12 @@ def _candidate_fits_group(
     if same_league_count >= config.max_same_league_per_group:
         return False
 
+    if (
+        same_family_count
+        >= config.max_same_family_per_group
+    ):
+        return False
+    
     correlation = evaluate_group_correlation(
         existing_group=group,
         candidate=candidate,
@@ -606,6 +640,8 @@ def _candidate_fits_group(
 
         return False
 
+    candidate["market_family"] = market_family
+    
     return True
 
 

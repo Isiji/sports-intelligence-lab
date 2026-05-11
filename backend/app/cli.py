@@ -48,6 +48,13 @@ from app.backtest.profit_threshold_optimizer import (
     optimize_profit_thresholds,
     optimize_all_profit_thresholds,
 )
+
+from app.services.intelligence_rebuilder import (
+    rebuild_bookmaker_intelligence,
+)
+from app.services.daily_review_service import (
+    daily_prediction_review,
+)
 from app.analysis.market_survivability_report import market_survivability_report
 from app.analysis.odds_band_survivability_report import odds_band_survivability_report
 
@@ -742,6 +749,18 @@ def league_strength_report(
     finally:
         session.close()
 
+@app.command("daily-review")
+def daily_review():
+    session = get_cli_session()
+
+    result = daily_prediction_review(
+        session=session,
+    )
+
+    print("\n=== DAILY PRODUCTION REVIEW ===")
+
+    print(result)
+
 @app.command("prediction-review-report")
 def prediction_review_report(
     slate: str | None = typer.Option(None, "--slate"),
@@ -1304,6 +1323,18 @@ def cli_odds_band_profitability_fast(
 
     finally:
         session.close()
+
+@app.command("rebuild-bookmaker-intelligence")
+def rebuild_bookmaker_intelligence_command():
+    session = get_cli_session()
+
+    rebuild_bookmaker_intelligence(
+        session=session,
+    )
+
+    print(
+        "\n=== BOOKMAKER INTELLIGENCE REBUILT ==="
+    )
 
 
 @app.command("confidence-band-profitability-fast")

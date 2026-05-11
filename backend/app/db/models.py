@@ -938,3 +938,65 @@ class MarketFamilySnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    
+# =========================================================
+# BOOKMAKER INTELLIGENCE
+# =========================================================
+
+class BookmakerIntelligenceSnapshot(Base):
+    __tablename__ = "bookmaker_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    bookmaker: Mapped[str] = mapped_column(
+        String(120),
+        unique=True,
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    avg_odds: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    survivability_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    sharpness_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    bookmaker_tier: Mapped[str] = mapped_column(
+        String(40),
+        default="UNKNOWN",
+        index=True,
+    )
+
+    confidence_multiplier: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
