@@ -300,6 +300,27 @@ def ingest_odds_for_finished_matches(
         force=force,
     )
 
+def ingest_odds_for_prediction_slate(
+    session: Session,
+    slate: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    from app.db.models import Prediction
+
+    matches = list(
+        session.scalars(
+            select(Match)
+            .join(Prediction, Prediction.match_id == Match.id)
+            .where(Prediction.slate == slate)
+            .distinct()
+        )
+    )
+
+    return _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
 
 def _ingest_odds_for_matches(
     session: Session,

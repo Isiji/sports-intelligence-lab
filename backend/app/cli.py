@@ -55,6 +55,9 @@ from app.backtest.profit_threshold_optimizer import (
     optimize_all_profit_thresholds,
 )
 
+from app.services.prediction_odds_backfill_service import (
+    backfill_prediction_odds,
+)
 from app.services.intelligence_rebuilder import (
     rebuild_bookmaker_intelligence,
 )
@@ -63,7 +66,9 @@ from app.services.daily_review_service import (
 )
 from app.automation.daily_cycle import run_daily_cycle
 from app.services.production_review_service import get_production_review
-
+from app.ingest.football_odds_ingestion import (
+    ingest_odds_for_prediction_slate,
+)
 from app.analysis.market_survivability_report import market_survivability_report
 from app.analysis.odds_band_survivability_report import odds_band_survivability_report
 
@@ -1177,7 +1182,36 @@ def historical_backtest_football(
 
 # backend/app/cli.py commands to add
 
+# backend/app/cli.py
+# ADD COMMAND
 
+@app.command("backfill-prediction-odds")
+def backfill_prediction_odds_command(
+    slate: str = typer.Option(..., "--slate"),
+    only_missing: bool = typer.Option(
+        True,
+        "--only-missing/--include-existing",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run/--apply",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        result = backfill_prediction_odds(
+            session=session,
+            slate=slate,
+            only_missing=only_missing,
+            dry_run=dry_run,
+        )
+
+        print("\n=== PREDICTION ODDS BACKFILL ===")
+        print(result)
+
+    finally:
+        session.close()
 @app.command("market-profitability-fast")
 def cli_market_profitability_fast(
     market: str | None = typer.Option(None),
@@ -1527,7 +1561,25 @@ def apply_market_decay_command():
     finally:
         session.close()
 
+@app.command("ingest-odds-slate")
+def ingest_odds_slate_command(
+    slate: str = typer.Option(..., "--slate"),
+    force: bool = typer.Option(False, "--force"),
+):
+    session = get_cli_session()
 
+    try:
+        result = ingest_odds_for_prediction_slate(
+            session=session,
+            slate=slate,
+            force=force,
+        )
+
+        print("\n=== INGEST ODDS FOR SLATE ===")
+        print(result)
+
+    finally:
+        session.close()
 @app.command("apply-league-decay")
 def apply_league_decay_command():
     session = get_cli_session()
