@@ -49,6 +49,10 @@ python -m app.cli historical-backtest-football --market home_win --use-only-matc
 
 python -m app.cli ingest-odds-finished --limit 5
 
+python -m app.cli run-daily-cycle --ingest-limit 500 --odds-limit 500
+
+python -m app.cli run-daily-cycle --train-models --ingest-limit 500 --odds-limit 500
+
 python -m app.cli historical-group-backtest
 
 python -m app.cli historical-group-backtest --slate football_2026-05-08
@@ -56,6 +60,8 @@ python -m app.cli historical-group-backtest --slate football_2026-05-08
 python -m app.cli create-groups
 
 psql -U postgres -d sports_intelligence_lab
+
+
 
 COMPETITIONS = [
     # =========================

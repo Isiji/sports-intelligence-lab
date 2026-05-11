@@ -55,6 +55,9 @@ from app.services.intelligence_rebuilder import (
 from app.services.daily_review_service import (
     daily_prediction_review,
 )
+from app.automation.daily_cycle import run_daily_cycle
+from app.services.production_review_service import get_production_review
+
 from app.analysis.market_survivability_report import market_survivability_report
 from app.analysis.odds_band_survivability_report import odds_band_survivability_report
 
@@ -823,6 +826,19 @@ def prediction_review_report(
 
     finally:
         session.close()
+        
+@app.command("production-review")
+def production_review_command(
+    slate: str | None = None,
+):
+    with get_cli_session() as session:
+        result = get_production_review(
+            session=session,
+            slate=slate,
+        )
+
+    print("\n=== PRODUCTION REVIEW ===")
+    print(result)
 
 @app.command("data-coverage-report")
 def data_coverage_report():
@@ -1336,7 +1352,29 @@ def rebuild_bookmaker_intelligence_command():
         "\n=== BOOKMAKER INTELLIGENCE REBUILT ==="
     )
 
+@app.command("run-daily-cycle")
+def run_daily_cycle_command(
+    prediction_date: str | None = None,
+    train_models: bool = typer.Option(False, "--train-models"),
+    ingest_limit: int = typer.Option(500, "--ingest-limit"),
+    odds_limit: int = typer.Option(500, "--odds-limit"),
+    require_odds: bool = typer.Option(True, "--require-odds/--no-require-odds"),
+):
+    parsed_prediction_date = None
 
+    if prediction_date:
+        parsed_prediction_date = date.fromisoformat(prediction_date)
+
+    result = run_daily_cycle(
+        prediction_date=parsed_prediction_date,
+        train_models=train_models,
+        ingest_limit=ingest_limit,
+        odds_limit=odds_limit,
+        require_odds=require_odds,
+    )
+
+    print("\n=== DAILY PRODUCTION CYCLE SUMMARY ===")
+    print(result)
 @app.command("confidence-band-profitability-fast")
 def cli_confidence_band_profitability_fast(
     market: str | None = typer.Option(None),

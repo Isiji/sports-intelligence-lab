@@ -18,6 +18,7 @@ from app.routers.odds_router import router as odds_router
 from app.routers.predictions_router import router as predictions_router
 from app.routers.value_edges_router import router as value_edges_router
 from app.routers.research_routes import router as research_router
+from app.routers.production import router as production_router
 
 
 app = FastAPI(
@@ -41,6 +42,7 @@ app.include_router(data_quality_router)
 app.include_router(ingestion_router)
 app.include_router(research_router)
 app.include_router(intelligence_router)
+app.include_router(production_router)
 
 
 @app.get("/")
