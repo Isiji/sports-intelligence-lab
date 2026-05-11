@@ -7,6 +7,7 @@ from app.db.models import (
     ConfidenceBandIntelligenceSnapshot,
     DynamicLeagueTier,
     LeagueIntelligenceSnapshot,
+    LeagueMarketCoverageSnapshot,
     LeagueMarketIntelligenceSnapshot,
     MarketFamilySnapshot,
     MarketIntelligenceSnapshot,
@@ -14,6 +15,7 @@ from app.db.models import (
     OddsBandIntelligenceSnapshot,
 )
 from app.services.confidence_recalibration_service import recalibrate_confidence
+
 
 MIN_ALLOWED_CONFIDENCE_MULTIPLIER = 0.72
 MAX_ALLOWED_CONFIDENCE_MULTIPLIER = 1.18
@@ -191,101 +193,70 @@ def apply_prediction_intelligence(
     odds: float | None,
     bookmaker: str | None = None,
 ):
-    confidence = float(
-        raw_confidence or 0
-    )
+    confidence = float(raw_confidence or 0)
 
     reasons: list[str] = []
-
     allowed = True
-
     multipliers: list[float] = []
 
-    market_family = resolve_market_family(
-        market
-    )
+    market_family = resolve_market_family(market)
 
     # =====================================================
     # MARKET
     # =====================================================
 
     market_row = (
-        session.query(
-            MarketIntelligenceSnapshot
-        )
-        .filter(
-            MarketIntelligenceSnapshot.market
-            == market
-        )
+        session.query(MarketIntelligenceSnapshot)
+        .filter(MarketIntelligenceSnapshot.market == market)
         .first()
     )
 
-    market_allowed, market_multiplier = (
-        _evaluate_market_row(
-            market_row,
-            "market",
-            reasons,
-        )
+    market_allowed, market_multiplier = _evaluate_market_row(
+        market_row,
+        "market",
+        reasons,
     )
 
     if not market_allowed:
         allowed = False
 
-    multipliers.append(
-        market_multiplier
-    )
+    multipliers.append(market_multiplier)
 
     # =====================================================
     # LEAGUE
     # =====================================================
 
     league_row = (
-        session.query(
-            LeagueIntelligenceSnapshot
-        )
-        .filter(
-            LeagueIntelligenceSnapshot.league
-            == match.league
-        )
+        session.query(LeagueIntelligenceSnapshot)
+        .filter(LeagueIntelligenceSnapshot.league == match.league)
         .first()
     )
 
-    league_allowed, league_multiplier = (
-        _evaluate_market_row(
-            league_row,
-            "league",
-            reasons,
-        )
+    league_allowed, league_multiplier = _evaluate_market_row(
+        league_row,
+        "league",
+        reasons,
     )
 
     if not league_allowed:
         allowed = False
 
-    multipliers.append(
-        league_multiplier
-    )
+    multipliers.append(league_multiplier)
 
     # =====================================================
-    # LEAGUE MARKET
+    # LEAGUE MARKET PROFITABILITY
     # =====================================================
 
     league_market_row = (
-        session.query(
-            LeagueMarketIntelligenceSnapshot
-        )
+        session.query(LeagueMarketIntelligenceSnapshot)
         .filter(
-            LeagueMarketIntelligenceSnapshot.league
-            == match.league,
-            LeagueMarketIntelligenceSnapshot.market
-            == market,
+            LeagueMarketIntelligenceSnapshot.league == match.league,
+            LeagueMarketIntelligenceSnapshot.market == market,
         )
         .first()
     )
 
-    (
-        league_market_allowed,
-        league_market_multiplier,
-    ) = _evaluate_market_row(
+    league_market_allowed, league_market_multiplier = _evaluate_market_row(
         league_market_row,
         "league_market",
         reasons,
@@ -294,74 +265,127 @@ def apply_prediction_intelligence(
     if not league_market_allowed:
         allowed = False
 
-    multipliers.append(
-        league_market_multiplier
+    multipliers.append(league_market_multiplier)
+
+    # =====================================================
+    # LEAGUE MARKET COVERAGE / AVAILABILITY
+    # =====================================================
+
+    league_market_coverage = (
+        session.query(LeagueMarketCoverageSnapshot)
+        .filter(
+            LeagueMarketCoverageSnapshot.league == match.league,
+            LeagueMarketCoverageSnapshot.market == market,
+        )
+        .first()
     )
+
+    if league_market_coverage:
+        coverage_multiplier = 1.0
+
+        market_tier = league_market_coverage.market_tier
+
+        market_quality_score = float(
+            league_market_coverage.market_quality_score or 0.0
+        )
+
+        coverage_rate = float(
+            league_market_coverage.market_coverage_rate or 0.0
+        )
+
+        bookmaker_depth = int(
+            league_market_coverage.bookmaker_count or 0
+        )
+
+        if market_tier == "ELITE_MARKET_COVERAGE":
+            coverage_multiplier = 1.05
+            reasons.append("elite_market_coverage")
+
+        elif market_tier == "STRONG_MARKET_COVERAGE":
+            coverage_multiplier = 1.03
+            reasons.append("strong_market_coverage")
+
+        elif market_tier == "USABLE_MARKET_COVERAGE":
+            coverage_multiplier = 1.0
+            reasons.append("usable_market_coverage")
+
+        elif market_tier == "LIMITED_MARKET_COVERAGE":
+            coverage_multiplier = 0.96
+            reasons.append("limited_market_coverage")
+
+        elif market_tier == "POOR_MARKET_COVERAGE":
+            coverage_multiplier = 0.90
+            reasons.append("poor_market_coverage")
+
+        elif market_tier == "INSUFFICIENT_SAMPLE":
+            coverage_multiplier = 0.98
+            reasons.append("insufficient_market_sample")
+
+        elif market_tier == "NO_BOOKMAKER_DEPTH":
+            coverage_multiplier = 0.92
+            reasons.append("no_bookmaker_market_depth")
+
+        if bookmaker_depth >= 10:
+            coverage_multiplier += 0.01
+            reasons.append("deep_bookmaker_market")
+
+        if coverage_rate >= 0.85:
+            coverage_multiplier += 0.01
+            reasons.append("high_market_coverage_rate")
+
+        if market_quality_score <= 20:
+            coverage_multiplier *= 0.90
+            reasons.append("extremely_low_market_quality")
+
+        coverage_multiplier = clamp_multiplier(coverage_multiplier)
+        multipliers.append(coverage_multiplier)
+
+    else:
+        reasons.append("league_market_coverage_missing")
 
     # =====================================================
     # ODDS BAND
     # =====================================================
 
-    odds_band = resolve_odds_band(
-        odds
-    )
+    odds_band = resolve_odds_band(odds)
 
     if odds_band:
         odds_row = (
-            session.query(
-                OddsBandIntelligenceSnapshot
-            )
+            session.query(OddsBandIntelligenceSnapshot)
             .filter(
-                OddsBandIntelligenceSnapshot.market
-                == market,
-                OddsBandIntelligenceSnapshot.odds_band
-                == odds_band,
+                OddsBandIntelligenceSnapshot.market == market,
+                OddsBandIntelligenceSnapshot.odds_band == odds_band,
             )
             .first()
         )
 
-        odds_allowed, odds_multiplier = (
-            _evaluate_market_row(
-                odds_row,
-                "odds_band",
-                reasons,
-            )
+        odds_allowed, odds_multiplier = _evaluate_market_row(
+            odds_row,
+            "odds_band",
+            reasons,
         )
 
         if not odds_allowed:
             allowed = False
 
-        multipliers.append(
-            odds_multiplier
-        )
+        multipliers.append(odds_multiplier)
 
     # =====================================================
     # CONFIDENCE BAND
     # =====================================================
 
-    confidence_band = (
-        resolve_confidence_band(
-            confidence
-        )
-    )
+    confidence_band = resolve_confidence_band(confidence)
 
     confidence_row = (
-        session.query(
-            ConfidenceBandIntelligenceSnapshot
-        )
+        session.query(ConfidenceBandIntelligenceSnapshot)
         .filter(
-            ConfidenceBandIntelligenceSnapshot.market
-            == market,
-            ConfidenceBandIntelligenceSnapshot.confidence_band
-            == confidence_band,
+            ConfidenceBandIntelligenceSnapshot.market == market,
+            ConfidenceBandIntelligenceSnapshot.confidence_band == confidence_band,
         )
         .first()
     )
 
-    (
-        confidence_allowed,
-        confidence_multiplier,
-    ) = _evaluate_market_row(
+    confidence_allowed, confidence_multiplier = _evaluate_market_row(
         confidence_row,
         "confidence_band",
         reasons,
@@ -370,84 +394,48 @@ def apply_prediction_intelligence(
     if not confidence_allowed:
         allowed = False
 
-    multipliers.append(
-        confidence_multiplier
-    )
+    multipliers.append(confidence_multiplier)
 
     # =====================================================
     # DYNAMIC LEAGUE TIER
     # =====================================================
 
     dynamic_league = (
-        session.query(
-            DynamicLeagueTier
-        )
-        .filter(
-            DynamicLeagueTier.league
-            == match.league
-        )
+        session.query(DynamicLeagueTier)
+        .filter(DynamicLeagueTier.league == match.league)
         .first()
     )
 
     if dynamic_league:
-        if (
-            dynamic_league.tier
-            == "VERY_STRONG"
-        ):
+        if dynamic_league.tier == "VERY_STRONG":
             multipliers.append(1.08)
+            reasons.append("very_strong_league")
 
-            reasons.append(
-                "very_strong_league"
-            )
-
-        elif (
-            dynamic_league.tier
-            == "STRONG"
-        ):
+        elif dynamic_league.tier == "STRONG":
             multipliers.append(1.03)
+            reasons.append("strong_league")
 
-            reasons.append(
-                "strong_league"
-            )
-
-        elif (
-            dynamic_league.tier
-            == "WEAK"
-        ):
+        elif dynamic_league.tier == "WEAK":
             multipliers.append(0.92)
-
-            reasons.append(
-                "weak_league"
-            )
+            reasons.append("weak_league")
 
     # =====================================================
     # MARKET FAMILY
     # =====================================================
 
     family_row = (
-        session.query(
-            MarketFamilySnapshot
-        )
-        .filter(
-            MarketFamilySnapshot.family_name
-            == market_family
-        )
+        session.query(MarketFamilySnapshot)
+        .filter(MarketFamilySnapshot.family_name == market_family)
         .first()
     )
 
     if family_row:
         family_multiplier = float(
-            family_row.confidence_multiplier
-            or 1.0
+            family_row.confidence_multiplier or 1.0
         )
 
-        multipliers.append(
-            family_multiplier
-        )
-
-        reasons.append(
-            f"market_family:{market_family}"
-        )
+        multipliers.append(family_multiplier)
+        reasons.append(f"market_family:{market_family}")
 
     # =====================================================
     # BOOKMAKER INTELLIGENCE
@@ -457,50 +445,32 @@ def apply_prediction_intelligence(
 
     if bookmaker:
         bookmaker_row = (
-            session.query(
-                BookmakerIntelligenceSnapshot
-            )
-            .filter(
-                BookmakerIntelligenceSnapshot.bookmaker
-                == bookmaker
-            )
+            session.query(BookmakerIntelligenceSnapshot)
+            .filter(BookmakerIntelligenceSnapshot.bookmaker == bookmaker)
             .first()
         )
 
         if bookmaker_row:
             bookmaker_multiplier = float(
-                bookmaker_row.confidence_multiplier
-                or 1.0
+                bookmaker_row.confidence_multiplier or 1.0
             )
 
-            multipliers.append(
-                bookmaker_multiplier
-            )
-
-            reasons.append(
-                f"bookmaker:{bookmaker}"
-            )
+            multipliers.append(bookmaker_multiplier)
+            reasons.append(f"bookmaker:{bookmaker}")
 
     # =====================================================
     # FINAL MULTIPLIER
     # =====================================================
 
     if multipliers:
-        combined_multiplier = (
-            sum(multipliers)
-            / len(multipliers)
-        )
-
+        combined_multiplier = sum(multipliers) / len(multipliers)
     else:
         combined_multiplier = 1.0
 
-    combined_multiplier = clamp_multiplier(
-        combined_multiplier
-    )
+    combined_multiplier = clamp_multiplier(combined_multiplier)
 
     adjusted_confidence = round(
-        confidence
-        * combined_multiplier,
+        confidence * combined_multiplier,
         4,
     )
 
@@ -520,9 +490,7 @@ def apply_prediction_intelligence(
     )
 
     recalibrated_confidence = float(
-        recalibration[
-            "recalibrated_confidence"
-        ]
+        recalibration["recalibrated_confidence"]
     )
 
     final_confidence = max(
@@ -547,10 +515,7 @@ def apply_prediction_intelligence(
         "raw_confidence": confidence,
         "adjusted_confidence": final_confidence,
         "pre_recalibration_confidence": adjusted_confidence,
-        "combined_multiplier": round(
-            combined_multiplier,
-            4,
-        ),
+        "combined_multiplier": round(combined_multiplier, 4),
         "multipliers": [
             round(x, 4)
             for x in multipliers
@@ -563,4 +528,24 @@ def apply_prediction_intelligence(
         "bookmaker": bookmaker,
         "odds_band": odds_band,
         "confidence_band": confidence_band,
+        "league_market_coverage": (
+            {
+                "market_tier": league_market_coverage.market_tier,
+                "market_quality_score": float(
+                    league_market_coverage.market_quality_score or 0.0
+                ),
+                "market_coverage_rate": float(
+                    league_market_coverage.market_coverage_rate or 0.0
+                ),
+                "bookmaker_count": int(
+                    league_market_coverage.bookmaker_count or 0
+                ),
+                "production_allowed": bool(
+                    league_market_coverage.production_allowed
+                ),
+                "reason": league_market_coverage.reason,
+            }
+            if league_market_coverage
+            else None
+        ),
     }

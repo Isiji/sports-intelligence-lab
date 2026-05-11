@@ -1107,3 +1107,90 @@ class LeagueOddsCoverageSnapshot(Base):
         onupdate=datetime.utcnow,
         index=True,
     )
+    
+# backend/app/db/models.py
+# ADD NEAR OTHER INTELLIGENCE SNAPSHOTS
+
+class LeagueMarketCoverageSnapshot(Base):
+    __tablename__ = "league_market_coverage_snapshots"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sport",
+            "league",
+            "market",
+            name="uq_league_market_coverage",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(
+        String(30),
+        default="football",
+        index=True,
+    )
+
+    league: Mapped[str] = mapped_column(
+        String(160),
+        index=True,
+    )
+
+    market: Mapped[str] = mapped_column(
+        String(120),
+        index=True,
+    )
+
+    matches_with_market: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    total_market_rows: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    bookmaker_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    market_coverage_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    avg_rows_per_match: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    market_quality_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    market_tier: Mapped[str] = mapped_column(
+        String(40),
+        default="UNKNOWN",
+        index=True,
+    )
+
+    production_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        index=True,
+    )
+
+    reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )

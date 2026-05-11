@@ -59,6 +59,10 @@ from app.backtest.profit_threshold_optimizer import (
     optimize_all_profit_thresholds,
 )
 
+from app.services.league_market_coverage_service import (
+    league_market_coverage_report,
+    rebuild_league_market_coverage,
+)
 from app.services.prediction_odds_backfill_service import (
     backfill_prediction_odds,
 )
@@ -1223,6 +1227,54 @@ def backfill_prediction_odds_command(
 
     finally:
         session.close()
+        
+# backend/app/cli.py
+# ADD BEFORE if __name__ == "__main__"
+
+@app.command("rebuild-league-market-coverage")
+def rebuild_league_market_coverage_command():
+    session = get_cli_session()
+
+    try:
+        result = rebuild_league_market_coverage(
+            session=session,
+        )
+
+        print("\n=== LEAGUE MARKET COVERAGE REBUILT ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("league-market-coverage-report")
+def league_market_coverage_report_command(
+    limit: int = typer.Option(100, "--limit"),
+    production_only: bool = typer.Option(
+        False,
+        "--production-only",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        report = league_market_coverage_report(
+            session=session,
+            limit=limit,
+            production_only=production_only,
+        )
+
+        print("\n=== LEAGUE MARKET COVERAGE SUMMARY ===")
+        print(report["summary"])
+
+        print("\n=== LEAGUE MARKET ROWS ===")
+
+        for row in report["rows"]:
+            print(row)
+
+    finally:
+        session.close()
+        
 @app.command("market-profitability-fast")
 def cli_market_profitability_fast(
     market: str | None = typer.Option(None),
