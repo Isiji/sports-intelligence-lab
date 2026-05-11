@@ -23,9 +23,14 @@ from app.grouping.profitability_intelligence import (
 from app.intelligence.correlation_rules import (
     evaluate_group_correlation,
 )
+
+from app.services.league_production_filter_service import (
+    filter_candidate_dicts_by_league_quality,
+)
 from app.services.production_pick_scoring_service import score_pick_list
 from app.intelligence.exposure_control import apply_exposure_controls
 from app.intelligence.pick_recommendation_engine import build_recommendation_layer
+from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 
 from app.intelligence.portfolio_filters import evaluate_pick_for_portfolio
 from app.intelligence.stake_engine import resolve_group_tier
@@ -47,7 +52,9 @@ class PortfolioGroupConfig:
     max_groups: int = 10
     min_group_size: int = 4
     max_group_size: int = 5
-
+    
+    league_odds_filter_mode: str = "strict"
+    
     min_confidence: float = 0.50
     min_value_score: float = -0.08
 
@@ -68,6 +75,8 @@ class PortfolioGroupConfig:
     use_intelligence_filters: bool = True
 
 
+# backend/app/grouping/create_groups.py
+
 def group_predictions(
     session: Session,
     slate: str,
@@ -76,8 +85,9 @@ def group_predictions(
     require_odds: bool = False,
     use_intelligence_filters: bool = True,
     profile: str | None = None,
+    league_odds_filter_mode: str = "strict",
 ) -> dict[str, dict[str, float | str]]:
-    from app.backtest.portfolio_profiles import PROFILE_CONFIGS
+    
 
     profile_config = None
 
@@ -88,6 +98,7 @@ def group_predictions(
                 slate=slate,
                 min_confidence=min_confidence,
                 min_group_odds=min_group_odds,
+                league_odds_filter_mode=league_odds_filter_mode,
                 require_odds=require_odds,
                 use_intelligence_filters=use_intelligence_filters,
                 profile=candidate_profile,
@@ -124,6 +135,7 @@ def group_predictions(
         min_confidence=max(float(min_confidence), 0.50),
         min_sample_size=10,
         use_intelligence_filters=use_intelligence_filters,
+        league_odds_filter_mode=league_odds_filter_mode,
         max_odds=(
             float(profile_config["max_odds"])
             if profile_config
@@ -166,6 +178,7 @@ def group_predictions(
         min_confidence=min_confidence,
         min_group_odds=min_group_odds,
         require_odds=require_odds,
+        league_odds_filter_mode=league_odds_filter_mode,
     )
 
 
@@ -211,7 +224,23 @@ def _build_profitability_aware_groups(
         f"min_confidence={config.min_confidence}",
     )
 
+    predictions, league_rejections = filter_candidate_dicts_by_league_quality(
+        session=session,
+        candidates=predictions,
+        mode=config.league_odds_filter_mode,
+    )
+
+    print(
+        "[LEAGUE ODDS COVERAGE FILTER]",
+        f"approved={len(predictions)}",
+        f"rejected={len(league_rejections)}",
+    )
+
+    for rejection in league_rejections[:20]:
+        print("[LEAGUE ODDS REJECTED]", rejection)
+
     best_by_match: dict[int, dict[str, Any]] = {}
+    
     rejected_by_filter = 0
 
     for prediction in predictions:
@@ -766,6 +795,7 @@ def _fallback_confidence_groups(
     min_confidence: float = 0.65,
     min_group_odds: float = 3.0,
     require_odds: bool = False,
+    league_odds_filter_mode: str = "strict",
 ) -> dict[str, dict[str, float | str]]:
     enabled_markets = set(get_enabled_markets(session))
 
@@ -786,6 +816,59 @@ def _fallback_confidence_groups(
         query = query.where(Prediction.odds.isnot(None))
 
     predictions = list(session.scalars(query))
+    candidate_dicts = [
+        {
+            "prediction_id": prediction.id,
+            "match_id": prediction.match_id,
+            "league": None,
+            "market": prediction.market,
+            "predicted_label": prediction.predicted_label,
+            "sport": prediction.sport,
+            "prediction": prediction,
+        }
+        for prediction in predictions
+    ]
+
+    league_map_rows = session.execute(
+        text(
+            """
+            SELECT
+                p.id AS prediction_id,
+                m.league
+            FROM predictions p
+            JOIN matches m ON m.id = p.match_id
+            WHERE p.slate = :slate
+            """
+        ),
+        {"slate": slate},
+    ).mappings().all()
+
+    league_by_prediction_id = {
+        int(row["prediction_id"]): row["league"]
+        for row in league_map_rows
+    }
+
+    for item in candidate_dicts:
+        item["league"] = league_by_prediction_id.get(
+            int(item["prediction_id"])
+        )
+
+    approved_dicts, league_rejections = filter_candidate_dicts_by_league_quality(
+        session=session,
+        candidates=candidate_dicts,
+        mode=league_odds_filter_mode,
+    )
+
+    print(
+        "[FALLBACK LEAGUE ODDS COVERAGE FILTER]",
+        f"approved={len(approved_dicts)}",
+        f"rejected={len(league_rejections)}",
+    )
+
+    predictions = [
+        item["prediction"]
+        for item in approved_dicts
+    ]
 
     best_prediction_by_match: dict[int, Prediction] = {}
 

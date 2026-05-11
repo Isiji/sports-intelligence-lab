@@ -321,7 +321,13 @@ def create_groups_command(
         3.0,
         "--min-group-odds",
     ),
-
+    
+    league_odds_filter_mode: str = typer.Option(
+        "strict",
+        "--league-odds-filter-mode",
+        help="strict, advisory, or off",
+    ),
+    
     use_intelligence_filters: bool = typer.Option(
         True,
         "--use-intelligence-filters/--no-intelligence-filters",
@@ -357,6 +363,7 @@ def create_groups_command(
             require_odds=require_odds,
             use_intelligence_filters=use_intelligence_filters,
             profile=profile,
+            league_odds_filter_mode=league_odds_filter_mode,
         )
 
         print("\n=== GROUPS CREATED ===")
