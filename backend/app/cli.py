@@ -23,6 +23,10 @@ from app.odds.synonym_intelligence import (
 )
 from app.analysis.league_strength_report import build_league_strength_report
 
+from app.services.league_odds_coverage_service import (
+    league_odds_coverage_report,
+    rebuild_league_odds_coverage,
+)
 from app.odds.market_quality_engine import calculate_market_quality, get_enabled_markets
 from app.ingest.football_odds_ingestion import (
     ingest_odds_for_fixture,
@@ -1580,6 +1584,56 @@ def ingest_odds_slate_command(
 
     finally:
         session.close()
+        
+# backend/app/cli.py
+# ADD COMMANDS
+
+@app.command("rebuild-league-odds-coverage")
+def rebuild_league_odds_coverage_command(
+    min_matches: int = typer.Option(10, "--min-matches"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_league_odds_coverage(
+            session=session,
+            min_matches=min_matches,
+        )
+
+        print("\n=== LEAGUE ODDS COVERAGE REBUILT ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("league-odds-coverage-report")
+def league_odds_coverage_report_command(
+    limit: int = typer.Option(80, "--limit"),
+    production_only: bool = typer.Option(
+        False,
+        "--production-only",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        report = league_odds_coverage_report(
+            session=session,
+            limit=limit,
+            production_only=production_only,
+        )
+
+        print("\n=== LEAGUE ODDS COVERAGE SUMMARY ===")
+        print(report["summary"])
+
+        print("\n=== LEAGUES ===")
+        for row in report["leagues"]:
+            print(row)
+
+    finally:
+        session.close()
+        
 @app.command("apply-league-decay")
 def apply_league_decay_command():
     session = get_cli_session()

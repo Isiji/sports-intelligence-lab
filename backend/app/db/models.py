@@ -1062,3 +1062,48 @@ class BookmakerIntelligenceSnapshot(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    
+# backend/app/db/models.py
+# ADD THIS CLASS NEAR OTHER INTELLIGENCE SNAPSHOTS
+
+class LeagueOddsCoverageSnapshot(Base):
+    __tablename__ = "league_odds_coverage_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "sport",
+            "league",
+            name="uq_league_odds_coverage_sport_league",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    league: Mapped[str] = mapped_column(String(160), index=True)
+
+    total_matches: Mapped[int] = mapped_column(Integer, default=0)
+    matches_with_odds: Mapped[int] = mapped_column(Integer, default=0)
+    odds_unavailable_matches: Mapped[int] = mapped_column(Integer, default=0)
+    odds_attempted_matches: Mapped[int] = mapped_column(Integer, default=0)
+
+    odds_coverage_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    odds_unavailable_rate: Mapped[float] = mapped_column(Float, default=0.0)
+
+    total_odds_rows: Mapped[int] = mapped_column(Integer, default=0)
+    avg_odds_rows_per_match: Mapped[float] = mapped_column(Float, default=0.0)
+
+    supported_market_count: Mapped[int] = mapped_column(Integer, default=0)
+    bookmaker_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    coverage_score: Mapped[float] = mapped_column(Float, default=0.0)
+    coverage_tier: Mapped[str] = mapped_column(String(40), default="UNKNOWN", index=True)
+
+    production_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )
