@@ -5,11 +5,9 @@
 Revision ID: 838f42a7d1aa
 Revises: 837c9d2e91aa
 Create Date: 2026-05-11 18:30:00.000000
-
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "838f42a7d1aa"
@@ -19,102 +17,68 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "league_market_coverage_snapshots",
+    op.execute("""
+    CREATE TABLE IF NOT EXISTS league_market_coverage_snapshots (
+        id SERIAL PRIMARY KEY,
 
-        sa.Column("id", sa.Integer(), nullable=False),
+        sport VARCHAR(30) NOT NULL,
 
-        sa.Column("sport", sa.String(length=30), nullable=False),
+        league VARCHAR(160) NOT NULL,
 
-        sa.Column("league", sa.String(length=160), nullable=False),
+        market VARCHAR(120) NOT NULL,
 
-        sa.Column("market", sa.String(length=120), nullable=False),
+        matches_with_market INTEGER NOT NULL DEFAULT 0,
 
-        sa.Column("matches_with_market", sa.Integer(), nullable=False),
+        total_market_rows INTEGER NOT NULL DEFAULT 0,
 
-        sa.Column("total_market_rows", sa.Integer(), nullable=False),
+        bookmaker_count INTEGER NOT NULL DEFAULT 0,
 
-        sa.Column("bookmaker_count", sa.Integer(), nullable=False),
+        market_coverage_rate FLOAT NOT NULL DEFAULT 0,
 
-        sa.Column("market_coverage_rate", sa.Float(), nullable=False),
+        avg_rows_per_match FLOAT NOT NULL DEFAULT 0,
 
-        sa.Column("avg_rows_per_match", sa.Float(), nullable=False),
+        market_quality_score FLOAT NOT NULL DEFAULT 0,
 
-        sa.Column("market_quality_score", sa.Float(), nullable=False),
+        market_tier VARCHAR(40) NOT NULL,
 
-        sa.Column("market_tier", sa.String(length=40), nullable=False),
+        production_allowed BOOLEAN NOT NULL DEFAULT FALSE,
 
-        sa.Column("production_allowed", sa.Boolean(), nullable=False),
+        reason TEXT,
 
-        sa.Column("reason", sa.Text(), nullable=True),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-
-        sa.PrimaryKeyConstraint("id"),
-
-        sa.UniqueConstraint(
-            "sport",
-            "league",
-            "market",
-            name="uq_league_market_coverage",
-        ),
+        CONSTRAINT uq_league_market_coverage
+            UNIQUE (sport, league, market)
     )
+    """)
 
-    op.create_index(
-        op.f("ix_league_market_coverage_snapshots_sport"),
-        "league_market_coverage_snapshots",
-        ["sport"],
-    )
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_league_market_coverage_snapshots_sport
+    ON league_market_coverage_snapshots (sport)
+    """)
 
-    op.create_index(
-        op.f("ix_league_market_coverage_snapshots_league"),
-        "league_market_coverage_snapshots",
-        ["league"],
-    )
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_league_market_coverage_snapshots_league
+    ON league_market_coverage_snapshots (league)
+    """)
 
-    op.create_index(
-        op.f("ix_league_market_coverage_snapshots_market"),
-        "league_market_coverage_snapshots",
-        ["market"],
-    )
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_league_market_coverage_snapshots_market
+    ON league_market_coverage_snapshots (market)
+    """)
 
-    op.create_index(
-        op.f("ix_league_market_coverage_snapshots_market_tier"),
-        "league_market_coverage_snapshots",
-        ["market_tier"],
-    )
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_league_market_coverage_snapshots_market_tier
+    ON league_market_coverage_snapshots (market_tier)
+    """)
 
-    op.create_index(
-        op.f("ix_league_market_coverage_snapshots_production_allowed"),
-        "league_market_coverage_snapshots",
-        ["production_allowed"],
-    )
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_league_market_coverage_snapshots_production_allowed
+    ON league_market_coverage_snapshots (production_allowed)
+    """)
 
 
 def downgrade() -> None:
-    op.drop_index(
-        op.f("ix_league_market_coverage_snapshots_production_allowed"),
-        table_name="league_market_coverage_snapshots",
-    )
-
-    op.drop_index(
-        op.f("ix_league_market_coverage_snapshots_market_tier"),
-        table_name="league_market_coverage_snapshots",
-    )
-
-    op.drop_index(
-        op.f("ix_league_market_coverage_snapshots_market"),
-        table_name="league_market_coverage_snapshots",
-    )
-
-    op.drop_index(
-        op.f("ix_league_market_coverage_snapshots_league"),
-        table_name="league_market_coverage_snapshots",
-    )
-
-    op.drop_index(
-        op.f("ix_league_market_coverage_snapshots_sport"),
-        table_name="league_market_coverage_snapshots",
-    )
-
-    op.drop_table("league_market_coverage_snapshots")
+    op.execute("""
+    DROP TABLE IF EXISTS league_market_coverage_snapshots
+    """)

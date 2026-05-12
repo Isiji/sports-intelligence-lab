@@ -4,12 +4,9 @@
 
 Revision ID: 836b71c7f1c4
 Revises: 835a19e09516
-Create Date: 2026-05-11 16:30:00.000000
-
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "836b71c7f1c4"
@@ -19,122 +16,66 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "predictions",
-        sa.Column("is_correct", sa.Boolean(), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("result_label", sa.String(length=80), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("profit_loss", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("stake", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("settled_at", sa.DateTime(), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("closing_odds", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "predictions",
-        sa.Column("clv", sa.Float(), nullable=True),
-    )
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS is_correct BOOLEAN
+    """)
 
-    op.create_index(
-        op.f("ix_predictions_is_correct"),
-        "predictions",
-        ["is_correct"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_predictions_result_label"),
-        "predictions",
-        ["result_label"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_predictions_settled_at"),
-        "predictions",
-        ["settled_at"],
-        unique=False,
-    )
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS result_label VARCHAR(80)
+    """)
 
-    op.add_column(
-        "prediction_outcomes",
-        sa.Column("result_label", sa.String(length=80), nullable=True),
-    )
-    op.add_column(
-        "prediction_outcomes",
-        sa.Column("closing_odds", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "prediction_outcomes",
-        sa.Column("clv", sa.Float(), nullable=True),
-    )
-    op.add_column(
-        "prediction_outcomes",
-        sa.Column(
-            "stake",
-            sa.Float(),
-            nullable=False,
-            server_default="100",
-        ),
-    )
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS profit_loss FLOAT
+    """)
 
-    op.create_index(
-        op.f("ix_prediction_outcomes_result_label"),
-        "prediction_outcomes",
-        ["result_label"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_prediction_outcomes_predicted_label"),
-        "prediction_outcomes",
-        ["predicted_label"],
-        unique=False,
-    )
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS stake FLOAT
+    """)
+
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP
+    """)
+
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS closing_odds FLOAT
+    """)
+
+    op.execute("""
+    ALTER TABLE predictions
+    ADD COLUMN IF NOT EXISTS clv FLOAT
+    """)
+
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_predictions_is_correct
+    ON predictions (is_correct)
+    """)
+
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_predictions_result_label
+    ON predictions (result_label)
+    """)
+
+    op.execute("""
+    CREATE INDEX IF NOT EXISTS ix_predictions_settled_at
+    ON predictions (settled_at)
+    """)
 
 
 def downgrade() -> None:
-    op.drop_index(
-        op.f("ix_prediction_outcomes_predicted_label"),
-        table_name="prediction_outcomes",
-    )
-    op.drop_index(
-        op.f("ix_prediction_outcomes_result_label"),
-        table_name="prediction_outcomes",
-    )
+    op.execute("DROP INDEX IF EXISTS ix_predictions_settled_at")
+    op.execute("DROP INDEX IF EXISTS ix_predictions_result_label")
+    op.execute("DROP INDEX IF EXISTS ix_predictions_is_correct")
 
-    op.drop_column("prediction_outcomes", "stake")
-    op.drop_column("prediction_outcomes", "clv")
-    op.drop_column("prediction_outcomes", "closing_odds")
-    op.drop_column("prediction_outcomes", "result_label")
-
-    op.drop_index(
-        op.f("ix_predictions_settled_at"),
-        table_name="predictions",
-    )
-    op.drop_index(
-        op.f("ix_predictions_result_label"),
-        table_name="predictions",
-    )
-    op.drop_index(
-        op.f("ix_predictions_is_correct"),
-        table_name="predictions",
-    )
-
-    op.drop_column("predictions", "clv")
-    op.drop_column("predictions", "closing_odds")
-    op.drop_column("predictions", "settled_at")
-    op.drop_column("predictions", "stake")
-    op.drop_column("predictions", "profit_loss")
-    op.drop_column("predictions", "result_label")
-    op.drop_column("predictions", "is_correct")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS clv")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS closing_odds")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS settled_at")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS stake")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS profit_loss")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS result_label")
+    op.execute("ALTER TABLE predictions DROP COLUMN IF EXISTS is_correct")

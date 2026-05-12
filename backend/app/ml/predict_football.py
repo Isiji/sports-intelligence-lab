@@ -176,7 +176,7 @@ def predict_football_market(
             selection=predicted_label,
         )
 
-        odds = odds_result.odds
+        odds = odds_result.odds if odds_result else None
 
         intelligence = apply_prediction_intelligence(
             session=session,
