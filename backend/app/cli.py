@@ -21,6 +21,9 @@ from app.odds.synonym_intelligence import (
     rebuild_odds_synonym_intelligence,
     synonym_summary,
 )
+from app.services.overnight_pipeline_service import OvernightPipelineService
+from app.db.session import get_cli_session
+
 from app.analysis.league_strength_report import build_league_strength_report
 
 from app.services.league_odds_coverage_service import (
@@ -79,6 +82,10 @@ from app.ingest.football_odds_ingestion import (
 )
 from app.analysis.market_survivability_report import market_survivability_report
 from app.analysis.odds_band_survivability_report import odds_band_survivability_report
+
+from app.services.ecosystem_odds_orchestrator import (
+    EcosystemOddsOrchestrator,
+)
 
 from app.reports.competition_coverage import build_competition_coverage_report
 # backend/app/cli.py
@@ -1818,6 +1825,25 @@ def ingest_odds_rotation_command(
     finally:
         session.close()
 
+# add command
+
+@app.command("ingest-ecosystem-odds")
+def ingest_ecosystem_odds(
+    limit: int = 500,
+    force: bool = False,
+):
+    """
+    Ecosystem-intelligence-driven odds ingestion.
+    """
+
+    with get_cli_session() as session:
+        result = EcosystemOddsOrchestrator(
+            session=session,
+            limit=limit,
+            force=force,
+        ).run()
+
+        print(result)
 
 @app.command("ingest-odds-rich-leagues")
 def ingest_odds_rich_leagues_command(
@@ -1898,6 +1924,27 @@ def ingest_odds_all_leagues_rotation_command(
 
     finally:
         session.close()
+
+
+@app.command("run-overnight-pipeline")
+def run_overnight_pipeline(
+    daily_api_limit: int = 7000,
+    safety_reserve: int = 700,
+    dry_run: bool = False,
+):
+    """
+    Run autonomous overnight production pipeline.
+    """
+    with get_cli_session() as session:
+        service = OvernightPipelineService(
+            session=session,
+            daily_api_limit=daily_api_limit,
+            safety_reserve=safety_reserve,
+            dry_run=dry_run,
+        )
+
+        result = service.run()
+        print(result)
 
 @app.command("historical-best-groups")
 def cli_historical_best_groups(
