@@ -9,9 +9,12 @@ from sqlalchemy.orm import Session
 from app.db.models import Match, MatchOdds, ProviderSyncLog
 from app.ingest.api_football_client import ApiFootballClient
 from app.ingest.odds_mapping import extract_line_value, normalize_market_selection
+from app.services.odds_ingestion_priority_service import (
+    OddsIngestionPriorityService,
+)
 
 
-MAX_ODDS_ATTEMPTS = 1
+MAX_ODDS_ATTEMPTS = 3
 
 
 def ingest_odds_for_fixture(
@@ -24,11 +27,15 @@ def ingest_odds_for_fixture(
     if match is None:
         raise ValueError(f"Match {match_id} not found.")
 
-    existing_odds_count = _existing_odds_count(session=session, match_id=match.id)
+    existing_odds_count = _existing_odds_count(
+        session=session,
+        match_id=match.id,
+    )
 
     if existing_odds_count > 0 and not force:
         match.has_odds = True
         match.odds_unavailable = False
+
         session.commit()
 
         return {
@@ -46,7 +53,10 @@ def ingest_odds_for_fixture(
             "unmapped_examples": [],
         }
 
-    eligibility = _odds_ingestion_eligibility(match=match, force=force)
+    eligibility = _odds_ingestion_eligibility(
+        match=match,
+        force=force,
+    )
 
     if not eligibility["eligible"]:
         return {
@@ -86,11 +96,16 @@ def ingest_odds_for_fixture(
     unmapped_examples: list[dict[str, Any]] = []
 
     try:
-        payload = client.get_odds_by_fixture(str(match.provider_fixture_id))
+        payload = client.get_odds_by_fixture(
+            str(match.provider_fixture_id)
+        )
+
         responses = payload.get("response", [])
 
         if not isinstance(responses, list):
-            raise ValueError("API response field 'response' is not a list.")
+            raise ValueError(
+                "API response field 'response' is not a list."
+            )
 
         if len(responses) == 0:
             match.has_odds = False
@@ -136,8 +151,13 @@ def ingest_odds_for_fixture(
                         records_received += 1
 
                         provider_selection = value_item.get("value") or ""
-                        odds_value = _safe_float(value_item.get("odd"))
-                        line_value = extract_line_value(provider_selection)
+                        odds_value = _safe_float(
+                            value_item.get("odd")
+                        )
+
+                        line_value = extract_line_value(
+                            provider_selection
+                        )
 
                         if odds_value is None:
                             records_skipped += 1
@@ -300,6 +320,7 @@ def ingest_odds_for_finished_matches(
         force=force,
     )
 
+
 def ingest_odds_for_prediction_slate(
     session: Session,
     slate: str,
@@ -322,6 +343,179 @@ def ingest_odds_for_prediction_slate(
         force=force,
     )
 
+
+def ingest_odds_priority(
+    session: Session,
+    limit: int = 300,
+    force: bool = False,
+    max_attempts: int = 3,
+) -> dict[str, Any]:
+    priority_service = OddsIngestionPriorityService(
+        session=session
+    )
+
+    candidates = priority_service.get_candidates(
+        mode="priority",
+        limit=limit,
+        max_attempts=max_attempts,
+    )
+
+    matches = _load_matches_from_candidates(
+        session=session,
+        candidates=candidates,
+    )
+
+    results = _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
+
+    results["priority_mode"] = "priority"
+    results["candidate_count"] = len(candidates)
+
+    return results
+
+
+def ingest_odds_rotation(
+    session: Session,
+    limit: int = 300,
+    force: bool = False,
+    max_attempts: int = 3,
+    rotation_offset: int = 0,
+) -> dict[str, Any]:
+    priority_service = OddsIngestionPriorityService(
+        session=session
+    )
+
+    candidates = priority_service.get_candidates(
+        mode="rotation",
+        limit=limit,
+        max_attempts=max_attempts,
+        rotation_offset=rotation_offset,
+    )
+
+    matches = _load_matches_from_candidates(
+        session=session,
+        candidates=candidates,
+    )
+
+    results = _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
+
+    results["priority_mode"] = "rotation"
+    results["candidate_count"] = len(candidates)
+
+    return results
+
+
+def ingest_odds_rich_leagues(
+    session: Session,
+    limit: int = 300,
+    force: bool = False,
+    max_attempts: int = 3,
+) -> dict[str, Any]:
+    priority_service = OddsIngestionPriorityService(
+        session=session
+    )
+
+    candidates = priority_service.get_candidates(
+        mode="rich_leagues",
+        limit=limit,
+        max_attempts=max_attempts,
+    )
+
+    matches = _load_matches_from_candidates(
+        session=session,
+        candidates=candidates,
+    )
+
+    results = _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
+
+    results["priority_mode"] = "rich_leagues"
+    results["candidate_count"] = len(candidates)
+
+    return results
+
+
+def ingest_odds_all_leagues_rotation(
+    session: Session,
+    limit: int = 300,
+    force: bool = False,
+    max_attempts: int = 3,
+    rotation_offset: int = 0,
+) -> dict[str, Any]:
+    priority_service = OddsIngestionPriorityService(
+        session=session
+    )
+
+    candidates = priority_service.get_candidates(
+        mode="all_leagues_rotation",
+        limit=limit,
+        max_attempts=max_attempts,
+        rotation_offset=rotation_offset,
+    )
+
+    matches = _load_matches_from_candidates(
+        session=session,
+        candidates=candidates,
+    )
+
+    results = _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
+
+    results["priority_mode"] = "all_leagues_rotation"
+    results["candidate_count"] = len(candidates)
+
+    return results
+
+
+def _load_matches_from_candidates(
+    session: Session,
+    candidates: list,
+) -> list[Match]:
+    if not candidates:
+        return []
+
+    match_ids = [
+        candidate.match_id
+        for candidate in candidates
+    ]
+
+    rows = list(
+        session.scalars(
+            select(Match).where(
+                Match.id.in_(match_ids)
+            )
+        )
+    )
+
+    match_map = {
+        match.id: match
+        for match in rows
+    }
+
+    ordered_matches: list[Match] = []
+
+    for candidate in candidates:
+        match = match_map.get(candidate.match_id)
+
+        if match is not None:
+            ordered_matches.append(match)
+
+    return ordered_matches
+
+
 def _ingest_odds_for_matches(
     session: Session,
     matches: list[Match],
@@ -332,6 +526,7 @@ def _ingest_odds_for_matches(
     skipped = 0
     unavailable = 0
     failed = 0
+
     failures: list[dict[str, Any]] = []
     unmapped_examples: list[dict[str, Any]] = []
     sample_results: list[dict[str, Any]] = []
@@ -352,18 +547,30 @@ def _ingest_odds_for_matches(
                 continue
 
             processed += 1
-            inserted += int(result["records_inserted"])
-            skipped += int(result["records_skipped"])
+
+            inserted += int(
+                result["records_inserted"]
+            )
+
+            skipped += int(
+                result["records_skipped"]
+            )
 
             if result.get("odds_unavailable"):
                 unavailable += 1
 
-            for example in result.get("unmapped_examples", []):
+            for example in result.get(
+                "unmapped_examples",
+                [],
+            ):
                 if len(unmapped_examples) < 30:
-                    unmapped_examples.append(example)
+                    unmapped_examples.append(
+                        example
+                    )
 
         except Exception as exc:
             failed += 1
+
             session.rollback()
 
             if len(failures) < 20:
@@ -393,35 +600,74 @@ def _ingest_odds_for_matches(
     }
 
 
-def _odds_ingestion_eligibility(match: Match, force: bool = False) -> dict[str, Any]:
+def _odds_ingestion_eligibility(
+    match: Match,
+    force: bool = False,
+) -> dict[str, Any]:
     if match.provider != "api-football":
-        return {"eligible": False, "reason": "not an api-football match"}
+        return {
+            "eligible": False,
+            "reason": "not an api-football match",
+        }
 
     if not match.provider_fixture_id:
-        return {"eligible": False, "reason": "match has no provider fixture ID"}
+        return {
+            "eligible": False,
+            "reason": "match has no provider fixture ID",
+        }
 
     if match.is_cancelled:
-        return {"eligible": False, "reason": "match is cancelled"}
+        return {
+            "eligible": False,
+            "reason": "match is cancelled",
+        }
 
     if match.is_postponed:
-        return {"eligible": False, "reason": "match is postponed"}
+        return {
+            "eligible": False,
+            "reason": "match is postponed",
+        }
 
     if match.has_odds and not force:
-        return {"eligible": False, "reason": "match already has odds"}
+        return {
+            "eligible": False,
+            "reason": "match already has odds",
+        }
 
-    if getattr(match, "odds_unavailable", False) and not force:
-        return {"eligible": False, "reason": "odds previously unavailable"}
+    if (
+        getattr(match, "odds_unavailable", False)
+        and not force
+    ):
+        return {
+            "eligible": False,
+            "reason": "odds previously unavailable",
+        }
 
-    if int(getattr(match, "odds_attempt_count", 0) or 0) >= MAX_ODDS_ATTEMPTS and not force:
-        return {"eligible": False, "reason": "odds already attempted once"}
+    if (
+        int(getattr(match, "odds_attempt_count", 0) or 0)
+        >= MAX_ODDS_ATTEMPTS
+        and not force
+    ):
+        return {
+            "eligible": False,
+            "reason": "max odds attempts reached",
+        }
 
-    return {"eligible": True, "reason": "eligible"}
+    return {
+        "eligible": True,
+        "reason": "eligible",
+    }
 
 
-def _existing_odds_count(session: Session, match_id: int) -> int:
+def _existing_odds_count(
+    session: Session,
+    match_id: int,
+) -> int:
     rows = list(
         session.scalars(
-            select(MatchOdds.id).where(MatchOdds.match_id == match_id).limit(1)
+            select(MatchOdds.id)
+            .where(MatchOdds.match_id == match_id)
+            .limit(1)
         )
     )
 
@@ -432,6 +678,10 @@ def _safe_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(str(value).replace(",", "."))
+
+        return float(
+            str(value).replace(",", ".")
+        )
+
     except (TypeError, ValueError):
         return None

@@ -99,6 +99,12 @@ from app.backtest.historical_value_backtest import run_historical_value_backtest
 from app.backtest.market_profitability import (
     summarize_market_profitability,
 )
+from app.ingest.football_odds_ingestion import (
+    ingest_odds_priority,
+    ingest_odds_rotation,
+    ingest_odds_rich_leagues,
+    ingest_odds_all_leagues_rotation,
+)
 from app.analysis.data_coverage_report import build_data_coverage_report
 from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 # backend/app/cli.py imports to add
@@ -197,7 +203,7 @@ def predict_football(
         )
 
     typer.echo(f"Inserted {count} football predictions.")
-        
+
 @app.command("prediction-performance-report")
 def prediction_performance_report(
     slate: str | None = typer.Option(None, help="Optional slate name, for example demo."),
@@ -1718,6 +1724,176 @@ def apply_league_market_decay_command():
     try:
         result = apply_league_market_decay(session)
 
+        print(result)
+
+    finally:
+        session.close()
+
+# backend/app/cli.py
+
+@app.command("ingest-odds-priority")
+def ingest_odds_priority_command(
+    limit: int = typer.Option(
+        300,
+        "--limit",
+        help="Maximum matches to process.",
+    ),
+    max_attempts: int = typer.Option(
+        3,
+        "--max-attempts",
+        help="Maximum odds attempts before cooldown.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+    ),
+):
+    """
+    Production-safe priority odds ingestion.
+
+    Prioritizes:
+    - leagues already returning odds
+    - upcoming fixtures
+    - leagues near production maturity
+    - stats-rich ecosystems
+    """
+
+    session = get_cli_session()
+
+    try:
+        result = ingest_odds_priority(
+            session=session,
+            limit=limit,
+            force=force,
+            max_attempts=max_attempts,
+        )
+
+        print("\n=== PRIORITY ODDS INGESTION ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("ingest-odds-rotation")
+def ingest_odds_rotation_command(
+    limit: int = typer.Option(
+        300,
+        "--limit",
+    ),
+    rotation_offset: int = typer.Option(
+        0,
+        "--rotation-offset",
+    ),
+    max_attempts: int = typer.Option(
+        3,
+        "--max-attempts",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+    ),
+):
+    """
+    Rotational ingestion.
+
+    Ensures lower-priority leagues still receive
+    periodic odds attempts.
+    """
+
+    session = get_cli_session()
+
+    try:
+        result = ingest_odds_rotation(
+            session=session,
+            limit=limit,
+            force=force,
+            max_attempts=max_attempts,
+            rotation_offset=rotation_offset,
+        )
+
+        print("\n=== ROTATION ODDS INGESTION ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("ingest-odds-rich-leagues")
+def ingest_odds_rich_leagues_command(
+    limit: int = typer.Option(
+        300,
+        "--limit",
+    ),
+    max_attempts: int = typer.Option(
+        3,
+        "--max-attempts",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+    ),
+):
+    """
+    Aggressively expand odds coverage inside
+    leagues already producing useful odds.
+    """
+
+    session = get_cli_session()
+
+    try:
+        result = ingest_odds_rich_leagues(
+            session=session,
+            limit=limit,
+            force=force,
+            max_attempts=max_attempts,
+        )
+
+        print("\n=== RICH LEAGUES ODDS INGESTION ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("ingest-odds-all-leagues-rotation")
+def ingest_odds_all_leagues_rotation_command(
+    limit: int = typer.Option(
+        500,
+        "--limit",
+    ),
+    rotation_offset: int = typer.Option(
+        0,
+        "--rotation-offset",
+    ),
+    max_attempts: int = typer.Option(
+        3,
+        "--max-attempts",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+    ),
+):
+    """
+    Full ecosystem rotational ingestion.
+
+    Every league eventually gets odds attempts.
+    No permanent exclusions.
+    """
+
+    session = get_cli_session()
+
+    try:
+        result = ingest_odds_all_leagues_rotation(
+            session=session,
+            limit=limit,
+            force=force,
+            max_attempts=max_attempts,
+            rotation_offset=rotation_offset,
+        )
+
+        print("\n=== ALL LEAGUES ROTATION INGESTION ===")
         print(result)
 
     finally:
