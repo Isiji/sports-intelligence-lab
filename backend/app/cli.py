@@ -16,6 +16,13 @@ from app.ingest.football_ingestion import (
     ingest_fixtures_for_date,
     ingest_fixtures_for_league_season,
 )
+
+from app.services.bookmaker_richness_service import BookmakerRichnessService
+
+from app.services.group_bookmaker_compatibility_service import (
+    GroupBookmakerCompatibilityService,
+)
+from app.services.market_richness_service import MarketRichnessService
 from app.odds.synonym_intelligence import (
     ensure_odds_synonym_table,
     rebuild_odds_synonym_intelligence,
@@ -64,6 +71,9 @@ from app.backtest.profit_threshold_optimizer import (
     optimize_all_profit_thresholds,
 )
 
+from app.services.adaptive_portfolio_relaxation_service import (
+    AdaptivePortfolioRelaxationService,
+)
 from app.services.league_market_coverage_service import (
     league_market_coverage_report,
     rebuild_league_market_coverage,
@@ -1334,7 +1344,50 @@ def backfill_prediction_odds_command(
         session.close()
         
 # backend/app/cli.py
-# ADD BEFORE if __name__ == "__main__"
+# ADD COMMAND
+
+@app.command("market-richness-report")
+def market_richness_report(
+    days: int = typer.Option(7, "--days"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        service = MarketRichnessService(
+            session=session,
+            lookback_days=days,
+        )
+
+        report = service.build_report(limit=limit)
+
+        print("\n=== MARKET RICHNESS REPORT ===")
+        print(report)
+
+    finally:
+        session.close()
+
+
+@app.command("bookmaker-richness-report")
+def bookmaker_richness_report(
+    days: int = typer.Option(7, "--days"),
+    limit: int = typer.Option(30, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        service = BookmakerRichnessService(
+            session=session,
+            lookback_days=days,
+        )
+
+        report = service.build_report(limit=limit)
+
+        print("\n=== BOOKMAKER RICHNESS REPORT ===")
+        print(report)
+
+    finally:
+        session.close()
 
 @app.command("rebuild-league-market-coverage")
 def rebuild_league_market_coverage_command():
@@ -1671,6 +1724,65 @@ def odds_synonym_summary():
     finally:
         session.close()
 
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("group-bookmaker-compatibility")
+def group_bookmaker_compatibility(
+    slate: str = typer.Option(..., "--slate"),
+    bookmaker_mode: str = typer.Option(
+        "flexible",
+        "--bookmaker-mode",
+        help="flexible, same, preferred, or country_safe",
+    ),
+    allowed_bookmakers: str | None = typer.Option(
+        None,
+        "--allowed-bookmakers",
+        help="Comma-separated bookmaker names, e.g. Bet365,1xBet",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        allowed_list = None
+
+        if allowed_bookmakers:
+            allowed_list = [
+                item.strip()
+                for item in allowed_bookmakers.split(",")
+                if item.strip()
+            ]
+
+        service = GroupBookmakerCompatibilityService(session=session)
+
+        report = service.analyze_slate(
+            slate=slate,
+            bookmaker_mode=bookmaker_mode,
+            allowed_bookmakers=allowed_list,
+        )
+
+        print("\n=== GROUP BOOKMAKER COMPATIBILITY ===")
+        print(report)
+
+    finally:
+        session.close()
+
+
+@app.command("adaptive-portfolio-relaxation")
+def adaptive_portfolio_relaxation(
+    slate: str = typer.Option(..., "--slate"),
+):
+    session = get_cli_session()
+
+    try:
+        service = AdaptivePortfolioRelaxationService(session=session)
+        report = service.recommend(slate=slate)
+
+        print("\n=== ADAPTIVE PORTFOLIO RELAXATION ===")
+        print(report)
+
+    finally:
+        session.close()
 
 @app.command("market-quality-report")
 def market_quality_report():
@@ -1810,6 +1922,91 @@ def apply_league_decay_command():
     finally:
         session.close()
 
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("debug-prediction-bookmakers")
+def debug_prediction_bookmakers(
+    prediction_id: int = typer.Option(..., "--prediction-id"),
+):
+    session = get_cli_session()
+
+    try:
+        row = session.execute(
+            text(
+                """
+                SELECT
+                    p.id AS prediction_id,
+                    p.match_id,
+                    p.market,
+                    p.predicted_label,
+                    p.odds,
+                    m.home_team,
+                    m.away_team,
+                    m.league
+                FROM predictions p
+                JOIN matches m ON m.id = p.match_id
+                WHERE p.id = :prediction_id
+                """
+            ),
+            {"prediction_id": prediction_id},
+        ).mappings().first()
+
+        print("\n=== PREDICTION ===")
+        print(dict(row) if row else None)
+
+        if not row:
+            return
+
+        odds_rows = session.execute(
+            text(
+                """
+                SELECT
+                    bookmaker,
+                    market,
+                    selection,
+                    odds,
+                    retrieved_at
+                FROM match_odds
+                WHERE match_id = :match_id
+                ORDER BY market ASC, selection ASC, bookmaker ASC
+                LIMIT 100
+                """
+            ),
+            {"match_id": row["match_id"]},
+        ).mappings().all()
+
+        print("\n=== MATCH ODDS SAMPLE ===")
+        for item in odds_rows:
+            print(dict(item))
+
+        exact_rows = session.execute(
+            text(
+                """
+                SELECT
+                    bookmaker,
+                    market,
+                    selection,
+                    odds,
+                    retrieved_at
+                FROM match_odds
+                WHERE match_id = :match_id
+                  AND market = :market
+                ORDER BY selection ASC, bookmaker ASC
+                """
+            ),
+            {
+                "match_id": row["match_id"],
+                "market": row["market"],
+            },
+        ).mappings().all()
+
+        print("\n=== SAME MARKET ODDS ===")
+        for item in exact_rows:
+            print(dict(item))
+
+    finally:
+        session.close()
 
 @app.command("apply-league-market-decay")
 def apply_league_market_decay_command():
@@ -1940,7 +2137,7 @@ def ingest_ecosystem_odds(
 
     finally:
         session.close()
-        
+
 @app.command("ingest-odds-rich-leagues")
 def ingest_odds_rich_leagues_command(
     limit: int = typer.Option(
