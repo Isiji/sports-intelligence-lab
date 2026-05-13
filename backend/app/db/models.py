@@ -1097,6 +1097,33 @@ class LeagueOddsCoverageSnapshot(Base):
 
     coverage_score: Mapped[float] = mapped_column(Float, default=0.0)
     coverage_tier: Mapped[str] = mapped_column(String(40), default="UNKNOWN", index=True)
+# backend/app/db/models.py
+
+    market_depth_score = Column(
+        Float,
+        default=0,
+    )
+
+    bookmaker_depth_score = Column(
+        Float,
+        default=0,
+    )
+
+    ecosystem_score = Column(
+        Float,
+        default=0,
+    )
+
+    priority_tier = Column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
+
+    last_odds_activity_at = Column(
+        DateTime,
+        nullable=True,
+    )
 
     production_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

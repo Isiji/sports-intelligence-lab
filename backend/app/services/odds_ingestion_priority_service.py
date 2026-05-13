@@ -64,21 +64,20 @@ class OddsIngestionPriorityService:
         rows = self.session.execute(
             text(
                 """
-                WITH league_coverage AS (
+                WITH coverage AS (
                     SELECT
                         league,
-                        COUNT(*) AS total_matches,
-                        COUNT(*) FILTER (WHERE has_odds = true) AS odds_matches,
-                        COUNT(*) FILTER (WHERE has_stats = true) AS stats_matches,
-                        COUNT(*) FILTER (WHERE is_finished = true) AS finished_matches,
-                        COUNT(*) FILTER (
-                            WHERE odds_attempt_count IS NOT NULL
-                            AND odds_attempt_count > 0
-                        ) AS attempted_matches
-                    FROM matches
-                    WHERE league IS NOT NULL
-                    GROUP BY league
+                        production_allowed,
+                        priority_tier,
+                        ecosystem_score,
+                        market_depth_score,
+                        bookmaker_depth_score,
+                        odds_coverage_rate,
+                        odds_success_rate,
+                        last_odds_activity_at
+                    FROM league_odds_coverage_snapshots
                 ),
+
                 candidate_base AS (
                     SELECT
                         m.id AS match_id,
@@ -87,88 +86,188 @@ class OddsIngestionPriorityService:
                         m.season,
                         m.kickoff_date,
                         m.is_finished,
+
                         COALESCE(m.has_odds, false) AS has_odds,
                         COALESCE(m.odds_unavailable, false) AS odds_unavailable,
                         COALESCE(m.odds_attempt_count, 0) AS odds_attempt_count,
 
-                        COALESCE(lc.total_matches, 0) AS league_total_matches,
-                        COALESCE(lc.odds_matches, 0) AS league_odds_matches,
-                        COALESCE(lc.stats_matches, 0) AS league_stats_matches,
-                        COALESCE(lc.finished_matches, 0) AS league_finished_matches,
-                        COALESCE(lc.attempted_matches, 0) AS league_attempted_matches,
+                        COALESCE(c.production_allowed, false)
+                            AS production_allowed,
 
-                        CASE
-                            WHEN COALESCE(lc.total_matches, 0) = 0 THEN 0
-                            ELSE COALESCE(lc.odds_matches, 0)::float / lc.total_matches
-                        END AS league_odds_ratio,
+                        COALESCE(
+                            c.priority_tier,
+                            'DISCOVERY_ROTATION'
+                        ) AS priority_tier,
 
-                        CASE
-                            WHEN COALESCE(lc.total_matches, 0) = 0 THEN 0
-                            ELSE COALESCE(lc.stats_matches, 0)::float / lc.total_matches
-                        END AS league_stats_ratio
+                        COALESCE(c.ecosystem_score, 0)
+                            AS ecosystem_score,
+
+                        COALESCE(c.market_depth_score, 0)
+                            AS market_depth_score,
+
+                        COALESCE(c.bookmaker_depth_score, 0)
+                            AS bookmaker_depth_score,
+
+                        COALESCE(c.odds_coverage_rate, 0)
+                            AS odds_coverage_rate,
+
+                        COALESCE(c.odds_success_rate, 0)
+                            AS odds_success_rate,
+
+                        c.last_odds_activity_at
+
                     FROM matches m
-                    LEFT JOIN league_coverage lc ON lc.league = m.league
+
+                    LEFT JOIN coverage c
+                        ON c.league = m.league
+
                     WHERE
                         m.provider_fixture_id IS NOT NULL
+
                         AND COALESCE(m.has_odds, false) = false
-                        AND COALESCE(m.odds_attempt_count, 0) < :max_attempts
+
+                        AND COALESCE(
+                            m.odds_attempt_count,
+                            0
+                        ) < :max_attempts
+
                         AND (
-                            COALESCE(m.odds_unavailable, false) = false
-                            OR COALESCE(m.odds_attempt_count, 0) = 0
-                        )
-                        AND (
-                            (:include_upcoming = true AND m.kickoff_date BETWEEN :today AND :max_upcoming_date)
+                            COALESCE(
+                                m.odds_unavailable,
+                                false
+                            ) = false
+
                             OR
-                            (:include_finished = true AND m.is_finished = true)
+
+                            COALESCE(
+                                m.odds_attempt_count,
+                                0
+                            ) = 0
+                        )
+
+                        AND (
+                            (
+                                :include_upcoming = true
+                                AND m.kickoff_date BETWEEN :today AND :max_upcoming_date
+                            )
+
+                            OR
+
+                            (
+                                :include_finished = true
+                                AND m.is_finished = true
+                            )
                         )
                 ),
+
                 scored AS (
                     SELECT
                         *,
+
                         (
                             CASE
-                                WHEN kickoff_date BETWEEN :today AND :max_upcoming_date THEN 35
+                                WHEN production_allowed = true
+                                    THEN 120
                                 ELSE 0
                             END
+
                             +
+
                             CASE
-                                WHEN is_finished = true THEN 10
+                                WHEN priority_tier = 'CORE_PRODUCTION'
+                                    THEN 100
+
+                                WHEN priority_tier = 'HIGH_PRIORITY'
+                                    THEN 70
+
+                                WHEN priority_tier = 'GROWTH_PRIORITY'
+                                    THEN 45
+
+                                WHEN priority_tier = 'EXPLORATION_PRIORITY'
+                                    THEN 20
+
                                 ELSE 0
                             END
+
                             +
+
+                            (
+                                ecosystem_score * 0.60
+                            )
+
+                            +
+
+                            (
+                                odds_success_rate * 50
+                            )
+
+                            +
+
+                            (
+                                market_depth_score * 20
+                            )
+
+                            +
+
+                            (
+                                bookmaker_depth_score * 20
+                            )
+
+                            +
+
                             CASE
-                                WHEN league_odds_matches > 0 THEN 35
+                                WHEN kickoff_date BETWEEN :today AND :max_upcoming_date
+                                    THEN 35
                                 ELSE 0
                             END
+
                             +
+
                             CASE
-                                WHEN league_odds_ratio >= 0.05 THEN 25
-                                WHEN league_odds_ratio >= 0.02 THEN 15
-                                WHEN league_odds_ratio > 0 THEN 8
+                                WHEN is_finished = true
+                                    THEN 12
                                 ELSE 0
                             END
+
                             +
+
                             CASE
-                                WHEN league_stats_ratio >= 0.70 THEN 15
-                                WHEN league_stats_ratio >= 0.40 THEN 8
+                                WHEN odds_attempt_count = 0
+                                    THEN 20
+                                WHEN odds_attempt_count = 1
+                                    THEN 10
                                 ELSE 0
                             END
+
                             +
+
                             CASE
-                                WHEN league_total_matches >= 1000 THEN 8
-                                WHEN league_total_matches >= 250 THEN 5
-                                ELSE 2
+                                WHEN last_odds_activity_at >= NOW() - INTERVAL '3 days'
+                                    THEN 15
+                                WHEN last_odds_activity_at >= NOW() - INTERVAL '7 days'
+                                    THEN 8
+                                ELSE 0
                             END
+
                             -
-                            (odds_attempt_count * 12)
+
+                            (
+                                odds_attempt_count * 18
+                            )
+
                             -
+
                             CASE
-                                WHEN odds_unavailable = true THEN 25
+                                WHEN odds_unavailable = true
+                                    THEN 40
                                 ELSE 0
                             END
+
                         ) AS base_priority_score
+
                     FROM candidate_base
                 )
+
                 SELECT
                     match_id,
                     provider_fixture_id,
@@ -182,37 +281,64 @@ class OddsIngestionPriorityService:
 
                     CASE
                         WHEN :mode = 'rich_leagues'
-                            THEN base_priority_score + CASE WHEN league_odds_matches > 0 THEN 40 ELSE -20 END
+                            THEN base_priority_score
+                                + CASE
+                                    WHEN priority_tier IN (
+                                        'CORE_PRODUCTION',
+                                        'HIGH_PRIORITY'
+                                    )
+                                    THEN 50
+                                    ELSE -25
+                                END
 
                         WHEN :mode = 'rotation'
                             THEN base_priority_score
-                                 + CASE WHEN league_odds_matches = 0 THEN 20 ELSE 0 END
-                                 + MOD(match_id + :rotation_offset, 17)
+                                + MOD(
+                                    match_id + :rotation_offset,
+                                    17
+                                )
 
                         WHEN :mode = 'all_leagues_rotation'
                             THEN base_priority_score
-                                 + CASE WHEN league_attempted_matches = 0 THEN 45 ELSE 0 END
-                                 + CASE WHEN league_odds_matches = 0 THEN 15 ELSE 0 END
-                                 + MOD(match_id + :rotation_offset, 29)
+                                + CASE
+                                    WHEN priority_tier = 'DISCOVERY_ROTATION'
+                                    THEN 35
+                                    ELSE 0
+                                END
+                                + MOD(
+                                    match_id + :rotation_offset,
+                                    29
+                                )
 
                         ELSE base_priority_score
                     END AS priority_score,
 
                     CASE
-                        WHEN league_odds_matches > 0 AND kickoff_date BETWEEN :today AND :max_upcoming_date
-                            THEN 'upcoming_match_in_odds_proven_league'
-                        WHEN league_odds_matches > 0
-                            THEN 'odds_proven_league'
-                        WHEN league_attempted_matches = 0
-                            THEN 'league_needs_first_odds_attempt'
-                        WHEN league_stats_ratio >= 0.70
-                            THEN 'stats_rich_league_needs_odds_growth'
-                        WHEN odds_attempt_count = 0
-                            THEN 'fresh_unattempted_match'
-                        ELSE 'rotation_candidate'
+                        WHEN production_allowed = true
+                            THEN 'production_allowed_league'
+
+                        WHEN priority_tier = 'CORE_PRODUCTION'
+                            THEN 'core_production_growth'
+
+                        WHEN priority_tier = 'HIGH_PRIORITY'
+                            THEN 'high_priority_growth'
+
+                        WHEN priority_tier = 'GROWTH_PRIORITY'
+                            THEN 'growth_priority_expansion'
+
+                        WHEN priority_tier = 'EXPLORATION_PRIORITY'
+                            THEN 'ecosystem_exploration'
+
+                        ELSE 'discovery_rotation'
                     END AS priority_reason
+
                 FROM scored
-                ORDER BY priority_score DESC, kickoff_date ASC NULLS LAST, match_id ASC
+
+                ORDER BY
+                    priority_score DESC,
+                    kickoff_date ASC NULLS LAST,
+                    match_id ASC
+
                 LIMIT :limit
                 """
             ),
