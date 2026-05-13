@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Match
 from app.ingest.football_odds_ingestion import ingest_odds_for_fixture
+from app.services.league_cooldown_service import LeagueCooldownService
 
 
 PRIORITY_WEIGHTS = {
@@ -31,6 +32,7 @@ class EcosystemOddsOrchestrator:
     - Cooldown protection
     - League diversity
     - Priority-weighted routing
+    - Adaptive waste reduction
     """
 
     def __init__(
@@ -38,10 +40,13 @@ class EcosystemOddsOrchestrator:
         session: Session,
         limit: int = 500,
         force: bool = False,
+        use_league_cooldown: bool = True,
     ):
         self.session = session
         self.limit = limit
         self.force = force
+        self.use_league_cooldown = use_league_cooldown
+        self.cooldown_service = LeagueCooldownService(session=session)
 
     def run(self) -> dict:
         matches = self._select_candidate_matches()
@@ -51,9 +56,22 @@ class EcosystemOddsOrchestrator:
         failures = []
         sample_results = []
 
+        skipped_by_cooldown = 0
+
         for match in matches:
             try:
                 priority_tier = self._resolve_priority_tier(match.league)
+                cooldown_status = self.cooldown_service.get_league_cooldown_status(
+                    match.league
+                )
+
+                if (
+                    self.use_league_cooldown
+                    and cooldown_status["cooldown_active"]
+                    and not self.force
+                ):
+                    skipped_by_cooldown += 1
+                    continue
 
                 result = ingest_odds_for_fixture(
                     self.session,
@@ -70,6 +88,7 @@ class EcosystemOddsOrchestrator:
                             "provider_fixture_id": match.provider_fixture_id,
                             "league": match.league,
                             "priority_tier": priority_tier,
+                            "cooldown": cooldown_status,
                             "home_team": match.home_team,
                             "away_team": match.away_team,
                             "result": result,
@@ -94,6 +113,7 @@ class EcosystemOddsOrchestrator:
         return {
             "matches_selected": len(matches),
             "matches_processed": processed,
+            "matches_skipped_by_cooldown": skipped_by_cooldown,
             "matches_failed": failed,
             "failures": failures,
             "sample_results": sample_results,
@@ -136,7 +156,21 @@ class EcosystemOddsOrchestrator:
 
             attempt_penalty = min(float(match.odds_attempt_count or 0) * 0.08, 0.25)
 
-            score = priority_weight - attempt_penalty
+            league_adjustment = 0.0
+
+            if self.use_league_cooldown and not self.force:
+                cooldown_status = self.cooldown_service.get_league_cooldown_status(
+                    match.league
+                )
+
+                if cooldown_status["cooldown_active"]:
+                    continue
+
+                league_adjustment = self.cooldown_service.league_score_adjustment(
+                    match.league
+                )
+
+            score = priority_weight - attempt_penalty + league_adjustment
 
             scored.append(
                 {

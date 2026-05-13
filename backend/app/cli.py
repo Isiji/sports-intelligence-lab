@@ -54,6 +54,8 @@ from app.backtest.calibration import (
 # backend/app/cli.py
 # ADD IMPORT
 
+from app.services.league_cooldown_service import LeagueCooldownService
+
 from app.services.prediction_settlement_service import (
     settle_production_predictions,
 )
@@ -87,6 +89,9 @@ from app.services.ecosystem_odds_orchestrator import (
     EcosystemOddsOrchestrator,
 )
 
+from app.services.orchestration_telemetry_service import (
+    OrchestrationTelemetryService,
+)
 from app.reports.competition_coverage import build_competition_coverage_report
 # backend/app/cli.py
 from app.analysis.group_performance_report import build_group_performance_report
@@ -1116,6 +1121,88 @@ def supported_markets():
     for market in supported_market_keys():
         print(market)
 
+# backend/app/cli.py
+# ADD COMMANDS
+
+@app.command("orchestration-telemetry-report")
+def orchestration_telemetry_report(
+    days: int = typer.Option(1, "--days"),
+):
+    session = get_cli_session()
+
+    try:
+        service = OrchestrationTelemetryService(session=session)
+        report = service.build_report(days=days)
+
+        print("\n=== ORCHESTRATION TELEMETRY REPORT ===")
+        print(report)
+
+    finally:
+        session.close()
+
+
+@app.command("api-waste-report")
+def api_waste_report(
+    days: int = typer.Option(1, "--days"),
+):
+    session = get_cli_session()
+
+    try:
+        service = OrchestrationTelemetryService(session=session)
+        report = service.api_waste_report(days=days)
+
+        print("\n=== API WASTE REPORT ===")
+        print(report)
+
+    finally:
+        session.close()
+
+
+@app.command("league-ingestion-waste-report")
+def league_ingestion_waste_report(
+    days: int = typer.Option(1, "--days"),
+    limit: int = typer.Option(30, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        service = OrchestrationTelemetryService(session=session)
+        since_report = service.build_report(days=days)
+
+        print("\n=== LEAGUE INGESTION WASTE REPORT ===")
+        print(
+            {
+                "window_days": days,
+                "league_waste": since_report["league_waste"][:limit],
+            }
+        )
+
+    finally:
+        session.close()
+
+
+@app.command("league-cooldown-report")
+def league_cooldown_report(
+    days: int = typer.Option(3, "--days"),
+    min_attempts: int = typer.Option(5, "--min-attempts"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        service = LeagueCooldownService(
+            session=session,
+            lookback_days=days,
+            min_attempts=min_attempts,
+        )
+
+        report = service.build_cooldown_report(limit=limit)
+
+        print("\n=== LEAGUE COOLDOWN REPORT ===")
+        print(report)
+
+    finally:
+        session.close()
 
 @app.command("scan-market-availability")
 def scan_market_availability_command(limit: int = 50000):
@@ -1825,26 +1912,35 @@ def ingest_odds_rotation_command(
     finally:
         session.close()
 
-# add command
+# backend/app/cli.py
+# UPDATE EXISTING ingest-ecosystem-odds COMMAND
 
 @app.command("ingest-ecosystem-odds")
 def ingest_ecosystem_odds(
-    limit: int = 500,
-    force: bool = False,
+    limit: int = typer.Option(500, "--limit"),
+    force: bool = typer.Option(False, "--force"),
+    use_league_cooldown: bool = typer.Option(
+        True,
+        "--use-league-cooldown/--no-league-cooldown",
+    ),
 ):
-    """
-    Ecosystem-intelligence-driven odds ingestion.
-    """
+    session = get_cli_session()
 
-    with get_cli_session() as session:
-        result = EcosystemOddsOrchestrator(
+    try:
+        orchestrator = EcosystemOddsOrchestrator(
             session=session,
             limit=limit,
             force=force,
-        ).run()
+            use_league_cooldown=use_league_cooldown,
+        )
+
+        result = orchestrator.run()
 
         print(result)
 
+    finally:
+        session.close()
+        
 @app.command("ingest-odds-rich-leagues")
 def ingest_odds_rich_leagues_command(
     limit: int = typer.Option(
