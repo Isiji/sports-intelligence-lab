@@ -148,7 +148,7 @@ class MatchOdds(Base):
 
 
 # backend/app/db/models.py
-# REPLACE ONLY THE Prediction CLASS WITH THIS VERSION
+# REPLACE ONLY THE Prediction CLASS
 
 class Prediction(Base):
     __tablename__ = "predictions"
@@ -170,49 +170,53 @@ class Prediction(Base):
     value_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # =====================================================
-    # PRODUCTION SETTLEMENT FIELDS
+    # ODDS SOURCE TRACEABILITY
     # =====================================================
 
-    is_correct: Mapped[bool | None] = mapped_column(
-        Boolean,
+    odds_bookmaker: Mapped[str | None] = mapped_column(
+        String(120),
         nullable=True,
         index=True,
     )
 
-    result_label: Mapped[str | None] = mapped_column(
-        String(80),
+    odds_market: Mapped[str | None] = mapped_column(
+        String(160),
         nullable=True,
         index=True,
     )
 
-    profit_loss: Mapped[float | None] = mapped_column(
-        Float,
+    odds_selection: Mapped[str | None] = mapped_column(
+        String(160),
         nullable=True,
+        index=True,
     )
 
-    stake: Mapped[float | None] = mapped_column(
-        Float,
-        nullable=True,
-    )
-
-    settled_at: Mapped[datetime | None] = mapped_column(
+    odds_retrieved_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
         index=True,
     )
 
-    closing_odds: Mapped[float | None] = mapped_column(
-        Float,
+    odds_match_quality: Mapped[str | None] = mapped_column(
+        String(60),
         nullable=True,
+        index=True,
     )
 
-    clv: Mapped[float | None] = mapped_column(
-        Float,
-        nullable=True,
-    )
+    # =====================================================
+    # PRODUCTION SETTLEMENT FIELDS
+    # =====================================================
+
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    result_label: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    profit_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stake: Mapped[float | None] = mapped_column(Float, nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    closing_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clv: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
+    
 class PredictionGroupItem(Base):
     __tablename__ = "prediction_group_items"
 

@@ -1,5 +1,3 @@
-# backend/app/ml/predict_football.py
-
 import pickle
 
 from sqlalchemy import delete, select
@@ -153,6 +151,7 @@ def predict_football_market(
             market=market,
             raw_confidence=confidence,
             odds=odds,
+            bookmaker=odds_result.bookmaker if odds_result else None,
         )
 
         if not intelligence["allowed"]:
@@ -190,6 +189,16 @@ def predict_football_market(
                 odds=odds,
                 implied_probability=implied_probability,
                 value_score=value_score,
+
+                # =====================================================
+                # ODDS SOURCE TRACEABILITY
+                # =====================================================
+
+                odds_bookmaker=odds_result.bookmaker if odds_result else None,
+                odds_market=odds_result.provider_market if odds_result else None,
+                odds_selection=odds_result.provider_selection if odds_result else None,
+                odds_retrieved_at=odds_result.retrieved_at if odds_result else None,
+                odds_match_quality=odds_result.match_quality if odds_result else None,
             )
         )
 

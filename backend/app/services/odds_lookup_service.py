@@ -1,5 +1,3 @@
-# backend/app/services/odds_lookup_service.py
-
 from __future__ import annotations
 
 import re
@@ -19,6 +17,7 @@ class OddsLookupResult:
     bookmaker: str | None = None
     provider_market: str | None = None
     provider_selection: str | None = None
+    retrieved_at: object | None = None
     match_quality: str = "none"
 
 
@@ -75,6 +74,7 @@ def _row_to_result(row: MatchOdds, quality: str) -> OddsLookupResult:
         bookmaker=getattr(row, "bookmaker", None),
         provider_market=getattr(row, "market", None),
         provider_selection=getattr(row, "selection", None),
+        retrieved_at=getattr(row, "retrieved_at", None),
         match_quality=quality,
     )
 
@@ -186,7 +186,8 @@ SELECTION_ALIASES: dict[str, set[str]] = {
         "1/2",
         "either team",
         "no draw",
-    },}
+    },
+}
 
 
 def _selection_matches(selection: str, expected: str) -> bool:
@@ -196,7 +197,10 @@ def _selection_matches(selection: str, expected: str) -> bool:
     return selection in aliases or expected in selection
 
 
-def _direct_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
+def _direct_lookup(
+    rows: Iterable[MatchOdds],
+    canonical_market: str,
+) -> OddsLookupResult | None:
     for market_alias, selection_alias in DIRECT_ODDS_LOOKUP_MAP.get(canonical_market, []):
         for row in rows:
             if row.odds is None:
@@ -222,184 +226,6 @@ def _direct_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLook
                         ]
                     ):
                         return _row_to_result(row, "direct")
-    return None
-
-
-def _goal_total_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _line_from_key(canonical_market)
-    wants_over = canonical_market.startswith("over_")
-    wants_under = canonical_market.startswith("under_")
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        market = _clean(getattr(row, "market", ""))
-        selection = _clean(getattr(row, "selection", ""))
-        combined = f"{market} {selection}"
-
-        if "goal" not in combined and "total" not in combined:
-            continue
-
-        if not _contains_line(combined, line):
-            continue
-
-        if wants_over and "over" in combined:
-            return _row_to_result(row, "goal_total")
-
-        if wants_under and "under" in combined:
-            return _row_to_result(row, "goal_total")
-
-    return None
-
-
-def _team_total_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _line_from_key(canonical_market)
-    side = "home" if canonical_market.startswith("home_") else "away"
-    wants_over = "_over_" in canonical_market
-    wants_under = "_under_" in canonical_market
-
-    side_aliases = {
-        "home": ["home", "home team", "team 1"],
-        "away": ["away", "away team", "team 2"],
-    }
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        market = _clean(getattr(row, "market", ""))
-        selection = _clean(getattr(row, "selection", ""))
-        combined = f"{market} {selection}"
-
-        if not any(word in combined for word in ["team total", "home total", "away total", "home goals", "away goals"]):
-            continue
-
-        if not any(alias in combined for alias in side_aliases[side]):
-            continue
-
-        if not _contains_line(combined, line):
-            continue
-
-        if wants_over and "over" in combined:
-            return _row_to_result(row, "team_total")
-
-        if wants_under and "under" in combined:
-            return _row_to_result(row, "team_total")
-
-    return None
-
-
-def _corners_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _line_from_key(canonical_market)
-    wants_over = "_over_" in canonical_market
-    wants_under = "_under_" in canonical_market
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        combined = f"{_clean(getattr(row, 'market', ''))} {_clean(getattr(row, 'selection', ''))}"
-
-        if "corner" not in combined:
-            continue
-
-        if not _contains_line(combined, line):
-            continue
-
-        if wants_over and "over" in combined:
-            return _row_to_result(row, "corners")
-
-        if wants_under and "under" in combined:
-            return _row_to_result(row, "corners")
-
-    return None
-
-
-def _shots_on_target_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _line_from_key(canonical_market)
-    wants_over = "_over_" in canonical_market
-    wants_under = "_under_" in canonical_market
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        combined = f"{_clean(getattr(row, 'market', ''))} {_clean(getattr(row, 'selection', ''))}"
-
-        if "shot" not in combined or "target" not in combined:
-            continue
-
-        if not _contains_line(combined, line):
-            continue
-
-        if wants_over and "over" in combined:
-            return _row_to_result(row, "shots_on_target")
-
-        if wants_under and "under" in combined:
-            return _row_to_result(row, "shots_on_target")
-
-    return None
-
-
-def _first_half_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _line_from_key(canonical_market)
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        market = _clean(getattr(row, "market", ""))
-        selection = _clean(getattr(row, "selection", ""))
-        combined = f"{market} {selection}"
-
-        if "first half" not in combined and "1st half" not in combined and "half time" not in combined:
-            continue
-
-        if "home_win" in canonical_market and _selection_matches(selection, "home"):
-            return _row_to_result(row, "first_half")
-
-        if canonical_market.endswith("_draw") and _selection_matches(selection, "draw"):
-            return _row_to_result(row, "first_half")
-
-        if "away_win" in canonical_market and _selection_matches(selection, "away"):
-            return _row_to_result(row, "first_half")
-
-        if line and not _contains_line(combined, line):
-            continue
-
-        if "_over_" in canonical_market and "over" in combined:
-            return _row_to_result(row, "first_half")
-
-        if "_under_" in canonical_market and "under" in combined:
-            return _row_to_result(row, "first_half")
-
-    return None
-
-
-def _asian_handicap_lookup(rows: Iterable[MatchOdds], canonical_market: str) -> OddsLookupResult | None:
-    line = _signed_line_from_key(canonical_market)
-    side = "home" if "_home_" in canonical_market else "away"
-
-    for row in rows:
-        if row.odds is None:
-            continue
-
-        market = _clean(getattr(row, "market", ""))
-        selection = _clean(getattr(row, "selection", ""))
-        combined = f"{market} {selection}"
-
-        if "handicap" not in combined:
-            continue
-
-        if line and not _contains_line(combined, line):
-            continue
-
-        if side == "home" and _selection_matches(selection, "home"):
-            return _row_to_result(row, "asian_handicap")
-
-        if side == "away" and _selection_matches(selection, "away"):
-            return _row_to_result(row, "asian_handicap")
 
     return None
 
@@ -432,24 +258,8 @@ def find_best_odds(
         return None
 
     direct = _direct_lookup(rows, canonical_market)
+
     if direct:
         return direct
-
-    # IMPORTANT:
-    # Do not rely only on get_market_family().
-    # Some new/advanced markets may have family naming drift.
-    fallback_lookups = [
-        _goal_total_lookup,
-        _team_total_lookup,
-        _corners_lookup,
-        _shots_on_target_lookup,
-        _first_half_lookup,
-        _asian_handicap_lookup,
-    ]
-
-    for lookup in fallback_lookups:
-        result = lookup(rows, canonical_market)
-        if result:
-            return result
 
     return None

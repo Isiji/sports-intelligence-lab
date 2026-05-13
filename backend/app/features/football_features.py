@@ -10,11 +10,8 @@ K_FACTOR = 32.0
 HOME_ADVANTAGE_ELO = 60.0
 
 
-# backend/app/features/football_features.py
-
 def feature_columns() -> list[str]:
     return [
-        # Recent team form / performance
         "home_win_rate",
         "away_win_rate",
         "home_goal_diff",
@@ -22,19 +19,16 @@ def feature_columns() -> list[str]:
         "home_form_score",
         "away_form_score",
 
-        # Head-to-head history
         "home_h2h_win_rate",
         "away_h2h_win_rate",
         "h2h_avg_goals",
         "h2h_over_2_5_rate",
 
-        # Home/away specific form
         "home_home_win_rate",
         "away_away_win_rate",
         "home_current_streak",
         "away_current_streak",
 
-        # Rolling team profiles
         "home_goals_for_avg",
         "home_goals_against_avg",
         "away_goals_for_avg",
@@ -50,13 +44,11 @@ def feature_columns() -> list[str]:
         "home_over_2_5_rate",
         "away_over_2_5_rate",
 
-        # These are rolling averages from previous matches, not current match totals
         "home_corner_avg",
         "away_corner_avg",
         "home_sot_avg",
         "away_sot_avg",
 
-        # ELO / strength
         "home_elo",
         "away_elo",
         "elo_diff",
@@ -70,7 +62,6 @@ def feature_columns() -> list[str]:
         "attack_defense_diff",
         "team_strength_diff",
 
-        # League profile from previous matches
         "league_home_win_rate",
         "league_away_win_rate",
         "league_draw_rate",
@@ -80,6 +71,7 @@ def feature_columns() -> list[str]:
         "league_avg_corners",
         "league_avg_sot",
     ]
+
 
 MARKET_TARGETS = {
     "home_win": "target_home_win",
@@ -107,7 +99,23 @@ MARKET_TARGETS = {
 
     "corners_over_8_5": "target_corners_over_8_5",
     "shots_on_target_over_8_5": "target_sot_over_8_5",
+
+    "draw_no_bet_home": "target_draw_no_bet_home",
+    "draw_no_bet_away": "target_draw_no_bet_away",
+    "home_win_to_nil": "target_home_win_to_nil",
+    "away_win_to_nil": "target_away_win_to_nil",
+
+    "asian_handicap_home_plus_0_5": "target_ah_home_plus_0_5",
+    "asian_handicap_away_plus_0_5": "target_ah_away_plus_0_5",
+    "asian_handicap_home_minus_0_5": "target_ah_home_minus_0_5",
+    "asian_handicap_away_minus_0_5": "target_ah_away_minus_0_5",
+
+    "asian_handicap_home_plus_1_5": "target_ah_home_plus_1_5",
+    "asian_handicap_away_plus_1_5": "target_ah_away_plus_1_5",
+    "asian_handicap_home_minus_1_5": "target_ah_home_minus_1_5",
+    "asian_handicap_away_minus_1_5": "target_ah_away_minus_1_5",
 }
+
 
 STATS_REQUIRED_MARKETS = {
     "corners_over_8_5",
@@ -141,6 +149,21 @@ MARKET_LABELS = {
 
     "corners_over_8_5": ("CORNERS_OVER_8_5", "CORNERS_UNDER_8_5"),
     "shots_on_target_over_8_5": ("SOT_OVER_8_5", "SOT_UNDER_8_5"),
+
+    "draw_no_bet_home": ("DRAW_NO_BET_HOME", "NOT_DRAW_NO_BET_HOME"),
+    "draw_no_bet_away": ("DRAW_NO_BET_AWAY", "NOT_DRAW_NO_BET_AWAY"),
+    "home_win_to_nil": ("HOME_WIN_TO_NIL", "NOT_HOME_WIN_TO_NIL"),
+    "away_win_to_nil": ("AWAY_WIN_TO_NIL", "NOT_AWAY_WIN_TO_NIL"),
+
+    "asian_handicap_home_plus_0_5": ("ASIAN_HANDICAP_HOME_PLUS_0_5", "NOT_ASIAN_HANDICAP_HOME_PLUS_0_5"),
+    "asian_handicap_away_plus_0_5": ("ASIAN_HANDICAP_AWAY_PLUS_0_5", "NOT_ASIAN_HANDICAP_AWAY_PLUS_0_5"),
+    "asian_handicap_home_minus_0_5": ("ASIAN_HANDICAP_HOME_MINUS_0_5", "NOT_ASIAN_HANDICAP_HOME_MINUS_0_5"),
+    "asian_handicap_away_minus_0_5": ("ASIAN_HANDICAP_AWAY_MINUS_0_5", "NOT_ASIAN_HANDICAP_AWAY_MINUS_0_5"),
+
+    "asian_handicap_home_plus_1_5": ("ASIAN_HANDICAP_HOME_PLUS_1_5", "NOT_ASIAN_HANDICAP_HOME_PLUS_1_5"),
+    "asian_handicap_away_plus_1_5": ("ASIAN_HANDICAP_AWAY_PLUS_1_5", "NOT_ASIAN_HANDICAP_AWAY_PLUS_1_5"),
+    "asian_handicap_home_minus_1_5": ("ASIAN_HANDICAP_HOME_MINUS_1_5", "NOT_ASIAN_HANDICAP_HOME_MINUS_1_5"),
+    "asian_handicap_away_minus_1_5": ("ASIAN_HANDICAP_AWAY_MINUS_1_5", "NOT_ASIAN_HANDICAP_AWAY_MINUS_1_5"),
 }
 
 
@@ -156,13 +179,34 @@ def load_training_frame(session: Session) -> pd.DataFrame:
             m.home_goals,
             m.away_goals,
             m.has_stats,
+
+            COALESCE(hs.corners, 0) AS home_corners,
+            COALESCE(as1.corners, 0) AS away_corners,
+            COALESCE(hs.shots_on_target, 0) AS home_sot,
+            COALESCE(as1.shots_on_target, 0) AS away_sot,
+
             f.features_json
+
         FROM football_feature_snapshots f
-        JOIN matches m ON m.id = f.match_id
+
+        JOIN matches m
+            ON m.id = f.match_id
+
+        LEFT JOIN team_match_stats hs
+            ON hs.match_id = m.id
+           AND hs.is_home = 1
+
+        LEFT JOIN team_match_stats as1
+            ON as1.match_id = m.id
+           AND as1.is_home = 0
+
         WHERE
             m.home_goals IS NOT NULL
             AND m.away_goals IS NOT NULL
-        ORDER BY m.kickoff_date ASC, m.id ASC
+
+        ORDER BY
+            m.kickoff_date ASC,
+            m.id ASC
         """
     )
 
@@ -187,25 +231,25 @@ def load_training_frame(session: Session) -> pd.DataFrame:
             "home_goals": row["home_goals"],
             "away_goals": row["away_goals"],
             "has_stats": row["has_stats"],
+            "home_corners": row["home_corners"],
+            "away_corners": row["away_corners"],
+            "home_sot": row["home_sot"],
+            "away_sot": row["away_sot"],
         }
 
         item.update(payload)
         feature_rows.append(item)
 
     df = pd.DataFrame(feature_rows)
-
     df["kickoff_date"] = pd.to_datetime(df["kickoff_date"])
 
     for col in feature_columns():
         if col not in df.columns:
             df[col] = 0.0
 
-    for target_column in MARKET_TARGETS.values():
-        if target_column not in df.columns:
-            df[target_column] = 0
+    df = _add_targets(df)
 
     return df.fillna(0.0).reset_index(drop=True)
-
 
 
 def load_upcoming_frame(
@@ -255,11 +299,8 @@ def load_upcoming_frame(
         if col not in upcoming_df.columns:
             upcoming_df[col] = 0.0
 
-    return (
-        upcoming_df
-        .fillna(0.0)
-        .reset_index(drop=True)
-    )
+    return upcoming_df.fillna(0.0).reset_index(drop=True)
+
 
 def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFrame:
     df = df.copy()
@@ -271,6 +312,7 @@ def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFr
         df = df[df["has_stats"] == True].copy()
 
     return df.reset_index(drop=True)
+
 
 def _apply_persistent_elo_for_upcoming(
     session: Session,
@@ -341,6 +383,7 @@ def _apply_persistent_elo_for_upcoming(
 
     return df.fillna(0.0)
 
+
 def _base_query(session: Session):
     query = text(
         """
@@ -374,6 +417,7 @@ def _base_query(session: Session):
             COALESCE(as1.keeper_saves, 0) AS away_keeper_saves
 
         FROM matches m
+
         LEFT JOIN team_match_stats hs
             ON hs.match_id = m.id
            AND hs.is_home = 1
@@ -424,8 +468,22 @@ def _base_query(session: Session):
 
     return df.reset_index(drop=True)
 
+
 def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+
+    for col in [
+        "home_goals",
+        "away_goals",
+        "home_corners",
+        "away_corners",
+        "home_sot",
+        "away_sot",
+    ]:
+        if col not in df.columns:
+            df[col] = 0
+
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     total_goals = df["home_goals"] + df["away_goals"]
     total_corners = df["home_corners"] + df["away_corners"]
@@ -458,7 +516,34 @@ def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df["target_corners_over_8_5"] = (total_corners > 8.5).astype(int)
     df["target_sot_over_8_5"] = (total_sot > 8.5).astype(int)
 
+    df["target_draw_no_bet_home"] = (df["home_goals"] > df["away_goals"]).astype(int)
+    df["target_draw_no_bet_away"] = (df["away_goals"] > df["home_goals"]).astype(int)
+
+    df["target_home_win_to_nil"] = (
+        (df["home_goals"] > df["away_goals"])
+        & (df["away_goals"] == 0)
+    ).astype(int)
+
+    df["target_away_win_to_nil"] = (
+        (df["away_goals"] > df["home_goals"])
+        & (df["home_goals"] == 0)
+    ).astype(int)
+
+    goal_diff = df["home_goals"] - df["away_goals"]
+    away_goal_diff = df["away_goals"] - df["home_goals"]
+
+    df["target_ah_home_plus_0_5"] = ((goal_diff + 0.5) > 0).astype(int)
+    df["target_ah_away_plus_0_5"] = ((away_goal_diff + 0.5) > 0).astype(int)
+    df["target_ah_home_minus_0_5"] = ((goal_diff - 0.5) > 0).astype(int)
+    df["target_ah_away_minus_0_5"] = ((away_goal_diff - 0.5) > 0).astype(int)
+
+    df["target_ah_home_plus_1_5"] = ((goal_diff + 1.5) > 0).astype(int)
+    df["target_ah_away_plus_1_5"] = ((away_goal_diff + 1.5) > 0).astype(int)
+    df["target_ah_home_minus_1_5"] = ((goal_diff - 1.5) > 0).astype(int)
+    df["target_ah_away_minus_1_5"] = ((away_goal_diff - 1.5) > 0).astype(int)
+
     return df
+
 
 def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -508,7 +593,6 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "away_attack_elo"] = away_attack
         df.at[i, "home_defense_elo"] = home_defense
         df.at[i, "away_defense_elo"] = away_defense
-
         df.at[i, "attack_defense_diff"] = home_attack - away_defense
 
         home_hist = _team_history(df, home, date).tail(8)
@@ -516,10 +600,8 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
 
         df.at[i, "home_win_rate"] = _win_rate(home_hist, home)
         df.at[i, "away_win_rate"] = _win_rate(away_hist, away)
-
         df.at[i, "home_goal_diff"] = _goal_diff(home_hist, home)
         df.at[i, "away_goal_diff"] = _goal_diff(away_hist, away)
-
         df.at[i, "home_form_score"] = _form_score(home_hist, home)
         df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
@@ -533,7 +615,6 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
 
         df.at[i, "home_home_win_rate"] = _home_win_rate(home_home_hist, home)
         df.at[i, "away_away_win_rate"] = _away_win_rate(away_away_hist, away)
-
         df.at[i, "home_current_streak"] = _current_streak(home_hist, home)
         df.at[i, "away_current_streak"] = _current_streak(away_hist, away)
 
@@ -545,6 +626,7 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
 
         home_strength = _team_strength(home_hist, home)
         away_strength = _team_strength(away_hist, away)
+
         df.at[i, "team_strength_diff"] = home_strength - away_strength
 
         if pd.notna(row["home_goals"]) and pd.notna(row["away_goals"]):
@@ -627,13 +709,9 @@ def _update_attack_defense_elo(
 ) -> tuple[float, float]:
     expected_goals = 1.35
     performance = goals_scored - expected_goals
-
     movement = max(min(performance * 10, 24), -24)
 
-    new_attack = attack_rating + movement
-    new_defense = defense_rating - movement
-
-    return new_attack, new_defense
+    return attack_rating + movement, defense_rating - movement
 
 
 def _team_history(df: pd.DataFrame, team: str, date) -> pd.DataFrame:
@@ -871,16 +949,14 @@ def _league_history(df: pd.DataFrame, league: str, date) -> pd.DataFrame:
         & df["away_goals"].notna()
     ]
 
+
 def build_upcoming_match_features(
     session: Session,
     upcoming_df: pd.DataFrame,
     historical_df: pd.DataFrame,
 ) -> pd.DataFrame:
     upcoming_df = upcoming_df.copy()
-
-    historical_df = historical_df.sort_values(
-        ["kickoff_date", "match_id"]
-    )
+    historical_df = historical_df.sort_values(["kickoff_date", "match_id"])
 
     for i, row in upcoming_df.iterrows():
         home = row["home_team"]
@@ -888,17 +964,13 @@ def build_upcoming_match_features(
         league = row["league"]
 
         home_hist = historical_df[
-            (
-                (historical_df["home_team"] == home)
-                | (historical_df["away_team"] == home)
-            )
+            (historical_df["home_team"] == home)
+            | (historical_df["away_team"] == home)
         ].tail(8)
 
         away_hist = historical_df[
-            (
-                (historical_df["home_team"] == away)
-                | (historical_df["away_team"] == away)
-            )
+            (historical_df["home_team"] == away)
+            | (historical_df["away_team"] == away)
         ].tail(8)
 
         league_hist = historical_df[
@@ -907,15 +979,13 @@ def build_upcoming_match_features(
 
         h2h_hist = historical_df[
             (
-                (
-                    (historical_df["home_team"] == home)
-                    & (historical_df["away_team"] == away)
-                )
-                |
-                (
-                    (historical_df["home_team"] == away)
-                    & (historical_df["away_team"] == home)
-                )
+                (historical_df["home_team"] == home)
+                & (historical_df["away_team"] == away)
+            )
+            |
+            (
+                (historical_df["home_team"] == away)
+                & (historical_df["away_team"] == home)
             )
         ].tail(6)
 
@@ -928,16 +998,10 @@ def build_upcoming_match_features(
         upcoming_df.at[i, "home_form_score"] = _form_score(home_hist, home)
         upcoming_df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
-        for key, value in _h2h_features(
-            h2h_hist,
-            home,
-            away,
-        ).items():
+        for key, value in _h2h_features(h2h_hist, home, away).items():
             upcoming_df.at[i, key] = value
 
-        for key, value in _league_profile(
-            league_hist
-        ).items():
+        for key, value in _league_profile(league_hist).items():
             upcoming_df.at[i, key] = value
 
         for key, value in _team_profile(home_hist, home).items():
@@ -946,14 +1010,13 @@ def build_upcoming_match_features(
         for key, value in _team_profile(away_hist, away).items():
             upcoming_df.at[i, f"away_{key}"] = value
 
-        home_strength = _team_strength(home_hist, home)
-        away_strength = _team_strength(away_hist, away)
-
         upcoming_df.at[i, "team_strength_diff"] = (
-            home_strength - away_strength
+            _team_strength(home_hist, home)
+            - _team_strength(away_hist, away)
         )
 
     return upcoming_df.fillna(0.0)
+
 
 def _league_profile(hist: pd.DataFrame) -> dict[str, float]:
     if hist.empty:
