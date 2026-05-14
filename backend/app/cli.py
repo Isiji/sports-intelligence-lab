@@ -209,8 +209,22 @@ def train_football() -> None:
 
 @app.command("predict-football")
 def predict_football(
-    slate: str = typer.Option("demo", help="Prediction slate name."),
-    limit: int = typer.Option(16, help="Number of upcoming matches to predict."),
+    slate: str = typer.Option(
+        "demo",
+        help="Prediction slate name.",
+    ),
+
+    limit: int = typer.Option(
+        16,
+        help="Number of upcoming matches to predict.",
+    ),
+
+    min_confidence: float = typer.Option(
+        0.55,
+        "--min-confidence",
+        help="Minimum confidence required to save prediction.",
+    ),
+
     require_odds: bool = typer.Option(
         True,
         "--require-odds/--allow-missing-odds",
@@ -218,14 +232,15 @@ def predict_football(
 ) -> None:
     with get_cli_session() as session:
         count = predict_all_football_markets(
-            session,
+            session=session,
             slate=slate,
             limit=limit,
+            min_confidence=min_confidence,
             require_odds=require_odds,
         )
 
     typer.echo(f"Inserted {count} football predictions.")
-
+    
 @app.command("prediction-performance-report")
 def prediction_performance_report(
     slate: str | None = typer.Option(None, help="Optional slate name, for example demo."),

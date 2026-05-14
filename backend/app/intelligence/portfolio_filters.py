@@ -1,21 +1,23 @@
 # backend/app/intelligence/portfolio_filters.py
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     ConfidenceBandIntelligenceSnapshot,
+    DynamicLeagueTier,
     LeagueIntelligenceSnapshot,
     LeagueMarketIntelligenceSnapshot,
+    MarketFamilySnapshot,
     MarketIntelligenceSnapshot,
     OddsBandIntelligenceSnapshot,
 )
 from app.odds.market_quality_engine import get_enabled_markets
-from app.db.models import (
-    DynamicLeagueTier,
-    MarketFamilySnapshot,
-)
+
 
 @dataclass
 class PortfolioFilterResult:
@@ -24,6 +26,18 @@ class PortfolioFilterResult:
     risk_flags: list[str]
     risk_score: float
     tier: str
+
+
+@dataclass(frozen=True)
+class PortfolioFilterContext:
+    enabled_markets: set[str]
+    leagues: dict[str, Any]
+    markets: dict[str, Any]
+    league_markets: dict[tuple[str, str], Any]
+    odds_bands: dict[tuple[str, str], Any]
+    confidence_bands: dict[tuple[str, str], Any]
+    league_tiers: dict[str, Any]
+    market_families: dict[str, Any]
 
 
 def _rejected(reason: str, flag: str) -> PortfolioFilterResult:
@@ -77,9 +91,8 @@ def resolve_risk_tier(risk_score: float) -> str:
         return "AGGRESSIVE"
     return "REJECTED"
 
-def resolve_market_family(
-    market: str,
-) -> str:
+
+def resolve_market_family(market: str) -> str:
     market = market.lower()
 
     if (
@@ -87,6 +100,7 @@ def resolve_market_family(
         or "under" in market
         or "btts" in market
         or "goal" in market
+        or "score" in market
     ):
         return "GOALS"
 
@@ -100,14 +114,67 @@ def resolve_market_family(
         "win" in market
         or "draw" in market
         or "chance" in market
+        or "ht_ft" in market
     ):
         return "RESULT"
 
     return "OTHER"
 
+
+def build_portfolio_filter_context(session: Session) -> PortfolioFilterContext:
+    enabled_markets = set(get_enabled_markets(session))
+
+    leagues = {
+        row.league: row
+        for row in session.query(LeagueIntelligenceSnapshot).all()
+    }
+
+    markets = {
+        row.market: row
+        for row in session.query(MarketIntelligenceSnapshot).all()
+    }
+
+    league_markets = {
+        (row.league, row.market): row
+        for row in session.query(LeagueMarketIntelligenceSnapshot).all()
+    }
+
+    odds_bands = {
+        (row.market, row.odds_band): row
+        for row in session.query(OddsBandIntelligenceSnapshot).all()
+    }
+
+    confidence_bands = {
+        (row.market, row.confidence_band): row
+        for row in session.query(ConfidenceBandIntelligenceSnapshot).all()
+    }
+
+    league_tiers = {
+        row.league: row
+        for row in session.query(DynamicLeagueTier).all()
+    }
+
+    market_families = {
+        row.family_name: row
+        for row in session.query(MarketFamilySnapshot).all()
+    }
+
+    return PortfolioFilterContext(
+        enabled_markets=enabled_markets,
+        leagues=leagues,
+        markets=markets,
+        league_markets=league_markets,
+        odds_bands=odds_bands,
+        confidence_bands=confidence_bands,
+        league_tiers=league_tiers,
+        market_families=market_families,
+    )
+
+
 def evaluate_pick_for_portfolio(
     *,
     session: Session | None = None,
+    context: PortfolioFilterContext | None = None,
     league: str | None,
     market: str,
     confidence: float | None,
@@ -123,10 +190,11 @@ def evaluate_pick_for_portfolio(
     selected_confidence_band = get_confidence_band(confidence)
     selected_market_family = resolve_market_family(market)
 
-    if session is not None:
-        enabled_markets = set(get_enabled_markets(session))
+    if context is None and session is not None:
+        context = build_portfolio_filter_context(session)
 
-        if market not in enabled_markets:
+    if context is not None:
+        if market not in context.enabled_markets:
             return _rejected(
                 "market disabled by odds quality engine",
                 "MARKET_QUALITY_DISABLED",
@@ -153,12 +221,12 @@ def evaluate_pick_for_portfolio(
     elif confidence < 0.62:
         risk_flags.append("MEDIUM_LOW_CONFIDENCE")
         risk_score += 12
-    elif confidence >= 0.80:
-        risk_flags.append("HIGH_CONFIDENCE")
-        risk_score -= 5
     elif confidence >= 0.90:
         risk_flags.append("ELITE_CONFIDENCE")
         risk_score -= 8
+    elif confidence >= 0.80:
+        risk_flags.append("HIGH_CONFIDENCE")
+        risk_score -= 5
 
     if odds > 4.50:
         risk_flags.append("HIGH_ODDS_VARIANCE")
@@ -192,12 +260,8 @@ def evaluate_pick_for_portfolio(
             risk_flags.append("POSITIVE_VALUE_SCORE")
             risk_score -= 3
 
-    if session is not None:
-        league_row = (
-            session.query(LeagueIntelligenceSnapshot)
-            .filter(LeagueIntelligenceSnapshot.league == selected_league)
-            .first()
-        )
+    if context is not None:
+        league_row = context.leagues.get(selected_league)
 
         if league_row:
             league_roi = float(league_row.recent_roi or 0.0)
@@ -209,7 +273,6 @@ def evaluate_pick_for_portfolio(
                         "league hard-blocked by DB intelligence",
                         "DB_LEAGUE_HARD_BLOCKED",
                     )
-
                 risk_flags.append("DB_LEAGUE_SOFT_BLOCK")
                 risk_score += 18
 
@@ -238,11 +301,7 @@ def evaluate_pick_for_portfolio(
                 risk_flags.append("SAFE_ACCUMULATOR_LEAGUE")
                 risk_score -= 8
 
-        market_row = (
-            session.query(MarketIntelligenceSnapshot)
-            .filter(MarketIntelligenceSnapshot.market == market)
-            .first()
-        )
+        market_row = context.markets.get(market)
 
         if market_row:
             market_roi = float(market_row.recent_roi or 0.0)
@@ -254,7 +313,6 @@ def evaluate_pick_for_portfolio(
                         "market hard-blocked by DB intelligence",
                         "DB_MARKET_HARD_BLOCKED",
                     )
-
                 risk_flags.append("DB_MARKET_SOFT_BLOCK")
                 risk_score += 18
 
@@ -279,13 +337,8 @@ def evaluate_pick_for_portfolio(
                 risk_flags.append("STRONG_MARKET_SURVIVABILITY")
                 risk_score -= 8
 
-        league_market_row = (
-            session.query(LeagueMarketIntelligenceSnapshot)
-            .filter(
-                LeagueMarketIntelligenceSnapshot.league == selected_league,
-                LeagueMarketIntelligenceSnapshot.market == market,
-            )
-            .first()
+        league_market_row = context.league_markets.get(
+            (selected_league, market)
         )
 
         if league_market_row:
@@ -300,7 +353,6 @@ def evaluate_pick_for_portfolio(
                         "league-market hard-blocked by DB intelligence",
                         "DB_LEAGUE_MARKET_HARD_BLOCKED",
                     )
-
                 risk_flags.append("DB_LEAGUE_MARKET_SOFT_BLOCK")
                 risk_score += 20
 
@@ -325,13 +377,8 @@ def evaluate_pick_for_portfolio(
                 risk_flags.append("STRONG_LEAGUE_MARKET_SURVIVABILITY")
                 risk_score -= 8
 
-        odds_row = (
-            session.query(OddsBandIntelligenceSnapshot)
-            .filter(
-                OddsBandIntelligenceSnapshot.market == market,
-                OddsBandIntelligenceSnapshot.odds_band == selected_odds_band,
-            )
-            .first()
+        odds_row = context.odds_bands.get(
+            (market, selected_odds_band)
         )
 
         if odds_row:
@@ -343,7 +390,6 @@ def evaluate_pick_for_portfolio(
                         "odds band hard-blocked by DB intelligence",
                         "DB_ODDS_BAND_HARD_BLOCKED",
                     )
-
                 risk_flags.append("DB_ODDS_BAND_SOFT_BLOCK")
                 risk_score += 18
 
@@ -354,13 +400,8 @@ def evaluate_pick_for_portfolio(
                 risk_flags.append("NEGATIVE_ODDS_BAND_ROI")
                 risk_score += 8
 
-        confidence_row = (
-            session.query(ConfidenceBandIntelligenceSnapshot)
-            .filter(
-                ConfidenceBandIntelligenceSnapshot.market == market,
-                ConfidenceBandIntelligenceSnapshot.confidence_band == selected_confidence_band,
-            )
-            .first()
+        confidence_row = context.confidence_bands.get(
+            (market, selected_confidence_band)
         )
 
         if confidence_row:
@@ -372,7 +413,6 @@ def evaluate_pick_for_portfolio(
                         "confidence band hard-blocked by DB intelligence",
                         "DB_CONFIDENCE_BAND_HARD_BLOCKED",
                     )
-
                 risk_flags.append("DB_CONFIDENCE_BAND_SOFT_BLOCK")
                 risk_score += 16
 
@@ -382,80 +422,42 @@ def evaluate_pick_for_portfolio(
             elif confidence_roi < -0.10:
                 risk_flags.append("NEGATIVE_CONFIDENCE_BAND_ROI")
                 risk_score += 8
-        # ============================================
-        # DYNAMIC LEAGUE TIERS
-        # ============================================
 
-        tier_row = (
-            session.query(DynamicLeagueTier)
-            .filter(
-                DynamicLeagueTier.league == selected_league
-            )
-            .first()
-        )
+        tier_row = context.league_tiers.get(selected_league)
 
         if tier_row:
             if tier_row.tier == "VERY_STRONG":
                 risk_flags.append("VERY_STRONG_LEAGUE")
                 risk_score -= 10
-
             elif tier_row.tier == "STRONG":
                 risk_flags.append("STRONG_LEAGUE")
                 risk_score -= 4
-
             elif tier_row.tier == "WEAK":
                 risk_flags.append("WEAK_LEAGUE")
                 risk_score += 8
 
-        # ============================================
-        # MARKET FAMILY INTELLIGENCE
-        # ============================================
-
-        family_row = (
-            session.query(MarketFamilySnapshot)
-            .filter(
-                MarketFamilySnapshot.family_name
-                == selected_market_family
-            )
-            .first()
-        )
+        family_row = context.market_families.get(selected_market_family)
 
         if family_row:
-            family_roi = float(
-                family_row.roi or 0.0
-            )
-
-            family_survivability = float(
-                family_row.survivability_score or 0.0
-            )
+            family_roi = float(family_row.roi or 0.0)
+            family_survivability = float(family_row.survivability_score or 0.0)
 
             if family_roi < -0.15:
-                risk_flags.append(
-                    "NEGATIVE_MARKET_FAMILY"
-                )
-
+                risk_flags.append("NEGATIVE_MARKET_FAMILY")
                 risk_score += 10
-
             elif family_roi > 0.10:
-                risk_flags.append(
-                    "PROFITABLE_MARKET_FAMILY"
-                )
-
+                risk_flags.append("PROFITABLE_MARKET_FAMILY")
                 risk_score -= 6
 
             if family_survivability >= 60:
-                risk_flags.append(
-                    "STRONG_MARKET_FAMILY"
-                )
-
+                risk_flags.append("STRONG_MARKET_FAMILY")
                 risk_score -= 6
-                
+
     risk_score = round(max(risk_score, 0.0), 2)
     tier = resolve_risk_tier(risk_score)
-    allowed = tier != "REJECTED"
 
     return PortfolioFilterResult(
-        allowed=allowed,
+        allowed=tier != "REJECTED",
         reason=f"{tier.lower()} portfolio tier",
         risk_flags=sorted(set(risk_flags)),
         risk_score=risk_score,

@@ -152,7 +152,16 @@ class MatchOdds(Base):
 
 class Prediction(Base):
     __tablename__ = "predictions"
-
+    
+    __table_args__ = (
+            UniqueConstraint(
+                "slate",
+                "match_id",
+                "market",
+                "predicted_label",
+                name="uq_prediction_unique_pick",
+            ),
+        )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     slate: Mapped[str] = mapped_column(String(100), index=True)

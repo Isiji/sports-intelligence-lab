@@ -1,16 +1,27 @@
+# backend/app/odds/odds_matcher.py
+
+from __future__ import annotations
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.odds.market_normalizer import normalize_market_and_selection
+from app.odds.production_label_resolver import resolve_executable_market
 
 
 def find_best_odds_for_prediction(
     session: Session,
     match_id: int,
     target_market: str,
+    predicted_label: str | None = None,
     home_team: str | None = None,
     away_team: str | None = None,
 ) -> dict:
+    executable_market = resolve_executable_market(
+        target_market=target_market,
+        predicted_label=predicted_label,
+    )
+
     rows = session.execute(
         text(
             """
@@ -56,18 +67,28 @@ def find_best_odds_for_prediction(
             "raw_selection": selection_name,
             "normalized_market": normalized.canonical_market,
             "reason": normalized.reason,
+            "confidence": normalized.confidence,
             "odds": float(odds_value) if odds_value is not None else None,
+            "bookmaker": row.get("bookmaker"),
+            "provider": row.get("provider"),
+            "retrieved_at": row.get("retrieved_at"),
         }
 
         diagnostics.append(diagnostic)
 
-        if normalized.canonical_market == target_market and odds_value is not None:
+        if (
+            normalized.canonical_market == executable_market
+            and odds_value is not None
+        ):
             matches.append(diagnostic)
 
     if not matches:
         return {
             "matched": False,
-            "reason": "no_matching_canonical_market",
+            "reason": "no_matching_executable_market",
+            "target_market": target_market,
+            "predicted_label": predicted_label,
+            "executable_market": executable_market,
             "odds": None,
             "diagnostics": diagnostics[:30],
         }
@@ -76,9 +97,16 @@ def find_best_odds_for_prediction(
 
     return {
         "matched": True,
-        "reason": "matched",
+        "reason": "exact_executable_market",
+        "target_market": target_market,
+        "predicted_label": predicted_label,
+        "executable_market": executable_market,
         "odds": best["odds"],
+        "bookmaker": best["bookmaker"],
+        "provider": best["provider"],
+        "retrieved_at": best["retrieved_at"],
         "raw_market": best["raw_market"],
         "raw_selection": best["raw_selection"],
+        "match_quality": "exact_executable_market",
         "diagnostics": diagnostics[:30],
     }
