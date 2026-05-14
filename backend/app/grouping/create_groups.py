@@ -7,6 +7,9 @@ from math import prod
 from statistics import mean
 from typing import Any
 
+from app.services.group_bookmaker_compatibility_service import (
+    GroupBookmakerCompatibilityService,
+)
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
@@ -347,25 +350,41 @@ def _load_live_prediction_candidates(
             p.id AS prediction_id,
             p.slate,
             p.match_id,
+
             p.market,
             p.predicted_label,
+
             p.confidence,
             p.odds,
             p.implied_probability,
             p.value_score,
+
+            p.odds_bookmaker,
+            p.odds_market,
+            p.odds_selection,
+            p.odds_retrieved_at,
+            p.odds_match_quality,
+
             p.model_name,
+
             m.league,
             m.home_team,
             m.away_team,
             m.kickoff_date
+
         FROM predictions p
+
         JOIN matches m
             ON m.id = p.match_id
+
         WHERE p.slate = :slate
           AND p.confidence >= :min_confidence
           AND p.market = ANY(:enabled_markets)
           {odds_filter}
-        ORDER BY p.confidence DESC, p.id ASC
+
+        ORDER BY
+            p.confidence DESC,
+            p.id ASC
         """
     )
 
@@ -378,8 +397,10 @@ def _load_live_prediction_candidates(
         },
     ).fetchall()
 
-    return [dict(row._mapping) for row in rows]
-
+    return [
+        dict(row._mapping)
+        for row in rows
+    ]
 
 def _enrich_candidate(
     session: Session,
@@ -512,16 +533,51 @@ def _enrich_candidate(
     if odds is not None:
         odds_quality = min(odds / 5.0, 0.50)
 
-    risk_penalty = max(float(prediction.get("portfolio_risk_score") or 0.0), 0.0) / 140.0
+    risk_penalty = max(
+        float(prediction.get("portfolio_risk_score") or 0.0),
+        0.0,
+    ) / 140.0
+
+    # =====================================================
+    # BOOKMAKER EXECUTION INTELLIGENCE
+    # =====================================================
+
+    bookmaker = prediction.get("odds_bookmaker")
+    odds_match_quality = prediction.get("odds_match_quality") or "none"
+
+    bookmaker_execution_score = 0.0
+
+    if bookmaker:
+        bookmaker_execution_score += 0.04
+
+    if odds_match_quality == "exact_canonical":
+        bookmaker_execution_score += 0.05
+
+    elif odds_match_quality == "exact_market_fallback":
+        bookmaker_execution_score += 0.03
+
+    elif odds_match_quality == "direct":
+        bookmaker_execution_score += 0.01
+
+    elif odds_match_quality in {
+        "goal_total",
+        "team_total",
+        "corners",
+        "shots_on_target",
+        "first_half",
+        "asian_handicap",
+    }:
+        bookmaker_execution_score += 0.02
 
     selection_score = (
-        confidence * 0.32
-        + value_score * 0.22
+        confidence * 0.30
+        + value_score * 0.20
         + market_roi * 0.14
         + league_roi * 0.10
         + odds_band_roi * 0.08
         + confidence_band_roi * 0.08
-        + odds_quality * 0.08
+        + odds_quality * 0.06
+        + bookmaker_execution_score * 0.12
         - sample_penalty
         - risk_penalty
     )
@@ -540,6 +596,9 @@ def _enrich_candidate(
     prediction["confidence_band_roi"] = confidence_band_roi
     prediction["confidence_band_hit_rate"] = confidence_band_hit_rate
     prediction["confidence_band_sample_size"] = confidence_band_sample_size
+    prediction["bookmaker_execution_score"] = bookmaker_execution_score
+    prediction["odds_bookmaker"] = bookmaker
+    prediction["odds_match_quality"] = odds_match_quality
     prediction["selection_score"] = selection_score
 
     print(
@@ -549,6 +608,9 @@ def _enrich_candidate(
         f"confidence={round(confidence, 4)}",
         f"odds={odds}",
         f"value={round(value_score, 4)}",
+        f"bookmaker={bookmaker}",
+        f"odds_match_quality={odds_match_quality}",
+        f"bookmaker_execution={round(bookmaker_execution_score, 4)}",
         f"market_roi={round(market_roi, 4)}",
         f"league_roi={round(league_roi, 4)}",
         f"odds_band_roi={round(odds_band_roi, 4)}",
@@ -558,7 +620,6 @@ def _enrich_candidate(
     )
 
     return prediction
-
 
 def _sample_penalty(
     market_sample_size: int,

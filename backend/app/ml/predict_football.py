@@ -1,227 +1,240 @@
-import pickle
+# backend/app/ml/predict_football.py
 
-from sqlalchemy import delete, select
+from __future__ import annotations
+
+import pickle
+from pathlib import Path
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.db.models import Match, Prediction, PredictionGroupItem
-from app.features.football_features import (
-    MARKET_LABELS,
-    MARKET_TARGETS,
-    feature_columns,
-    load_upcoming_frame,
-)
-from app.ml.registry import load_model_metadata
-from app.ml.train_football import metadata_path_for_market, model_path_for_market
-from app.odds.market_quality_engine import get_enabled_markets
-from app.services.odds_lookup_service import find_best_odds
-from app.services.prediction_guard_service import apply_prediction_guard
-from app.services.prediction_intelligence_service import apply_prediction_intelligence
+from app.db.models import Prediction
+from app.features.football_features import MARKET_LABELS, MARKET_TARGETS, load_upcoming_frame
+from app.ml.train_football import model_path_for_market
+from app.odds.odds_matcher import find_best_odds_for_prediction
 
 
 def predict_all_football_markets(
     session: Session,
-    slate: str,
-    limit: int = 30,
-    min_confidence: float = 0.6,
+    slate: str = "demo",
+    limit: int = 16,
+    min_confidence: float = 0.55,
     require_odds: bool = True,
 ) -> int:
-    session.execute(
-        delete(PredictionGroupItem).where(PredictionGroupItem.slate == slate)
+    upcoming_df = load_upcoming_frame(
+        session=session,
+        limit=limit,
     )
 
-    session.execute(
-        delete(Prediction).where(Prediction.slate == slate)
-    )
-
-    session.commit()
+    if upcoming_df.empty:
+        return 0
 
     inserted = 0
-    enabled_markets = set(get_enabled_markets(session))
-
-    print("[MARKET QUALITY]", f"enabled_markets={sorted(enabled_markets)}")
 
     for market in MARKET_TARGETS.keys():
-        if market not in enabled_markets:
-            print(f"[SKIPPED MARKET QUALITY DISABLED] {market}")
+        model_path = model_path_for_market(market)
+
+        if not model_path.exists():
+            print(f"[SKIPPED] {market}: model artifact missing at {model_path}")
             continue
 
-        inserted += predict_football_market(
-            session=session,
-            slate=slate,
-            market=market,
-            limit=limit,
-            min_confidence=min_confidence,
-            require_odds=require_odds,
-        )
-
-    return inserted
-
-
-def predict_football_market(
-    session: Session,
-    slate: str,
-    market: str,
-    limit: int = 30,
-    min_confidence: float = 0.6,
-    require_odds: bool = True,
-) -> int:
-    enabled_markets = set(get_enabled_markets(session))
-
-    if market not in enabled_markets:
-        print(f"[SKIPPED MARKET QUALITY DISABLED] {market}")
-        return 0
-
-    model_path = model_path_for_market(market)
-    metadata_path = metadata_path_for_market(market)
-
-    if not model_path.exists():
-        print(f"[SKIPPED] Ensemble model file not found for {market}: {model_path}")
-        return 0
-
-    metadata = load_model_metadata(metadata_path)
-    selected_model_name = metadata.get("selected_model_name", "WeightedEnsemble")
-
-    with model_path.open("rb") as file:
-        bundle = pickle.load(file)
-
-    df = load_upcoming_frame(session, limit=limit)
-
-    if df.empty:
-        return 0
-
-    df = df.reset_index(drop=True)
-
-    model_feature_columns = bundle.get("feature_columns", feature_columns())
-    x = df[model_feature_columns].fillna(0.0)
-
-    probabilities = _predict_ensemble_probabilities(bundle=bundle, x=x)
-
-    positive_label, _negative_label = MARKET_LABELS[market]
-
-    inserted = 0
-
-    for row_index, row in df.iterrows():
-        match_id = int(row["match_id"])
-
-        match = session.scalar(select(Match).where(Match.id == match_id))
-
-        if match is None:
+        try:
+            bundle = _load_model_bundle(model_path)
+        except Exception as exc:
+            print(f"[SKIPPED] {market}: failed to load model bundle: {exc}")
             continue
 
-        probability = float(probabilities[row_index])
+        feature_columns = bundle.get("feature_columns", [])
 
-        if probability < 0.5:
+        if not feature_columns:
+            print(f"[SKIPPED] {market}: bundle has no feature_columns")
             continue
 
-        predicted_label = positive_label
-        confidence = probability
+        missing_features = [
+            column for column in feature_columns
+            if column not in upcoming_df.columns
+        ]
 
-        guard = apply_prediction_guard(
-            session=session,
-            match=match,
-            market=market,
-            raw_confidence=confidence,
-        )
-
-        if not guard["allowed"]:
+        if missing_features:
             print(
-                f"[GUARD BLOCKED] match_id={match_id}, "
-                f"market={market}, reasons={guard['reasons']}"
+                f"[SKIPPED] {market}: missing features: "
+                f"{missing_features[:8]}"
             )
             continue
 
-        confidence = float(guard["adjusted_confidence"])
+        x = upcoming_df[feature_columns].fillna(0.0)
 
-        odds_result = find_best_odds(
-            session=session,
-            match_id=match_id,
-            market=market,
-            selection=predicted_label,
-        )
-
-        odds = odds_result.odds if odds_result else None
-
-        if require_odds and odds is None:
-            print(f"[SKIPPED NO ODDS] match_id={match_id}, market={market}")
+        try:
+            probabilities = _predict_probabilities(bundle=bundle, x=x)
+        except Exception as exc:
+            print(f"[SKIPPED] {market}: prediction failed: {exc}")
             continue
 
-        intelligence = apply_prediction_intelligence(
-            session=session,
-            match=match,
-            market=market,
-            raw_confidence=confidence,
-            odds=odds,
-            bookmaker=odds_result.bookmaker if odds_result else None,
-        )
+        positive_label, negative_label = MARKET_LABELS[market]
 
-        if not intelligence["allowed"]:
-            print(
-                f"[INTELLIGENCE BLOCKED] match_id={match_id}, "
-                f"market={market}, reasons={intelligence['reasons']}"
-            )
-            continue
+        for row_index, row in upcoming_df.iterrows():
+            probability = float(probabilities[row_index])
 
-        confidence = float(intelligence["adjusted_confidence"])
+            if probability >= 0.5:
+                predicted_label = positive_label
+                confidence = probability
+            else:
+                predicted_label = negative_label
+                confidence = 1.0 - probability
 
-        if confidence < min_confidence:
-            print(
-                f"[LOW CONFIDENCE AFTER INTELLIGENCE] "
-                f"match_id={match_id}, market={market}, confidence={confidence}"
-            )
-            continue
+            if confidence < min_confidence:
+                continue
 
-        implied_probability = None
-        value_score = None
-
-        if odds:
-            implied_probability = round(1 / odds, 4)
-            value_score = round(confidence - implied_probability, 4)
-
-        session.add(
-            Prediction(
-                slate=slate,
-                match_id=match_id,
-                sport="football",
-                model_name=selected_model_name,
+            odds_payload = _resolve_prediction_odds(
+                session=session,
+                match_id=int(row["match_id"]),
                 market=market,
                 predicted_label=predicted_label,
-                confidence=round(confidence, 4),
-                odds=odds,
+                home_team=str(row["home_team"]),
+                away_team=str(row["away_team"]),
+            )
+
+            if require_odds and odds_payload["odds"] is None:
+                continue
+
+            implied_probability = None
+            value_score = None
+
+            if odds_payload["odds"] is not None and odds_payload["odds"] > 0:
+                implied_probability = round(1 / odds_payload["odds"], 6)
+                value_score = round(confidence - implied_probability, 6)
+
+            prediction = Prediction(
+                slate=slate,
+                match_id=int(row["match_id"]),
+                sport="football",
+                model_name=bundle.get("selected_model_name", "UnknownModel"),
+                market=market,
+                predicted_label=predicted_label,
+                confidence=round(confidence, 6),
+                odds=odds_payload["odds"],
                 implied_probability=implied_probability,
                 value_score=value_score,
-
-                # =====================================================
-                # ODDS SOURCE TRACEABILITY
-                # =====================================================
-
-                odds_bookmaker=odds_result.bookmaker if odds_result else None,
-                odds_market=odds_result.provider_market if odds_result else None,
-                odds_selection=odds_result.provider_selection if odds_result else None,
-                odds_retrieved_at=odds_result.retrieved_at if odds_result else None,
-                odds_match_quality=odds_result.match_quality if odds_result else None,
+                odds_bookmaker=odds_payload["odds_bookmaker"],
+                odds_market=odds_payload["odds_market"],
+                odds_selection=odds_payload["odds_selection"],
+                odds_retrieved_at=odds_payload["odds_retrieved_at"],
+                odds_match_quality=odds_payload["odds_match_quality"],
             )
-        )
 
-        inserted += 1
+            session.add(prediction)
+            inserted += 1
 
     session.commit()
 
     return inserted
 
 
-def _predict_ensemble_probabilities(bundle: dict, x):
-    models = bundle["models"]
-    weights = bundle["weights"]
+def _load_model_bundle(path: Path) -> dict[str, Any]:
+    with path.open("rb") as file:
+        bundle = pickle.load(file)
+
+    if not isinstance(bundle, dict):
+        raise ValueError("model bundle is not a dictionary")
+
+    return bundle
+
+
+def _predict_probabilities(bundle: dict[str, Any], x) -> list[float]:
+    models = bundle.get("models") or {}
+    weights = bundle.get("weights") or {}
+
+    if not models:
+        raise ValueError("no models found in bundle")
 
     final_probability = None
 
     for model_name, model in models.items():
-        probability = model.predict_proba(x)[:, 1]
-        weighted_probability = probability * weights[model_name]
+        model_probability = model.predict_proba(x)[:, 1]
+        weight = float(weights.get(model_name, 1.0 / max(len(models), 1)))
+
+        weighted_probability = model_probability * weight
 
         if final_probability is None:
             final_probability = weighted_probability
         else:
             final_probability += weighted_probability
 
-    return final_probability
+    if final_probability is None:
+        raise ValueError("probability calculation failed")
+
+    return [float(value) for value in final_probability]
+
+
+def _resolve_prediction_odds(
+    session: Session,
+    match_id: int,
+    market: str,
+    predicted_label: str,
+    home_team: str,
+    away_team: str,
+) -> dict[str, Any]:
+    default_payload = {
+        "odds": None,
+        "odds_bookmaker": None,
+        "odds_market": None,
+        "odds_selection": None,
+        "odds_retrieved_at": None,
+        "odds_match_quality": None,
+    }
+
+    try:
+        result = find_best_odds_for_prediction(
+            session=session,
+            match_id=match_id,
+            target_market=market,
+            predicted_label=predicted_label,
+            home_team=home_team,
+            away_team=away_team,
+        )
+    except TypeError:
+        result = find_best_odds_for_prediction(
+            session=session,
+            match_id=match_id,
+            target_market=market,
+            home_team=home_team,
+            away_team=away_team,
+        )
+    except Exception:
+        return default_payload
+
+    if result is None:
+        return default_payload
+
+    if isinstance(result, dict):
+        return {
+            "odds": _safe_float(
+                result.get("odds")
+                or result.get("price")
+                or result.get("decimal_odds")
+            ),
+            "odds_bookmaker": result.get("bookmaker") or result.get("odds_bookmaker"),
+            "odds_market": result.get("market") or result.get("odds_market"),
+            "odds_selection": result.get("selection") or result.get("odds_selection"),
+            "odds_retrieved_at": result.get("retrieved_at") or result.get("odds_retrieved_at"),
+            "odds_match_quality": result.get("match_quality") or result.get("odds_match_quality"),
+        }
+
+    return {
+        "odds": _safe_float(getattr(result, "odds", None)),
+        "odds_bookmaker": getattr(result, "bookmaker", None),
+        "odds_market": getattr(result, "market", None),
+        "odds_selection": getattr(result, "selection", None),
+        "odds_retrieved_at": getattr(result, "retrieved_at", None),
+        "odds_match_quality": getattr(result, "match_quality", None),
+    }
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
