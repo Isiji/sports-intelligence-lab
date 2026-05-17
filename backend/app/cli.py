@@ -42,6 +42,12 @@ from app.ingest.football_odds_ingestion import (
     ingest_odds_for_fixture,
     ingest_odds_for_upcoming_matches,
     ingest_odds_for_finished_matches,
+    ingest_odds_for_prediction_slate,
+    ingest_odds_priority,
+    ingest_odds_rotation,
+    ingest_odds_rich_leagues,
+    ingest_odds_all_leagues_rotation,
+    ingest_historical_odds_for_season,
 )
 from app.backtest.rolling_group_backtest import (
     rolling_group_backtest,
@@ -53,13 +59,12 @@ from app.ingest.football_stats_ingestion import (
     ingest_fixture_statistics,
     ingest_missing_statistics,
 )
+
 from app.backtest.calibration import (
     evaluate_cached_backtest_calibration,
     evaluate_cached_backtest_calibration_by_market,
     evaluate_confidence_calibration,
 )
-# backend/app/cli.py
-# ADD IMPORT
 
 from app.services.league_cooldown_service import LeagueCooldownService
 
@@ -1274,6 +1279,26 @@ def debug_odds_match(
         print(result)
     finally:
         session.close()
+        
+@app.command("ingest-historical-odds-season")
+def ingest_historical_odds_season(
+    season: int = typer.Option(...),
+    limit: int = typer.Option(500),
+    force: bool = typer.Option(False),
+    max_attempts: int = typer.Option(3),
+    require_stats: bool = typer.Option(True),
+):
+    with get_cli_session() as session:
+        result = ingest_historical_odds_for_season(
+            session=session,
+            season=season,
+            limit=limit,
+            force=force,
+            max_attempts=max_attempts,
+            require_stats=require_stats,
+        )
+
+    typer.echo(result)
 
 @app.command("historical-backtest-football")
 def historical_backtest_football(

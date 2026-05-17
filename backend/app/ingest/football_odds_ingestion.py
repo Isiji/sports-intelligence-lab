@@ -320,6 +320,64 @@ def ingest_odds_for_finished_matches(
         force=force,
     )
 
+def ingest_historical_odds_for_season(
+    session: Session,
+    season: int,
+    limit: int = 500,
+    force: bool = False,
+    max_attempts: int = 3,
+    require_stats: bool = True,
+) -> dict[str, Any]:
+
+    conditions = [
+        Match.provider == "api-football",
+        Match.provider_fixture_id.isnot(None),
+
+        Match.season == season,
+
+        Match.is_finished.is_(True),
+        Match.is_cancelled.is_(False),
+        Match.is_postponed.is_(False),
+
+        Match.home_goals.isnot(None),
+        Match.away_goals.isnot(None),
+    ]
+
+    # =====================================================
+    # PRIORITIZE MATCHES THAT ALREADY HAVE STATS
+    # =====================================================
+
+    if require_stats:
+        conditions.append(
+            Match.has_stats.is_(True)
+        )
+
+    if not force:
+        conditions.extend(
+            [
+                Match.has_odds.is_(False),
+
+                Match.odds_attempt_count < max_attempts,
+            ]
+        )
+
+    matches = list(
+        session.scalars(
+            select(Match)
+            .where(*conditions)
+            .order_by(
+                Match.has_stats.desc(),
+                Match.kickoff_datetime.desc().nulls_last(),
+            )
+            .limit(limit)
+        )
+    )
+
+    return _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
 
 def ingest_odds_for_prediction_slate(
     session: Session,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Literal
 
 from sqlalchemy import text
@@ -34,16 +34,6 @@ class OddsIngestionCandidate:
 
 
 class OddsIngestionPriorityService:
-    """
-    Production-safe odds ingestion prioritizer.
-
-    Strategy:
-    - Prioritize leagues/matches likely to return odds.
-    - Avoid repeated waste on fixtures already marked unavailable.
-    - Still rotate into every league over time.
-    - Low priority means delayed, not excluded.
-    """
-
     def __init__(self, session: Session):
         self.session = session
 
@@ -53,7 +43,7 @@ class OddsIngestionPriorityService:
         mode: OddsIngestionMode = "priority",
         limit: int = 300,
         max_attempts: int = 3,
-        include_finished: bool = True,
+        include_finished: bool = False,
         include_upcoming: bool = True,
         upcoming_days: int = 14,
         rotation_offset: int = 0,
@@ -91,29 +81,13 @@ class OddsIngestionPriorityService:
                         COALESCE(m.odds_unavailable, false) AS odds_unavailable,
                         COALESCE(m.odds_attempt_count, 0) AS odds_attempt_count,
 
-                        COALESCE(c.production_allowed, false)
-                            AS production_allowed,
-
-                        COALESCE(
-                            c.priority_tier,
-                            'DISCOVERY_ROTATION'
-                        ) AS priority_tier,
-
-                        COALESCE(c.ecosystem_score, 0)
-                            AS ecosystem_score,
-
-                        COALESCE(c.market_depth_score, 0)
-                            AS market_depth_score,
-
-                        COALESCE(c.bookmaker_depth_score, 0)
-                            AS bookmaker_depth_score,
-
-                        COALESCE(c.odds_coverage_rate, 0)
-                            AS odds_coverage_rate,
-
-                        COALESCE(c.odds_success_rate, 0)
-                            AS odds_success_rate,
-
+                        COALESCE(c.production_allowed, false) AS production_allowed,
+                        COALESCE(c.priority_tier, 'DISCOVERY_ROTATION') AS priority_tier,
+                        COALESCE(c.ecosystem_score, 0) AS ecosystem_score,
+                        COALESCE(c.market_depth_score, 0) AS market_depth_score,
+                        COALESCE(c.bookmaker_depth_score, 0) AS bookmaker_depth_score,
+                        COALESCE(c.odds_coverage_rate, 0) AS odds_coverage_rate,
+                        COALESCE(c.odds_success_rate, 0) AS odds_success_rate,
                         c.last_odds_activity_at
 
                     FROM matches m
@@ -123,26 +97,12 @@ class OddsIngestionPriorityService:
 
                     WHERE
                         m.provider_fixture_id IS NOT NULL
-
                         AND COALESCE(m.has_odds, false) = false
-
-                        AND COALESCE(
-                            m.odds_attempt_count,
-                            0
-                        ) < :max_attempts
+                        AND COALESCE(m.odds_attempt_count, 0) < :max_attempts
 
                         AND (
-                            COALESCE(
-                                m.odds_unavailable,
-                                false
-                            ) = false
-
-                            OR
-
-                            COALESCE(
-                                m.odds_attempt_count,
-                                0
-                            ) = 0
+                            COALESCE(m.odds_unavailable, false) = false
+                            OR COALESCE(m.odds_attempt_count, 0) = 0
                         )
 
                         AND (
@@ -150,9 +110,7 @@ class OddsIngestionPriorityService:
                                 :include_upcoming = true
                                 AND m.kickoff_date BETWEEN :today AND :max_upcoming_date
                             )
-
                             OR
-
                             (
                                 :include_finished = true
                                 AND m.is_finished = true
@@ -166,58 +124,41 @@ class OddsIngestionPriorityService:
 
                         (
                             CASE
-                                WHEN production_allowed = true
-                                    THEN 120
+                                WHEN production_allowed = true THEN 160
                                 ELSE 0
                             END
 
                             +
 
                             CASE
-                                WHEN priority_tier = 'CORE_PRODUCTION'
-                                    THEN 100
-
-                                WHEN priority_tier = 'HIGH_PRIORITY'
-                                    THEN 70
-
-                                WHEN priority_tier = 'GROWTH_PRIORITY'
-                                    THEN 45
-
-                                WHEN priority_tier = 'EXPLORATION_PRIORITY'
-                                    THEN 20
-
-                                ELSE 0
+                                WHEN priority_tier = 'CORE_PRODUCTION' THEN 120
+                                WHEN priority_tier = 'HIGH_PRIORITY' THEN 80
+                                WHEN priority_tier = 'GROWTH_PRIORITY' THEN 35
+                                WHEN priority_tier = 'EXPLORATION_PRIORITY' THEN -10
+                                ELSE -25
                             END
 
                             +
 
-                            (
-                                ecosystem_score * 0.60
-                            )
+                            (ecosystem_score * 0.35)
 
                             +
 
-                            (
-                                odds_success_rate * 50
-                            )
+                            (odds_success_rate * 140)
 
                             +
 
-                            (
-                                market_depth_score * 20
-                            )
+                            (market_depth_score * 15)
 
                             +
 
-                            (
-                                bookmaker_depth_score * 20
-                            )
+                            (bookmaker_depth_score * 15)
 
                             +
 
                             CASE
                                 WHEN kickoff_date BETWEEN :today AND :max_upcoming_date
-                                    THEN 35
+                                    THEN 80
                                 ELSE 0
                             END
 
@@ -225,41 +166,47 @@ class OddsIngestionPriorityService:
 
                             CASE
                                 WHEN is_finished = true
-                                    THEN 12
+                                    THEN -25
                                 ELSE 0
                             END
 
                             +
 
                             CASE
-                                WHEN odds_attempt_count = 0
-                                    THEN 20
-                                WHEN odds_attempt_count = 1
-                                    THEN 10
-                                ELSE 0
+                                WHEN odds_attempt_count = 0 THEN 20
+                                WHEN odds_attempt_count = 1 THEN 5
+                                ELSE -20
                             END
 
                             +
 
                             CASE
                                 WHEN last_odds_activity_at >= NOW() - INTERVAL '3 days'
-                                    THEN 15
+                                    THEN 45
                                 WHEN last_odds_activity_at >= NOW() - INTERVAL '7 days'
+                                    THEN 20
+                                WHEN last_odds_activity_at >= NOW() - INTERVAL '14 days'
                                     THEN 8
                                 ELSE 0
                             END
 
                             -
 
-                            (
-                                odds_attempt_count * 18
-                            )
+                            (odds_attempt_count * 25)
 
                             -
 
                             CASE
-                                WHEN odds_unavailable = true
-                                    THEN 40
+                                WHEN odds_unavailable = true THEN 70
+                                ELSE 0
+                            END
+
+                            -
+
+                            CASE
+                                WHEN odds_success_rate <= 0.05
+                                     AND odds_attempt_count > 0
+                                    THEN 80
                                 ELSE 0
                             END
 
@@ -283,39 +230,38 @@ class OddsIngestionPriorityService:
                         WHEN :mode = 'rich_leagues'
                             THEN base_priority_score
                                 + CASE
-                                    WHEN priority_tier IN (
-                                        'CORE_PRODUCTION',
-                                        'HIGH_PRIORITY'
-                                    )
-                                    THEN 50
-                                    ELSE -25
+                                    WHEN priority_tier IN ('CORE_PRODUCTION', 'HIGH_PRIORITY')
+                                        THEN 40
+                                    ELSE -60
                                 END
 
                         WHEN :mode = 'rotation'
                             THEN base_priority_score
-                                + MOD(
-                                    match_id + :rotation_offset,
-                                    17
-                                )
+                                + MOD(match_id + :rotation_offset, 17)
+                                - 25
 
                         WHEN :mode = 'all_leagues_rotation'
                             THEN base_priority_score
                                 + CASE
                                     WHEN priority_tier = 'DISCOVERY_ROTATION'
-                                    THEN 35
+                                        THEN -40
                                     ELSE 0
                                 END
-                                + MOD(
-                                    match_id + :rotation_offset,
-                                    29
-                                )
+                                + MOD(match_id + :rotation_offset, 29)
+                                - 35
 
                         ELSE base_priority_score
                     END AS priority_score,
 
                     CASE
                         WHEN production_allowed = true
-                            THEN 'production_allowed_league'
+                            THEN 'production_allowed_recent_success'
+
+                        WHEN odds_success_rate >= 0.50
+                            THEN 'high_odds_success_rate'
+
+                        WHEN last_odds_activity_at >= NOW() - INTERVAL '7 days'
+                            THEN 'recent_odds_activity'
 
                         WHEN priority_tier = 'CORE_PRODUCTION'
                             THEN 'core_production_growth'
@@ -327,9 +273,9 @@ class OddsIngestionPriorityService:
                             THEN 'growth_priority_expansion'
 
                         WHEN priority_tier = 'EXPLORATION_PRIORITY'
-                            THEN 'ecosystem_exploration'
+                            THEN 'limited_exploration'
 
-                        ELSE 'discovery_rotation'
+                        ELSE 'low_priority_rotation'
                     END AS priority_reason
 
                 FROM scored
