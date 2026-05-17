@@ -16,6 +16,12 @@ from app.ingest.football_ingestion import (
     ingest_fixtures_for_date,
     ingest_fixtures_for_league_season,
 )
+# backend/app/cli.py
+# ADD IMPORT
+
+from app.intelligence.clv_analytics_service import (
+    build_clv_analytics,
+)
 
 from app.services.bookmaker_richness_service import BookmakerRichnessService
 
@@ -312,6 +318,24 @@ def rebuild_market_intelligence_command(
     finally:
         session.close()
 
+
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("clv-analytics")
+def clv_analytics():
+    session = get_cli_session()
+
+    try:
+        result = build_clv_analytics(
+            session=session,
+        )
+
+        print("\n=== CLV ANALYTICS ===")
+        print(result)
+
+    finally:
+        session.close()
 
 @app.command("rebuild-league-intelligence")
 def rebuild_league_intelligence_command(
