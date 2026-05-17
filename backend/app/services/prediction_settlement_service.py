@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Match, Prediction, PredictionOutcome
+from app.intelligence.clv_tracker import resolve_closing_odds
 from app.services.intelligence_rebuilder import (
     rebuild_confidence_band_intelligence,
     rebuild_league_intelligence,
@@ -195,11 +196,18 @@ def settle_single_prediction(
         stake=stake,
     )
 
-    closing_odds = prediction.odds
-    clv = calculate_clv(
+    clv_result = resolve_closing_odds(
+        session=session,
+        match_id=prediction.match_id,
         opening_odds=prediction.odds,
-        closing_odds=closing_odds,
+        odds_bookmaker=prediction.odds_bookmaker,
+        odds_market=prediction.odds_market,
+        odds_selection=prediction.odds_selection,
+        kickoff_datetime=getattr(match, "kickoff_datetime", None),
     )
+
+    closing_odds = clv_result.closing_odds
+    clv = clv_result.clv
 
     now = datetime.utcnow()
 
