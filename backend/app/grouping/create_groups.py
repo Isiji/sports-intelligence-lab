@@ -29,7 +29,10 @@ from app.intelligence.portfolio_filters import (
     build_portfolio_filter_context,
     evaluate_pick_for_portfolio,
 )
-from app.intelligence.stake_engine import resolve_group_tier
+from app.intelligence.stake_engine import (
+    calculate_group_stake,
+    resolve_group_tier,
+)
 from app.odds.market_quality_engine import get_enabled_markets
 from app.services.league_production_filter_service import (
     filter_candidate_dicts_by_league_quality,
@@ -50,6 +53,9 @@ MAX_GROUPS = 6
 
 PRODUCTION_MIN_GROUP_ODDS = 2.0
 PRODUCTION_MAX_GROUP_ODDS = 80.0
+
+DEFAULT_GROUPING_BANKROLL = 10_000.0
+DEFAULT_FLAT_STAKE = 100.0
 
 AUTO_PROFILE_LADDERS = {
     "AUTO_SAFE": [
@@ -90,6 +96,9 @@ class PortfolioGroupConfig:
 
     use_intelligence_filters: bool = True
 
+    bankroll: float = DEFAULT_GROUPING_BANKROLL
+    flat_stake: float = DEFAULT_FLAT_STAKE
+
 
 def _debug(*args: Any) -> None:
     if GROUPING_DEBUG:
@@ -105,6 +114,7 @@ def group_predictions(
     use_intelligence_filters: bool = True,
     profile: str | None = None,
     league_odds_filter_mode: str = "strict",
+    bankroll: float = DEFAULT_GROUPING_BANKROLL,
 ) -> dict[str, dict[str, float | str]]:
     profile_config = None
 
@@ -119,6 +129,7 @@ def group_predictions(
                 require_odds=require_odds,
                 use_intelligence_filters=use_intelligence_filters,
                 profile=candidate_profile,
+                bankroll=bankroll,
             )
 
             message = result.get("message")
@@ -153,6 +164,7 @@ def group_predictions(
         min_sample_size=10,
         use_intelligence_filters=use_intelligence_filters,
         league_odds_filter_mode=league_odds_filter_mode,
+        bankroll=float(bankroll),
         max_odds=(
             min(float(profile_config["max_odds"]), 4.50)
             if profile_config
@@ -196,6 +208,8 @@ def group_predictions(
         max_group_odds=config.max_group_odds,
         require_odds=require_odds,
         league_odds_filter_mode=league_odds_filter_mode,
+        bankroll=config.bankroll,
+        flat_stake=config.flat_stake,
     )
 
 
@@ -349,6 +363,7 @@ def _load_live_prediction_candidates(
           {odds_filter}
         ORDER BY
             CASE
+                WHEN p.odds_match_quality = 'exact_executable_market' THEN 10
                 WHEN p.odds_match_quality = 'exact_canonical' THEN 5
                 WHEN p.odds_match_quality = 'exact_market_fallback' THEN 4
                 WHEN p.odds_match_quality IN (
@@ -419,6 +434,7 @@ def _best_odds_quality_score(prediction: dict[str, Any]) -> float:
     confidence = float(prediction.get("confidence") or 0.0)
 
     quality_points = {
+        "exact_executable_market": 115.0,
         "exact_canonical": 100.0,
         "exact_market_fallback": 85.0,
         "goal_total": 72.0,
@@ -619,19 +635,14 @@ def _enrich_candidate(
 def _odds_quality_component(odds: float) -> float:
     if odds < 1.30:
         return -0.40
-
     if odds <= 1.80:
         return 0.25
-
     if odds <= 2.50:
         return 0.50
-
     if odds <= 3.50:
         return 0.30
-
     if odds <= 4.50:
         return 0.05
-
     return -0.50
 
 
@@ -646,15 +657,12 @@ def _sample_penalty(
 
     if market_sample_size < min_sample_size * 2:
         penalty += 0.02
-
     if league_sample_size == 0:
         penalty += 0.03
     elif league_sample_size < min_sample_size:
         penalty += 0.02
-
     if odds_band_sample_size == 0:
         penalty += 0.02
-
     if confidence_band_sample_size == 0:
         penalty += 0.02
 
@@ -725,13 +733,7 @@ def _group_odds_within_limits(
 
     cumulative = float(prod(odds_values))
 
-    if cumulative < min_group_odds:
-        return False
-
-    if cumulative > max_group_odds:
-        return False
-
-    return True
+    return min_group_odds <= cumulative <= max_group_odds
 
 
 def _candidate_fits_group(
@@ -745,9 +747,7 @@ def _candidate_fits_group(
 
     same_market_count = sum(1 for item in group if item["market"] == market)
     same_league_count = sum(
-        1
-        for item in group
-        if (item.get("league") or "unknown") == league
+        1 for item in group if (item.get("league") or "unknown") == league
     )
     same_family_count = sum(
         1
@@ -800,12 +800,7 @@ def _resolve_group_market_family(market: str) -> str:
     if "handicap" in market:
         return "HANDICAP"
 
-    if (
-        "win" in market
-        or "draw" in market
-        or "chance" in market
-        or "ht_ft" in market
-    ):
+    if "win" in market or "draw" in market or "chance" in market or "ht_ft" in market:
         return "RESULT"
 
     if "corner" in market:
@@ -847,6 +842,8 @@ def _summarize_portfolio_groups(
 ) -> dict[str, dict[str, float | str]]:
     summaries: dict[str, dict[str, float | str]] = {}
 
+    daily_exposure_used = 0.0
+
     for group_index, group in enumerate(groups, start=1):
         group_name = f"Portfolio Group {group_index}"
 
@@ -856,10 +853,21 @@ def _summarize_portfolio_groups(
             if item.get("odds") is not None
         ]
 
+        confidence_values = [
+            float(item["confidence"] or 0.0)
+            for item in group
+        ]
+
         risk_scores = [
             float(item.get("portfolio_risk_score") or 0.0)
             for item in group
         ]
+
+        rejected_picks = sum(
+            1
+            for item in group
+            if item.get("risk_level") == "AVOID"
+        )
 
         average_risk_score = mean(risk_scores) if risk_scores else 0.0
         max_risk_score = max(risk_scores) if risk_scores else 0.0
@@ -867,6 +875,7 @@ def _summarize_portfolio_groups(
         group_tier = resolve_group_tier(
             average_risk_score=average_risk_score,
             max_risk_score=max_risk_score,
+            rejected_picks=rejected_picks,
         )
 
         cumulative_odds = (
@@ -878,11 +887,22 @@ def _summarize_portfolio_groups(
         if cumulative_odds > config.max_group_odds:
             group_tier = "REJECTED"
 
+        stake_decision = calculate_group_stake(
+            bankroll=config.bankroll,
+            odds_values=odds_values,
+            confidence_values=confidence_values,
+            tier=group_tier,
+            flat_stake=config.flat_stake,
+            daily_exposure_used=daily_exposure_used,
+        )
+
+        daily_exposure_used += stake_decision.stake
+
         summaries[group_name] = {
             "group_type": "PROFITABILITY_PORTFOLIO",
             "group_tier": group_tier,
             "games": float(len(group)),
-            "average_confidence": round(mean(float(item["confidence"] or 0.0) for item in group), 4),
+            "average_confidence": round(mean(confidence_values), 4),
             "average_value_score": round(mean(float(item["value_score"] or 0.0) for item in group), 4),
             "average_market_roi": round(mean(float(item["market_roi"] or 0.0) for item in group), 4),
             "average_league_roi": round(mean(float(item["league_roi"] or 0.0) for item in group), 4),
@@ -905,6 +925,14 @@ def _summarize_portfolio_groups(
             "min_group_odds": round(config.min_group_odds, 4),
             "max_group_odds": round(config.max_group_odds, 4),
             "odds_coverage": round(len(odds_values) / len(group), 4),
+            "recommended_stake": stake_decision.stake,
+            "stake_method": stake_decision.method,
+            "stake_reason": stake_decision.reason,
+            "bankroll_pct": stake_decision.bankroll_pct,
+            "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
+            "applied_fraction": stake_decision.applied_fraction,
+            "estimated_group_probability": stake_decision.estimated_probability,
+            "expected_value": stake_decision.expected_value,
         }
 
     return summaries
@@ -918,6 +946,8 @@ def _fallback_confidence_groups(
     max_group_odds: float = PRODUCTION_MAX_GROUP_ODDS,
     require_odds: bool = True,
     league_odds_filter_mode: str = "strict",
+    bankroll: float = DEFAULT_GROUPING_BANKROLL,
+    flat_stake: float = DEFAULT_FLAT_STAKE,
 ) -> dict[str, dict[str, float | str]]:
     enabled_markets = set(get_enabled_markets(session))
 
@@ -1023,6 +1053,7 @@ def _fallback_confidence_groups(
 
     group_summaries: dict[str, dict[str, float | str]] = {}
     remaining_games = ranked_games.copy()
+    daily_exposure_used = 0.0
 
     for group_number in range(1, MAX_GROUPS + 1):
         group_name = f"Group {group_number}"
@@ -1054,10 +1085,31 @@ def _fallback_confidence_groups(
         if cumulative_odds < min_group_odds or cumulative_odds > max_group_odds:
             continue
 
-        odds_available = all(
-            prediction.odds is not None
+        odds_available = all(prediction.odds is not None for prediction in selected_games)
+
+        confidence_values = [
+            float(prediction.confidence or 0.0)
             for prediction in selected_games
+        ]
+
+        odds_values = [
+            float(prediction.odds or 0.0)
+            for prediction in selected_games
+            if prediction.odds is not None
+        ]
+
+        group_tier = "SAFE" if odds_available else "REJECTED"
+
+        stake_decision = calculate_group_stake(
+            bankroll=bankroll,
+            odds_values=odds_values,
+            confidence_values=confidence_values,
+            tier=group_tier,
+            flat_stake=flat_stake,
+            daily_exposure_used=daily_exposure_used,
         )
+
+        daily_exposure_used += stake_decision.stake
 
         for prediction in selected_games:
             session.add(
@@ -1081,6 +1133,14 @@ def _fallback_confidence_groups(
                 4,
             ),
             "group_tier": "FALLBACK_SAFE" if odds_available else "FALLBACK_REJECTED",
+            "recommended_stake": stake_decision.stake,
+            "stake_method": stake_decision.method,
+            "stake_reason": stake_decision.reason,
+            "bankroll_pct": stake_decision.bankroll_pct,
+            "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
+            "applied_fraction": stake_decision.applied_fraction,
+            "estimated_group_probability": stake_decision.estimated_probability,
+            "expected_value": stake_decision.expected_value,
         }
 
     session.commit()
@@ -1174,11 +1234,7 @@ def _fallback_ranking_score(prediction: Prediction) -> float:
     elif 0 < odds < 1.30:
         odds_component = -0.20
 
-    return (
-        confidence * 0.45
-        + value_score * 0.45
-        + odds_component
-    )
+    return confidence * 0.45 + value_score * 0.45 + odds_component
 
 
 def _cumulative_odds(predictions: list[Prediction]) -> float | None:
@@ -1273,16 +1329,12 @@ def _group_sizes(
     min_group_size: int = MIN_GAMES_PER_GROUP,
     max_group_size: int = MAX_GAMES_PER_GROUP,
 ) -> list[int]:
-    usable_games = min(
-        total_games,
-        max_groups * max_group_size,
-    )
+    usable_games = min(total_games, max_groups * max_group_size)
 
     if usable_games < min_group_size:
         return []
 
     sizes: list[int] = []
-
     remaining = usable_games
 
     while remaining >= min_group_size and len(sizes) < max_groups:

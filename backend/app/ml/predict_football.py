@@ -293,6 +293,21 @@ def _resolve_prediction_odds(
         "odds_match_quality": getattr(result, "match_quality", None),
     }
 
+def predict_football_market(
+    session: Session,
+    market: str,
+    slate: str = "demo",
+    limit: int = 16,
+    min_confidence: float = 0.55,
+    require_odds: bool = True,
+) -> int:
+    return predict_all_football_markets(
+        session=session,
+        slate=slate,
+        limit=limit,
+        min_confidence=min_confidence,
+        require_odds=require_odds,
+    )
 
 def _safe_float(value: Any) -> float | None:
     if value is None:

@@ -13,6 +13,10 @@ class StakeDecision:
     tier: str
     raw_kelly_fraction: float
     applied_fraction: float
+    bankroll_pct: float
+    total_odds: float
+    estimated_probability: float
+    expected_value: float
     reason: str
 
 
@@ -30,6 +34,10 @@ TIER_MAX_BANKROLL_PCT = {
     "AGGRESSIVE": 0.005,
     "REJECTED": 0.00,
 }
+
+
+GLOBAL_MAX_BANKROLL_PCT = 0.02
+DEFAULT_FRACTIONAL_KELLY = 0.25
 
 
 def resolve_group_tier(
@@ -59,45 +67,62 @@ def calculate_group_stake(
     confidence_values: list[float],
     tier: str,
     flat_stake: float = 100.0,
-    fractional_kelly: float = 0.25,
+    fractional_kelly: float = DEFAULT_FRACTIONAL_KELLY,
     max_bankroll_pct: float | None = None,
     min_stake: float = 0.0,
+    daily_exposure_used: float = 0.0,
+    daily_exposure_cap_pct: float = 0.15,
+    group_exposure_cap_pct: float | None = None,
 ) -> StakeDecision:
+    bankroll = float(bankroll or 0.0)
+
     if bankroll <= 0:
-        return StakeDecision(
-            stake=0.0,
-            method="blocked",
+        return _blocked_decision(
             tier=tier,
-            raw_kelly_fraction=0.0,
-            applied_fraction=0.0,
             reason="No bankroll available.",
         )
 
     if tier == "REJECTED":
-        return StakeDecision(
-            stake=0.0,
-            method="blocked",
+        return _blocked_decision(
             tier=tier,
-            raw_kelly_fraction=0.0,
-            applied_fraction=0.0,
             reason="Rejected risk tier.",
         )
 
     tier_max_pct = TIER_MAX_BANKROLL_PCT.get(tier, 0.0)
 
-    effective_max_bankroll_pct = (
-        tier_max_pct
-        if max_bankroll_pct is None
-        else min(max_bankroll_pct, tier_max_pct)
+    effective_max_bankroll_pct = tier_max_pct
+
+    if max_bankroll_pct is not None:
+        effective_max_bankroll_pct = min(
+            effective_max_bankroll_pct,
+            float(max_bankroll_pct),
+        )
+
+    if group_exposure_cap_pct is not None:
+        effective_max_bankroll_pct = min(
+            effective_max_bankroll_pct,
+            float(group_exposure_cap_pct),
+        )
+
+    effective_max_bankroll_pct = min(
+        effective_max_bankroll_pct,
+        GLOBAL_MAX_BANKROLL_PCT,
     )
 
-    if effective_max_bankroll_pct <= 0:
-        return StakeDecision(
-            stake=0.0,
-            method="blocked",
+    remaining_daily_exposure = max(
+        bankroll * daily_exposure_cap_pct - daily_exposure_used,
+        0.0,
+    )
+
+    if remaining_daily_exposure <= 0:
+        return _blocked_decision(
             tier=tier,
-            raw_kelly_fraction=0.0,
-            applied_fraction=0.0,
+            reason="Daily exposure cap reached.",
+        )
+
+    if effective_max_bankroll_pct <= 0:
+        return _blocked_decision(
+            tier=tier,
             reason="Tier bankroll cap is zero.",
         )
 
@@ -105,6 +130,7 @@ def calculate_group_stake(
         fallback_stake = min(
             flat_stake * TIER_STAKE_MULTIPLIERS.get(tier, 0.25),
             bankroll * effective_max_bankroll_pct,
+            remaining_daily_exposure,
         )
 
         return StakeDecision(
@@ -113,27 +139,48 @@ def calculate_group_stake(
             tier=tier,
             raw_kelly_fraction=0.0,
             applied_fraction=round(effective_max_bankroll_pct, 6),
+            bankroll_pct=round(fallback_stake / bankroll, 6),
+            total_odds=0.0,
+            estimated_probability=0.0,
+            expected_value=0.0,
             reason="Missing complete odds/confidence data.",
         )
 
-    total_odds = prod(odds_values)
-
-    estimated_probability = prod(
+    clean_odds = [float(odds) for odds in odds_values if odds is not None]
+    clean_confidences = [
         max(0.01, min(float(confidence), 0.99))
         for confidence in confidence_values
-    )
+        if confidence is not None
+    ]
+
+    if len(clean_odds) != len(odds_values) or len(clean_confidences) != len(confidence_values):
+        return _blocked_decision(
+            tier=tier,
+            reason="Invalid odds/confidence data.",
+        )
+
+    total_odds = prod(clean_odds)
+
+    estimated_probability = prod(clean_confidences)
 
     if total_odds <= 1.0:
-        return StakeDecision(
-            stake=0.0,
-            method="blocked",
+        return _blocked_decision(
             tier=tier,
-            raw_kelly_fraction=0.0,
-            applied_fraction=0.0,
             reason="Invalid group odds.",
         )
 
-    raw_kelly = ((total_odds * estimated_probability) - 1.0) / (total_odds - 1.0)
+    expected_value = (total_odds * estimated_probability) - 1.0
+
+    if expected_value <= 0:
+        return _blocked_decision(
+            tier=tier,
+            reason="Negative or zero expected value.",
+            total_odds=total_odds,
+            estimated_probability=estimated_probability,
+            expected_value=expected_value,
+        )
+
+    raw_kelly = expected_value / (total_odds - 1.0)
     raw_kelly = max(raw_kelly, 0.0)
 
     tier_multiplier = TIER_STAKE_MULTIPLIERS.get(tier, 0.25)
@@ -147,13 +194,55 @@ def calculate_group_stake(
         stake = min(
             flat_stake * tier_multiplier,
             bankroll * effective_max_bankroll_pct,
+            remaining_daily_exposure,
+        )
+
+    stake = min(
+        stake,
+        bankroll * effective_max_bankroll_pct,
+        remaining_daily_exposure,
+    )
+
+    if stake < min_stake:
+        return _blocked_decision(
+            tier=tier,
+            reason="Calculated stake below minimum stake.",
+            total_odds=total_odds,
+            estimated_probability=estimated_probability,
+            expected_value=expected_value,
         )
 
     return StakeDecision(
-        stake=round(max(stake, min_stake), 2),
+        stake=round(stake, 2),
         method="fractional_kelly",
         tier=tier,
         raw_kelly_fraction=round(raw_kelly, 6),
         applied_fraction=round(applied_fraction, 6),
-        reason="Dynamic stake calculated with tier-specific bankroll cap.",
+        bankroll_pct=round(stake / bankroll, 6),
+        total_odds=round(total_odds, 6),
+        estimated_probability=round(estimated_probability, 6),
+        expected_value=round(expected_value, 6),
+        reason="Dynamic stake calculated with tier, Kelly, and exposure caps.",
+    )
+
+
+def _blocked_decision(
+    *,
+    tier: str,
+    reason: str,
+    total_odds: float = 0.0,
+    estimated_probability: float = 0.0,
+    expected_value: float = 0.0,
+) -> StakeDecision:
+    return StakeDecision(
+        stake=0.0,
+        method="blocked",
+        tier=tier,
+        raw_kelly_fraction=0.0,
+        applied_fraction=0.0,
+        bankroll_pct=0.0,
+        total_odds=round(total_odds, 6),
+        estimated_probability=round(estimated_probability, 6),
+        expected_value=round(expected_value, 6),
+        reason=reason,
     )
