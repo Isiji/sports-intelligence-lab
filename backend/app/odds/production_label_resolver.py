@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-LABEL_TO_MARKET = {
+LABEL_TO_MARKET: dict[str, str] = {
     "HOME_WIN": "home_win",
     "AWAY_WIN": "away_win",
     "DRAW": "draw",
@@ -31,9 +31,52 @@ LABEL_TO_MARKET = {
     "BTTS_NO": "btts_no",
 
     "HOME_OVER_0_5": "home_over_0_5_goals",
+    "HOME_UNDER_0_5": "home_under_0_5_goals",
     "AWAY_OVER_0_5": "away_over_0_5_goals",
+    "AWAY_UNDER_0_5": "away_under_0_5_goals",
+
     "HOME_CLEAN_SHEET": "home_clean_sheet",
     "AWAY_CLEAN_SHEET": "away_clean_sheet",
+
+    "CORNERS_OVER_8_5": "corners_over_8_5",
+    "CORNERS_UNDER_8_5": "corners_under_8_5",
+
+    "SOT_OVER_8_5": "shots_on_target_over_8_5",
+    "SOT_UNDER_8_5": "shots_on_target_under_8_5",
+    "SHOTS_ON_TARGET_OVER_8_5": "shots_on_target_over_8_5",
+    "SHOTS_ON_TARGET_UNDER_8_5": "shots_on_target_under_8_5",
+
+    "DRAW_NO_BET_HOME": "draw_no_bet_home",
+    "DRAW_NO_BET_AWAY": "draw_no_bet_away",
+    "NOT_DRAW_NO_BET_HOME": "draw_no_bet_away",
+    "NOT_DRAW_NO_BET_AWAY": "draw_no_bet_home",
+}
+
+
+INVERSE_MARKET_MAP: dict[str, str] = {
+    "over_1_5_goals": "under_1_5_goals",
+    "under_1_5_goals": "over_1_5_goals",
+    "over_2_5_goals": "under_2_5_goals",
+    "under_2_5_goals": "over_2_5_goals",
+    "over_3_5_goals": "under_3_5_goals",
+    "under_3_5_goals": "over_3_5_goals",
+
+    "btts_yes": "btts_no",
+    "btts_no": "btts_yes",
+
+    "home_over_0_5_goals": "home_under_0_5_goals",
+    "home_under_0_5_goals": "home_over_0_5_goals",
+    "away_over_0_5_goals": "away_under_0_5_goals",
+    "away_under_0_5_goals": "away_over_0_5_goals",
+
+    "corners_over_8_5": "corners_under_8_5",
+    "corners_under_8_5": "corners_over_8_5",
+
+    "shots_on_target_over_8_5": "shots_on_target_under_8_5",
+    "shots_on_target_under_8_5": "shots_on_target_over_8_5",
+
+    "draw_no_bet_home": "draw_no_bet_away",
+    "draw_no_bet_away": "draw_no_bet_home",
 }
 
 
@@ -50,11 +93,18 @@ def resolve_executable_market(
     if label in LABEL_TO_MARKET:
         return LABEL_TO_MARKET[label]
 
+    if label.startswith("NOT_ASIAN_HANDICAP_"):
+        return _invert_asian_handicap(label)
+
     if label.startswith("ASIAN_HANDICAP_"):
         return label.lower()
 
-    if label.startswith("NOT_ASIAN_HANDICAP_"):
-        return _invert_asian_handicap(label)
+    if label.startswith("NOT_"):
+        positive_label = label.replace("NOT_", "", 1)
+        positive_market = LABEL_TO_MARKET.get(positive_label)
+
+        if positive_market:
+            return INVERSE_MARKET_MAP.get(positive_market, target_market)
 
     return target_market
 

@@ -6,7 +6,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.odds.market_normalizer import normalize_market_and_selection
-from app.odds.production_label_resolver import resolve_executable_market
+from app.odds.production_label_resolver import (
+    LABEL_TO_MARKET,
+    resolve_executable_market,
+)
 
 
 def find_best_odds_for_prediction(
@@ -20,6 +23,11 @@ def find_best_odds_for_prediction(
     executable_market = resolve_executable_market(
         target_market=target_market,
         predicted_label=predicted_label,
+    )
+
+    executable_selection = _resolve_executable_selection(
+        predicted_label=predicted_label,
+        executable_market=executable_market,
     )
 
     rows = session.execute(
@@ -46,6 +54,7 @@ def find_best_odds_for_prediction(
 
     for row in rows:
         market_name = row.get("market") or row.get("market_name")
+
         selection_name = (
             row.get("selection")
             or row.get("selection_name")
@@ -62,10 +71,19 @@ def find_best_odds_for_prediction(
             away_team=away_team,
         )
 
+        normalized_market = normalized.canonical_market
+
+        normalized_selection = (
+            str(selection_name).upper().strip()
+            if selection_name
+            else None
+        )
+
         diagnostic = {
             "raw_market": market_name,
             "raw_selection": selection_name,
-            "normalized_market": normalized.canonical_market,
+            "normalized_market": normalized_market,
+            "normalized_selection": normalized_selection,
             "reason": normalized.reason,
             "confidence": normalized.confidence,
             "odds": float(odds_value) if odds_value is not None else None,
@@ -76,11 +94,19 @@ def find_best_odds_for_prediction(
 
         diagnostics.append(diagnostic)
 
-        if (
-            normalized.canonical_market == executable_market
-            and odds_value is not None
-        ):
-            matches.append(diagnostic)
+        if odds_value is None:
+            continue
+
+        if normalized_market != executable_market:
+            continue
+
+        if executable_selection:
+            if normalized_selection != executable_selection:
+                continue
+
+        diagnostic["match_quality"] = "exact_executable_market"
+
+        matches.append(diagnostic)
 
     if not matches:
         return {
@@ -89,8 +115,9 @@ def find_best_odds_for_prediction(
             "target_market": target_market,
             "predicted_label": predicted_label,
             "executable_market": executable_market,
+            "executable_selection": executable_selection,
             "odds": None,
-            "diagnostics": diagnostics[:30],
+            "diagnostics": diagnostics[:40],
         }
 
     best = max(matches, key=lambda item: item["odds"] or 0)
@@ -101,12 +128,46 @@ def find_best_odds_for_prediction(
         "target_market": target_market,
         "predicted_label": predicted_label,
         "executable_market": executable_market,
+        "executable_selection": executable_selection,
         "odds": best["odds"],
         "bookmaker": best["bookmaker"],
         "provider": best["provider"],
         "retrieved_at": best["retrieved_at"],
         "raw_market": best["raw_market"],
         "raw_selection": best["raw_selection"],
+        "odds_market": executable_market,
+        "odds_selection": executable_selection,
         "match_quality": "exact_executable_market",
-        "diagnostics": diagnostics[:30],
+        "diagnostics": diagnostics[:40],
     }
+
+
+def _resolve_executable_selection(
+    predicted_label: str | None,
+    executable_market: str,
+) -> str | None:
+    if not predicted_label:
+        return None
+
+    label = predicted_label.upper().strip()
+
+    if label.startswith("NOT_"):
+        positive_label = label.replace("NOT_", "", 1)
+
+        inverse_market = LABEL_TO_MARKET.get(positive_label)
+
+        if inverse_market:
+            return inverse_market.upper()
+
+    if label.startswith("ASIAN_HANDICAP_"):
+        return label
+
+    if label.startswith("NOT_ASIAN_HANDICAP_"):
+        return (
+            executable_market.upper()
+        )
+
+    if label in LABEL_TO_MARKET:
+        return executable_market.upper()
+
+    return executable_market.upper()
