@@ -1001,6 +1001,7 @@ def update_finished_matches_command(
 @app.command("ingest-missing-stats")
 def ingest_missing_stats(
     limit: int = typer.Option(100),
+    season: int | None = typer.Option(None),
     force: bool = typer.Option(False, help="Retry even if stats were already attempted/unavailable."),
 ) -> None:
     with get_cli_session() as session:
@@ -1008,6 +1009,7 @@ def ingest_missing_stats(
             session=session,
             limit=limit,
             force=force,
+            season=season,
         )
 
     typer.echo(result)
