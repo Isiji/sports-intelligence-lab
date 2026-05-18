@@ -981,6 +981,143 @@ class DynamicLeagueTier(Base):
 # MARKET FAMILY INTELLIGENCE
 # =========================================================
 
+# =========================================================
+# EXECUTABLE MARKET FAMILY INTELLIGENCE
+# =========================================================
+
+class ExecutableMarketFamilySnapshot(Base):
+    __tablename__ = "executable_market_family_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    family_name: Mapped[str] = mapped_column(
+        String(120),
+        unique=True,
+        index=True,
+    )
+
+    derivative_type: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
+
+    scope: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    execution_risk: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    volatility_tier: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    survivability_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    bookmaker_richness_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    confidence_multiplier: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+    )
+
+    production_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+# =========================================================
+# BOOKMAKER FAMILY INTELLIGENCE
+# =========================================================
+
+class BookmakerFamilyIntelligenceSnapshot(Base):
+    __tablename__ = "bookmaker_family_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    bookmaker: Mapped[str] = mapped_column(
+        String(120),
+        index=True,
+    )
+
+    family_name: Mapped[str] = mapped_column(
+        String(120),
+        index=True,
+    )
+
+    bets: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    hit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    roi: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    sharpness_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+    )
+
+    confidence_multiplier: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+    )
+
+    bookmaker_tier: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
 class MarketFamilySnapshot(Base):
     __tablename__ = "market_family_snapshots"
 

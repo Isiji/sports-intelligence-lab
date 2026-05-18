@@ -1,6 +1,7 @@
+import typer
+
 from datetime import date
 
-import typer
 
 from app.backtest.portfolio_profiles import run_portfolio_profiles
 from app.backtest.evaluate import evaluate_slate_by_group

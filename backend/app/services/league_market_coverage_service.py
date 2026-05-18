@@ -8,16 +8,15 @@ from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from app.db.models import LeagueMarketCoverageSnapshot
+from app.odds.executable_market_registry import is_production_ready_market
 
 
 MIN_MATCHES_WITH_MARKET = 3
-MIN_BOOKMAKERS = 1
-MIN_MARKET_COVERAGE_RATE = 0.15
+MIN_BOOKMAKERS = 2
+MIN_MARKET_COVERAGE_RATE = 0.03
 
 
-def rebuild_league_market_coverage(
-    session: Session,
-) -> dict:
+def rebuild_league_market_coverage(session: Session) -> dict:
     session.execute(delete(LeagueMarketCoverageSnapshot))
 
     rows = session.execute(
@@ -33,26 +32,24 @@ def rebuild_league_market_coverage(
                   AND league IS NOT NULL
                 GROUP BY league
             ),
-
             market_rows AS (
                 SELECT
                     m.league,
                     mo.market,
-                    COUNT(DISTINCT m.id) AS matches_with_market,
-                    COUNT(mo.id) AS total_market_rows,
+                    COUNT(DISTINCT mo.match_id) AS matches_with_market,
+                    COUNT(*) AS total_market_rows,
                     COUNT(DISTINCT mo.bookmaker) FILTER (
                         WHERE mo.bookmaker IS NOT NULL
                     ) AS bookmaker_count
-                FROM matches m
-                JOIN match_odds mo
-                    ON mo.match_id = m.id
+                FROM match_odds mo
+                JOIN matches m
+                    ON m.id = mo.match_id
                 WHERE m.sport = 'football'
                   AND m.provider = 'api-football'
                   AND m.league IS NOT NULL
                   AND mo.market IS NOT NULL
                 GROUP BY m.league, mo.market
             )
-
             SELECT
                 mr.league,
                 mr.market,
@@ -60,26 +57,19 @@ def rebuild_league_market_coverage(
                 mr.matches_with_market,
                 mr.total_market_rows,
                 mr.bookmaker_count,
-
                 ROUND(
                     mr.matches_with_market::numeric
                     / NULLIF(lt.total_league_matches, 0),
                     4
                 ) AS market_coverage_rate,
-
                 ROUND(
                     mr.total_market_rows::numeric
                     / NULLIF(mr.matches_with_market, 0),
                     4
                 ) AS avg_rows_per_match
-
             FROM market_rows mr
             JOIN league_totals lt
                 ON lt.league = mr.league
-
-            ORDER BY
-                mr.matches_with_market DESC,
-                mr.total_market_rows DESC
             """
         )
     ).mappings().all()
@@ -89,11 +79,13 @@ def rebuild_league_market_coverage(
     blocked = 0
 
     for row in rows:
+        market = str(row["market"])
+
         matches_with_market = int(row["matches_with_market"] or 0)
-        total_market_rows = int(row["total_market_rows"] or 0)
         bookmaker_count = int(row["bookmaker_count"] or 0)
         market_coverage_rate = float(row["market_coverage_rate"] or 0.0)
         avg_rows_per_match = float(row["avg_rows_per_match"] or 0.0)
+        total_market_rows = int(row["total_market_rows"] or 0)
 
         score = calculate_market_quality_score(
             matches_with_market=matches_with_market,
@@ -105,11 +97,11 @@ def rebuild_league_market_coverage(
         tier = resolve_market_tier(
             score=score,
             matches_with_market=matches_with_market,
-            market_coverage_rate=market_coverage_rate,
             bookmaker_count=bookmaker_count,
         )
 
         production_allowed, reason = resolve_production_allowed(
+            market=market,
             tier=tier,
             matches_with_market=matches_with_market,
             market_coverage_rate=market_coverage_rate,
@@ -125,7 +117,7 @@ def rebuild_league_market_coverage(
             LeagueMarketCoverageSnapshot(
                 sport="football",
                 league=row["league"],
-                market=row["market"],
+                market=market,
                 matches_with_market=matches_with_market,
                 total_market_rows=total_market_rows,
                 bookmaker_count=bookmaker_count,
@@ -156,19 +148,11 @@ def calculate_market_quality_score(
     bookmaker_count: int,
     avg_rows_per_match: float,
 ) -> float:
-    sample_score = min(matches_with_market / 20.0, 1.0) * 30.0
-    coverage_score = market_coverage_rate * 30.0
-    bookmaker_score = min(bookmaker_count / 8.0, 1.0) * 25.0
-    depth_score = min(avg_rows_per_match / 80.0, 1.0) * 15.0
-
-    if matches_with_market <= 0:
-        return 0.0
-
     return round(
-        sample_score
-        + coverage_score
-        + bookmaker_score
-        + depth_score,
+        min(matches_with_market / 20.0, 1.0) * 30.0
+        + min(market_coverage_rate / 0.10, 1.0) * 25.0
+        + min(bookmaker_count / 8.0, 1.0) * 25.0
+        + min(avg_rows_per_match / 100.0, 1.0) * 20.0,
         4,
     )
 
@@ -176,7 +160,6 @@ def calculate_market_quality_score(
 def resolve_market_tier(
     score: float,
     matches_with_market: int,
-    market_coverage_rate: float,
     bookmaker_count: int,
 ) -> str:
     if matches_with_market < MIN_MATCHES_WITH_MARKET:
@@ -185,35 +168,40 @@ def resolve_market_tier(
     if bookmaker_count <= 0:
         return "NO_BOOKMAKER_DEPTH"
 
-    if score >= 75 and market_coverage_rate >= 0.50:
+    if score >= 75:
         return "ELITE_MARKET_COVERAGE"
 
-    if score >= 60 and market_coverage_rate >= 0.30:
+    if score >= 60:
         return "STRONG_MARKET_COVERAGE"
 
-    if score >= 45 and market_coverage_rate >= 0.15:
+    if score >= 40:
         return "USABLE_MARKET_COVERAGE"
 
-    if score >= 30:
+    if score >= 25:
         return "LIMITED_MARKET_COVERAGE"
 
     return "POOR_MARKET_COVERAGE"
 
 
 def resolve_production_allowed(
+    *,
+    market: str,
     tier: str,
     matches_with_market: int,
     market_coverage_rate: float,
     bookmaker_count: int,
 ) -> tuple[bool, str]:
+    if not is_production_ready_market(market):
+        return False, "market_not_production_ready"
+
     if matches_with_market < MIN_MATCHES_WITH_MARKET:
         return False, "insufficient_market_sample"
 
     if bookmaker_count < MIN_BOOKMAKERS:
-        return False, "no_bookmaker_depth"
+        return False, "insufficient_bookmaker_depth"
 
     if market_coverage_rate < MIN_MARKET_COVERAGE_RATE:
-        return False, "market_coverage_rate_too_low"
+        return False, "market_coverage_too_low"
 
     if tier in {
         "ELITE_MARKET_COVERAGE",
@@ -230,26 +218,12 @@ def league_market_coverage_report(
     limit: int = 100,
     production_only: bool = False,
 ) -> dict:
-    where_sql = ""
-
-    if production_only:
-        where_sql = "WHERE production_allowed = true"
+    where_sql = "WHERE production_allowed = true" if production_only else ""
 
     rows = session.execute(
         text(
             f"""
-            SELECT
-                league,
-                market,
-                matches_with_market,
-                total_market_rows,
-                bookmaker_count,
-                market_coverage_rate,
-                avg_rows_per_match,
-                market_quality_score,
-                market_tier,
-                production_allowed,
-                reason
+            SELECT *
             FROM league_market_coverage_snapshots
             {where_sql}
             ORDER BY
@@ -262,44 +236,6 @@ def league_market_coverage_report(
         {"limit": limit},
     ).mappings().all()
 
-    summary = session.execute(
-        text(
-            """
-            SELECT
-                COUNT(*) AS rows,
-                COUNT(*) FILTER (
-                    WHERE production_allowed = true
-                ) AS production_allowed_rows,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'ELITE_MARKET_COVERAGE'
-                ) AS elite_markets,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'STRONG_MARKET_COVERAGE'
-                ) AS strong_markets,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'USABLE_MARKET_COVERAGE'
-                ) AS usable_markets,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'LIMITED_MARKET_COVERAGE'
-                ) AS limited_markets,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'POOR_MARKET_COVERAGE'
-                ) AS poor_markets,
-
-                COUNT(*) FILTER (
-                    WHERE market_tier = 'INSUFFICIENT_SAMPLE'
-                ) AS insufficient_sample_markets
-            FROM league_market_coverage_snapshots
-            """
-        )
-    ).mappings().first()
-
     return {
-        "summary": dict(summary or {}),
-        "rows": [dict(row) for row in rows],
+        "rows": [dict(row) for row in rows]
     }

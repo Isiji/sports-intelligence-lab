@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.models import Prediction
+from app.db.models import Match, Prediction
 from app.features.football_features import (
     MARKET_TARGETS,
     load_upcoming_frame,
@@ -17,7 +17,14 @@ from app.features.football_features import (
 from app.intelligence.odds_economics import evaluate_odds_economics
 from app.ml.market_prediction_resolver import resolve_market_prediction
 from app.ml.train_football import model_path_for_market
+from app.odds.executable_market_registry import (
+    is_production_ready_market,
+    parse_executable_market,
+)
 from app.odds.odds_matcher import find_best_odds_for_prediction
+from app.services.prediction_intelligence_service import (
+    apply_prediction_intelligence,
+)
 from app.services.production_validation_service import (
     validate_prediction_for_production,
 )
@@ -30,7 +37,10 @@ def predict_all_football_markets(
     min_confidence: float = 0.55,
     require_odds: bool = True,
 ) -> int:
-    upcoming_df = load_upcoming_frame(session=session, limit=limit)
+    upcoming_df = load_upcoming_frame(
+        session=session,
+        limit=limit,
+    )
 
     if upcoming_df.empty:
         return 0
@@ -38,54 +48,103 @@ def predict_all_football_markets(
     saved = 0
 
     for market in MARKET_TARGETS.keys():
-        model_path = model_path_for_market(market)
+
+        if not is_production_ready_market(
+            market
+        ):
+            print(
+                f"[SKIPPED] {market}: market not production ready"
+            )
+            continue
+
+        executable_market = parse_executable_market(
+            market
+        )
+
+        model_path = model_path_for_market(
+            market
+        )
 
         if not model_path.exists():
-            print(f"[SKIPPED] {market}: model artifact missing at {model_path}")
+            print(
+                f"[SKIPPED] {market}: model artifact missing at {model_path}"
+            )
             continue
 
         try:
-            bundle = _load_model_bundle(model_path)
+            bundle = _load_model_bundle(
+                model_path
+            )
+
         except Exception as exc:
-            print(f"[SKIPPED] {market}: failed to load model bundle: {exc}")
+            print(
+                f"[SKIPPED] {market}: failed to load model bundle: {exc}"
+            )
             continue
 
-        feature_columns = bundle.get("feature_columns", [])
+        feature_columns = bundle.get(
+            "feature_columns",
+            [],
+        )
 
         if not feature_columns:
-            print(f"[SKIPPED] {market}: bundle has no feature_columns")
+            print(
+                f"[SKIPPED] {market}: bundle has no feature_columns"
+            )
             continue
 
         missing_features = [
-            column for column in feature_columns
+            column
+            for column in feature_columns
             if column not in upcoming_df.columns
         ]
 
         if missing_features:
-            print(f"[SKIPPED] {market}: missing features: {missing_features[:8]}")
+            print(
+                f"[SKIPPED] {market}: missing features: {missing_features[:8]}"
+            )
             continue
 
-        x = upcoming_df[feature_columns].fillna(0.0)
+        x = upcoming_df[
+            feature_columns
+        ].fillna(0.0)
 
         try:
-            probabilities = _predict_probabilities(bundle=bundle, x=x)
+            probabilities = _predict_probabilities(
+                bundle=bundle,
+                x=x,
+            )
+
         except Exception as exc:
-            print(f"[SKIPPED] {market}: prediction failed: {exc}")
+            print(
+                f"[SKIPPED] {market}: prediction failed: {exc}"
+            )
             continue
 
         for row_index, row in upcoming_df.iterrows():
-            probability = float(probabilities[row_index])
+
+            probability = float(
+                probabilities[row_index]
+            )
 
             resolved_prediction = resolve_market_prediction(
                 market=market,
                 probability=probability,
             )
 
-            if not resolved_prediction.should_save or not resolved_prediction.predicted_label:
+            if (
+                not resolved_prediction.should_save
+                or not resolved_prediction.predicted_label
+            ):
                 continue
 
-            predicted_label = resolved_prediction.predicted_label
-            confidence = resolved_prediction.confidence
+            predicted_label = (
+                resolved_prediction.predicted_label
+            )
+
+            confidence = float(
+                resolved_prediction.confidence
+            )
 
             if confidence < min_confidence:
                 continue
@@ -99,15 +158,28 @@ def predict_all_football_markets(
                 away_team=str(row["away_team"]),
             )
 
-            if require_odds and odds_payload["odds"] is None:
+            if (
+                require_odds
+                and odds_payload["odds"] is None
+            ):
                 continue
 
             implied_probability = None
             value_score = None
 
-            if odds_payload["odds"] is not None and odds_payload["odds"] > 0:
-                implied_probability = round(1 / odds_payload["odds"], 6)
-                value_score = round(confidence - implied_probability, 6)
+            if (
+                odds_payload["odds"] is not None
+                and odds_payload["odds"] > 0
+            ):
+                implied_probability = round(
+                    1 / odds_payload["odds"],
+                    6,
+                )
+
+                value_score = round(
+                    confidence - implied_probability,
+                    6,
+                )
 
             economics = evaluate_odds_economics(
                 odds=odds_payload["odds"],
@@ -116,8 +188,35 @@ def predict_all_football_markets(
                 production_mode=True,
             )
 
-            if require_odds and not economics.allowed:
+            if (
+                require_odds
+                and not economics.allowed
+            ):
                 continue
+
+            match_object = session.get(
+                Match,
+                int(row["match_id"]),
+            )
+
+            if not match_object:
+                continue
+
+            intelligence = apply_prediction_intelligence(
+                session=session,
+                match=match_object,
+                market=market,
+                raw_confidence=confidence,
+                odds=odds_payload["odds"],
+                bookmaker=odds_payload["odds_bookmaker"],
+            )
+
+            if not intelligence["allowed"]:
+                continue
+
+            confidence = float(
+                intelligence["adjusted_confidence"]
+            )
 
             production_validation = validate_prediction_for_production(
                 market=market,
@@ -135,10 +234,16 @@ def predict_all_football_markets(
                 "slate": slate,
                 "match_id": int(row["match_id"]),
                 "sport": "football",
-                "model_name": bundle.get("selected_model_name", "UnknownModel"),
+                "model_name": bundle.get(
+                    "selected_model_name",
+                    "UnknownModel",
+                ),
                 "market": market,
                 "predicted_label": predicted_label,
-                "confidence": round(confidence, 6),
+                "confidence": round(
+                    confidence,
+                    6,
+                ),
                 "odds": odds_payload["odds"],
                 "implied_probability": implied_probability,
                 "value_score": value_score,
@@ -149,15 +254,25 @@ def predict_all_football_markets(
                 "odds_match_quality": odds_payload["odds_match_quality"],
             }
 
-            _upsert_prediction(session=session, payload=prediction_payload)
+            _upsert_prediction(
+                session=session,
+                payload=prediction_payload,
+            )
+
             saved += 1
 
     session.commit()
+
     return saved
 
 
-def _upsert_prediction(session: Session, payload: dict[str, Any]) -> None:
-    stmt = pg_insert(Prediction).values(**payload)
+def _upsert_prediction(
+    session: Session,
+    payload: dict[str, Any],
+) -> None:
+    stmt = pg_insert(
+        Prediction
+    ).values(**payload)
 
     update_fields = {
         "sport": stmt.excluded.sport,
@@ -181,39 +296,65 @@ def _upsert_prediction(session: Session, payload: dict[str, Any]) -> None:
     session.execute(stmt)
 
 
-def _load_model_bundle(path: Path) -> dict[str, Any]:
+def _load_model_bundle(
+    path: Path,
+) -> dict[str, Any]:
     with path.open("rb") as file:
         bundle = pickle.load(file)
 
     if not isinstance(bundle, dict):
-        raise ValueError("model bundle is not a dictionary")
+        raise ValueError(
+            "model bundle is not a dictionary"
+        )
 
     return bundle
 
 
-def _predict_probabilities(bundle: dict[str, Any], x) -> list[float]:
+def _predict_probabilities(
+    bundle: dict[str, Any],
+    x,
+) -> list[float]:
     models = bundle.get("models") or {}
+
     weights = bundle.get("weights") or {}
 
     if not models:
-        raise ValueError("no models found in bundle")
+        raise ValueError(
+            "no models found in bundle"
+        )
 
     final_probability = None
 
     for model_name, model in models.items():
+
         model_probability = model.predict_proba(x)[:, 1]
-        weight = float(weights.get(model_name, 1.0 / max(len(models), 1)))
-        weighted_probability = model_probability * weight
+
+        weight = float(
+            weights.get(
+                model_name,
+                1.0 / max(len(models), 1),
+            )
+        )
+
+        weighted_probability = (
+            model_probability * weight
+        )
 
         if final_probability is None:
             final_probability = weighted_probability
+
         else:
             final_probability += weighted_probability
 
     if final_probability is None:
-        raise ValueError("probability calculation failed")
+        raise ValueError(
+            "probability calculation failed"
+        )
 
-    return [float(value) for value in final_probability]
+    return [
+        float(value)
+        for value in final_probability
+    ]
 
 
 def _resolve_prediction_odds(
@@ -224,6 +365,7 @@ def _resolve_prediction_odds(
     home_team: str,
     away_team: str,
 ) -> dict[str, Any]:
+
     default_payload = {
         "odds": None,
         "odds_bookmaker": None,
@@ -242,6 +384,7 @@ def _resolve_prediction_odds(
             home_team=home_team,
             away_team=away_team,
         )
+
     except TypeError:
         result = find_best_odds_for_prediction(
             session=session,
@@ -250,6 +393,7 @@ def _resolve_prediction_odds(
             home_team=home_team,
             away_team=away_team,
         )
+
     except Exception:
         return default_payload
 
@@ -257,13 +401,17 @@ def _resolve_prediction_odds(
         return default_payload
 
     if isinstance(result, dict):
+
         return {
             "odds": _safe_float(
                 result.get("odds")
                 or result.get("price")
                 or result.get("decimal_odds")
             ),
-            "odds_bookmaker": result.get("bookmaker") or result.get("odds_bookmaker"),
+            "odds_bookmaker": (
+                result.get("bookmaker")
+                or result.get("odds_bookmaker")
+            ),
             "odds_market": (
                 result.get("odds_market")
                 or result.get("executable_market")
@@ -276,7 +424,10 @@ def _resolve_prediction_odds(
                 or result.get("selection")
                 or result.get("raw_selection")
             ),
-            "odds_retrieved_at": result.get("retrieved_at") or result.get("odds_retrieved_at"),
+            "odds_retrieved_at": (
+                result.get("retrieved_at")
+                or result.get("odds_retrieved_at")
+            ),
             "odds_match_quality": (
                 result.get("match_quality")
                 or result.get("odds_match_quality")
@@ -285,13 +436,34 @@ def _resolve_prediction_odds(
         }
 
     return {
-        "odds": _safe_float(getattr(result, "odds", None)),
-        "odds_bookmaker": getattr(result, "bookmaker", None),
-        "odds_market": getattr(result, "odds_market", None) or getattr(result, "market", None),
-        "odds_selection": getattr(result, "odds_selection", None) or getattr(result, "selection", None),
-        "odds_retrieved_at": getattr(result, "retrieved_at", None),
-        "odds_match_quality": getattr(result, "match_quality", None),
+        "odds": _safe_float(
+            getattr(result, "odds", None)
+        ),
+        "odds_bookmaker": getattr(
+            result,
+            "bookmaker",
+            None,
+        ),
+        "odds_market": (
+            getattr(result, "odds_market", None)
+            or getattr(result, "market", None)
+        ),
+        "odds_selection": (
+            getattr(result, "odds_selection", None)
+            or getattr(result, "selection", None)
+        ),
+        "odds_retrieved_at": getattr(
+            result,
+            "retrieved_at",
+            None,
+        ),
+        "odds_match_quality": getattr(
+            result,
+            "match_quality",
+            None,
+        ),
     }
+
 
 def predict_football_market(
     session: Session,
@@ -309,11 +481,18 @@ def predict_football_market(
         require_odds=require_odds,
     )
 
-def _safe_float(value: Any) -> float | None:
+
+def _safe_float(
+    value: Any,
+) -> float | None:
     if value is None:
         return None
 
     try:
         return float(value)
-    except (TypeError, ValueError):
+
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
