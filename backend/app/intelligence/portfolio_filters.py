@@ -16,7 +16,12 @@ from app.db.models import (
     MarketIntelligenceSnapshot,
     OddsBandIntelligenceSnapshot,
 )
-from app.odds.market_quality_engine import get_enabled_markets
+from app.odds.executable_market_registry import (
+    parse_executable_market,
+)
+from app.odds.market_quality_engine import (
+    get_enabled_markets,
+)
 
 
 @dataclass
@@ -40,7 +45,24 @@ class PortfolioFilterContext:
     market_families: dict[str, Any]
 
 
-def _rejected(reason: str, flag: str) -> PortfolioFilterResult:
+STRICT_MIN_CONFIDENCE = 0.60
+STRICT_MIN_VALUE_SCORE = 0.03
+
+STRICT_MAX_ODDS = 4.20
+STRICT_MIN_ODDS = 1.30
+
+HARD_BLOCK_ROI = -0.30
+HARD_BLOCK_SURVIVABILITY = 8
+
+SAFE_SURVIVABILITY = 60
+
+MAX_ACCEPTABLE_RISK_SCORE = 42.0
+
+
+def _rejected(
+    reason: str,
+    flag: str,
+) -> PortfolioFilterResult:
     return PortfolioFilterResult(
         allowed=False,
         reason=reason,
@@ -50,113 +72,135 @@ def _rejected(reason: str, flag: str) -> PortfolioFilterResult:
     )
 
 
-def get_odds_band(odds: float | None) -> str:
+def get_odds_band(
+    odds: float | None,
+) -> str:
     if odds is None:
         return "UNKNOWN"
+
     if odds < 1.30:
         return "1.00-1.29"
+
     if odds < 1.50:
         return "1.30-1.49"
+
     if odds < 1.80:
         return "1.50-1.79"
+
     if odds < 2.20:
         return "1.80-2.19"
+
     if odds < 3.00:
         return "2.20-2.99"
+
     if odds < 5.00:
         return "3.00-4.99"
+
     return "5.00+"
 
 
-def get_confidence_band(confidence: float | None) -> str:
+def get_confidence_band(
+    confidence: float | None,
+) -> str:
     if confidence is None:
         return "UNKNOWN"
+
     if confidence < 0.60:
         return "0.00-0.59"
+
     if confidence < 0.70:
         return "0.60-0.69"
+
     if confidence < 0.80:
         return "0.70-0.79"
+
     if confidence < 0.90:
         return "0.80-0.89"
+
     return "0.90+"
 
 
-def resolve_risk_tier(risk_score: float) -> str:
-    if risk_score <= 18:
+def resolve_risk_tier(
+    risk_score: float,
+) -> str:
+
+    if risk_score <= 12:
         return "SAFE"
-    if risk_score <= 42:
+
+    if risk_score <= 28:
         return "MODERATE"
-    if risk_score <= 72:
+
+    if risk_score <= MAX_ACCEPTABLE_RISK_SCORE:
         return "AGGRESSIVE"
+
     return "REJECTED"
 
 
-def resolve_market_family(market: str) -> str:
-    market = market.lower()
+def resolve_market_family(
+    market: str,
+) -> str:
+    executable = parse_executable_market(
+        market
+    )
 
-    if (
-        "over" in market
-        or "under" in market
-        or "btts" in market
-        or "goal" in market
-        or "score" in market
-    ):
-        return "GOALS"
-
-    if "corner" in market:
-        return "CORNERS"
-
-    if "handicap" in market:
-        return "HANDICAP"
-
-    if (
-        "win" in market
-        or "draw" in market
-        or "chance" in market
-        or "ht_ft" in market
-    ):
-        return "RESULT"
-
-    return "OTHER"
+    return executable.family
 
 
-def build_portfolio_filter_context(session: Session) -> PortfolioFilterContext:
-    enabled_markets = set(get_enabled_markets(session))
+def build_portfolio_filter_context(
+    session: Session,
+) -> PortfolioFilterContext:
+
+    enabled_markets = set(
+        get_enabled_markets(session)
+    )
 
     leagues = {
         row.league: row
-        for row in session.query(LeagueIntelligenceSnapshot).all()
+        for row in session.query(
+            LeagueIntelligenceSnapshot
+        ).all()
     }
 
     markets = {
         row.market: row
-        for row in session.query(MarketIntelligenceSnapshot).all()
+        for row in session.query(
+            MarketIntelligenceSnapshot
+        ).all()
     }
 
     league_markets = {
         (row.league, row.market): row
-        for row in session.query(LeagueMarketIntelligenceSnapshot).all()
+        for row in session.query(
+            LeagueMarketIntelligenceSnapshot
+        ).all()
     }
 
     odds_bands = {
         (row.market, row.odds_band): row
-        for row in session.query(OddsBandIntelligenceSnapshot).all()
+        for row in session.query(
+            OddsBandIntelligenceSnapshot
+        ).all()
     }
 
     confidence_bands = {
         (row.market, row.confidence_band): row
-        for row in session.query(ConfidenceBandIntelligenceSnapshot).all()
+        for row in session.query(
+            ConfidenceBandIntelligenceSnapshot
+        ).all()
     }
 
     league_tiers = {
         row.league: row
-        for row in session.query(DynamicLeagueTier).all()
+        for row in session.query(
+            DynamicLeagueTier
+        ).all()
     }
 
     market_families = {
         row.family_name: row
-        for row in session.query(MarketFamilySnapshot).all()
+        for row in session.query(
+            MarketFamilySnapshot
+        ).all()
     }
 
     return PortfolioFilterContext(
@@ -182,284 +226,425 @@ def evaluate_pick_for_portfolio(
     value_score: float | None = None,
     strict: bool = True,
 ) -> PortfolioFilterResult:
+
     risk_flags: list[str] = []
+
     risk_score = 0.0
 
     selected_league = league or "UNKNOWN"
-    selected_odds_band = get_odds_band(odds)
-    selected_confidence_band = get_confidence_band(confidence)
-    selected_market_family = resolve_market_family(market)
 
-    if context is None and session is not None:
-        context = build_portfolio_filter_context(session)
+    selected_odds_band = get_odds_band(
+        odds
+    )
+
+    selected_confidence_band = (
+        get_confidence_band(
+            confidence
+        )
+    )
+
+    executable = parse_executable_market(
+        market
+    )
+
+    selected_market_family = (
+        executable.family
+    )
+
+    if (
+        context is None
+        and session is not None
+    ):
+        context = build_portfolio_filter_context(
+            session
+        )
+
+    # =====================================================
+    # MARKET ENABLED
+    # =====================================================
 
     if context is not None:
         if market not in context.enabled_markets:
             return _rejected(
-                "market disabled by odds quality engine",
-                "MARKET_QUALITY_DISABLED",
+                "market disabled by quality engine",
+                "MARKET_DISABLED",
             )
+
+    # =====================================================
+    # BASIC SAFETY
+    # =====================================================
 
     if odds is None:
-        return _rejected("missing odds", "NO_ODDS")
+        return _rejected(
+            "missing odds",
+            "NO_ODDS",
+        )
 
     if confidence is None:
-        return _rejected("missing confidence", "NO_CONFIDENCE")
+        return _rejected(
+            "missing confidence",
+            "NO_CONFIDENCE",
+        )
 
     if odds <= 1.01:
-        return _rejected("invalid odds", "INVALID_ODDS")
+        return _rejected(
+            "invalid odds",
+            "INVALID_ODDS",
+        )
 
-    if odds > 6.00:
-        return _rejected("extreme odds rejected", "EXTREME_ODDS_REJECTED")
+    if odds > STRICT_MAX_ODDS:
+        return _rejected(
+            "high variance odds rejected",
+            "EXTREME_ODDS",
+        )
 
-    if confidence < 0.50:
-        return _rejected("confidence below portfolio floor", "CONFIDENCE_TOO_LOW")
+    if odds < STRICT_MIN_ODDS:
+        return _rejected(
+            "odds too low",
+            "LOW_ODDS",
+        )
 
-    if confidence < 0.56:
-        risk_flags.append("LOW_CONFIDENCE")
-        risk_score += 22
-    elif confidence < 0.62:
-        risk_flags.append("MEDIUM_LOW_CONFIDENCE")
+    if confidence < STRICT_MIN_CONFIDENCE:
+        return _rejected(
+            "confidence below strict threshold",
+            "LOW_CONFIDENCE",
+        )
+
+    if (
+        value_score is not None
+        and value_score < STRICT_MIN_VALUE_SCORE
+    ):
+        return _rejected(
+            "value score below strict threshold",
+            "LOW_VALUE_SCORE",
+        )
+
+    # =====================================================
+    # EXECUTABLE SAFETY
+    # =====================================================
+
+    if executable.execution_risk == "HIGH":
+        return _rejected(
+            "high execution risk blocked",
+            "HIGH_EXECUTION_RISK",
+        )
+
+    if executable.volatility_tier == "EXTREME":
+        return _rejected(
+            "extreme volatility blocked",
+            "EXTREME_VOLATILITY",
+        )
+
+    if executable.family in {
+        "EXACT_SCORE",
+        "HT_FT",
+    }:
+        return _rejected(
+            "derivative family blocked",
+            "DERIVATIVE_BLOCKED",
+        )
+
+    # =====================================================
+    # CONFIDENCE QUALITY
+    # =====================================================
+
+    if confidence < 0.64:
+        risk_flags.append(
+            "MEDIUM_CONFIDENCE"
+        )
+
         risk_score += 12
-    elif confidence >= 0.90:
-        risk_flags.append("ELITE_CONFIDENCE")
+
+    elif confidence >= 0.82:
+        risk_flags.append(
+            "HIGH_CONFIDENCE"
+        )
+
         risk_score -= 8
-    elif confidence >= 0.80:
-        risk_flags.append("HIGH_CONFIDENCE")
-        risk_score -= 5
 
-    if odds > 4.50:
-        risk_flags.append("HIGH_ODDS_VARIANCE")
-        risk_score += 24
-    elif odds > 3.00:
-        risk_flags.append("MODERATE_ODDS_VARIANCE")
-        risk_score += 12
-    elif odds < 1.20:
-        risk_flags.append("VERY_LOW_ODDS")
+    elif confidence >= 0.90:
+        risk_flags.append(
+            "ELITE_CONFIDENCE"
+        )
+
+        risk_score -= 12
+
+    # =====================================================
+    # ODDS QUALITY
+    # =====================================================
+
+    if odds > 3.20:
+        risk_flags.append(
+            "HIGH_VARIANCE_ODDS"
+        )
+
+        risk_score += 16
+
+    elif odds > 2.50:
+        risk_flags.append(
+            "MODERATE_VARIANCE_ODDS"
+        )
+
         risk_score += 8
 
+    elif 1.35 <= odds <= 2.20:
+        risk_flags.append(
+            "GOOD_PRODUCTION_ODDS"
+        )
+
+        risk_score -= 5
+
+    # =====================================================
+    # VALUE SCORE
+    # =====================================================
+
     if value_score is not None:
-        if value_score < -0.25:
-            return _rejected(
-                "very negative value score",
-                "VERY_NEGATIVE_VALUE_SCORE",
+
+        if value_score >= 0.25:
+            risk_flags.append(
+                "ELITE_VALUE"
             )
-        if value_score < -0.10:
-            risk_flags.append("NEGATIVE_VALUE_SCORE")
-            risk_score += 18
-        elif value_score < 0:
-            risk_flags.append("SLIGHTLY_NEGATIVE_VALUE_SCORE")
-            risk_score += 7
-        elif value_score >= 0.25:
-            risk_flags.append("STRONG_VALUE_SCORE")
-            risk_score -= 12
+
+            risk_score -= 16
+
         elif value_score >= 0.15:
-            risk_flags.append("GOOD_VALUE_SCORE")
-            risk_score -= 7
-        elif value_score >= 0.05:
-            risk_flags.append("POSITIVE_VALUE_SCORE")
-            risk_score -= 3
+            risk_flags.append(
+                "GOOD_VALUE"
+            )
+
+            risk_score -= 10
+
+        elif value_score >= 0.08:
+            risk_flags.append(
+                "POSITIVE_VALUE"
+            )
+
+            risk_score -= 4
+
+    # =====================================================
+    # DB INTELLIGENCE
+    # =====================================================
 
     if context is not None:
-        league_row = context.leagues.get(selected_league)
+
+        # =================================================
+        # LEAGUE
+        # =================================================
+
+        league_row = context.leagues.get(
+            selected_league
+        )
 
         if league_row:
-            league_roi = float(league_row.recent_roi or 0.0)
-            league_survivability = float(league_row.survivability_score or 0.0)
 
-            if not league_row.prediction_allowed:
-                if league_roi <= -0.35 or league_survivability < 5:
-                    return _rejected(
-                        "league hard-blocked by DB intelligence",
-                        "DB_LEAGUE_HARD_BLOCKED",
-                    )
-                risk_flags.append("DB_LEAGUE_SOFT_BLOCK")
-                risk_score += 18
+            league_roi = float(
+                league_row.recent_roi or 0.0
+            )
 
-            if league_row.stale:
-                risk_flags.append("STALE_LEAGUE_INTELLIGENCE")
-                risk_score += 3
+            league_survivability = float(
+                league_row.survivability_score or 0.0
+            )
 
-            if league_roi < -0.20:
-                risk_flags.append("VERY_NEGATIVE_RECENT_LEAGUE_ROI")
-                risk_score += 18
-            elif league_roi < -0.10:
-                risk_flags.append("NEGATIVE_RECENT_LEAGUE_ROI")
-                risk_score += 10
+            if (
+                league_roi <= HARD_BLOCK_ROI
+                or league_survivability < HARD_BLOCK_SURVIVABILITY
+            ):
+                return _rejected(
+                    "league hard blocked",
+                    "LEAGUE_HARD_BLOCK",
+                )
 
-            if league_survivability < 10:
-                risk_flags.append("VERY_LOW_LEAGUE_SURVIVABILITY")
-                risk_score += 18
+            if (
+                league_survivability
+                >= SAFE_SURVIVABILITY
+            ):
+                risk_score -= 10
+
+                risk_flags.append(
+                    "SAFE_LEAGUE"
+                )
+
             elif league_survivability < 20:
-                risk_flags.append("LOW_LEAGUE_SURVIVABILITY")
-                risk_score += 8
-            elif league_survivability >= 60:
-                risk_flags.append("STRONG_LEAGUE_SURVIVABILITY")
-                risk_score -= 8
+                risk_score += 12
 
-            if league_row.safe_for_accumulators:
-                risk_flags.append("SAFE_ACCUMULATOR_LEAGUE")
-                risk_score -= 8
+                risk_flags.append(
+                    "WEAK_LEAGUE"
+                )
 
-        market_row = context.markets.get(market)
+        # =================================================
+        # MARKET
+        # =================================================
+
+        market_row = context.markets.get(
+            market
+        )
 
         if market_row:
-            market_roi = float(market_row.recent_roi or 0.0)
-            market_survivability = float(market_row.survivability_score or 0.0)
 
-            if not market_row.prediction_allowed:
-                if market_roi <= -0.35 or market_survivability < 5:
-                    return _rejected(
-                        "market hard-blocked by DB intelligence",
-                        "DB_MARKET_HARD_BLOCKED",
-                    )
-                risk_flags.append("DB_MARKET_SOFT_BLOCK")
-                risk_score += 18
+            market_roi = float(
+                market_row.recent_roi or 0.0
+            )
 
-            if market_row.stale:
-                risk_flags.append("STALE_MARKET_INTELLIGENCE")
-                risk_score += 3
+            market_survivability = float(
+                market_row.survivability_score or 0.0
+            )
 
-            if market_roi < -0.20:
-                risk_flags.append("VERY_NEGATIVE_RECENT_MARKET_ROI")
-                risk_score += 18
-            elif market_roi < -0.10:
-                risk_flags.append("NEGATIVE_RECENT_MARKET_ROI")
+            if (
+                market_roi <= HARD_BLOCK_ROI
+                or market_survivability < HARD_BLOCK_SURVIVABILITY
+            ):
+                return _rejected(
+                    "market hard blocked",
+                    "MARKET_HARD_BLOCK",
+                )
+
+            if (
+                market_survivability
+                >= SAFE_SURVIVABILITY
+            ):
+                risk_score -= 10
+
+                risk_flags.append(
+                    "SAFE_MARKET"
+                )
+
+            elif market_survivability < 20:
                 risk_score += 10
 
-            if market_survivability < 10:
-                risk_flags.append("VERY_LOW_MARKET_SURVIVABILITY")
-                risk_score += 18
-            elif market_survivability < 20:
-                risk_flags.append("LOW_MARKET_SURVIVABILITY")
-                risk_score += 8
-            elif market_survivability >= 60:
-                risk_flags.append("STRONG_MARKET_SURVIVABILITY")
-                risk_score -= 8
+                risk_flags.append(
+                    "WEAK_MARKET"
+                )
 
-        league_market_row = context.league_markets.get(
-            (selected_league, market)
+        # =================================================
+        # LEAGUE MARKET
+        # =================================================
+
+        league_market_row = (
+            context.league_markets.get(
+                (
+                    selected_league,
+                    market,
+                )
+            )
         )
 
         if league_market_row:
-            league_market_roi = float(league_market_row.recent_roi or 0.0)
-            league_market_survivability = float(
-                league_market_row.survivability_score or 0.0
+
+            league_market_roi = float(
+                league_market_row.recent_roi
+                or 0.0
             )
 
-            if not league_market_row.prediction_allowed:
-                if league_market_roi <= -0.35 or league_market_survivability < 5:
-                    return _rejected(
-                        "league-market hard-blocked by DB intelligence",
-                        "DB_LEAGUE_MARKET_HARD_BLOCKED",
-                    )
-                risk_flags.append("DB_LEAGUE_MARKET_SOFT_BLOCK")
-                risk_score += 20
+            league_market_survivability = float(
+                league_market_row.survivability_score
+                or 0.0
+            )
 
-            if league_market_row.stale:
-                risk_flags.append("STALE_LEAGUE_MARKET")
-                risk_score += 3
+            if (
+                league_market_roi
+                <= HARD_BLOCK_ROI
+                or league_market_survivability
+                < HARD_BLOCK_SURVIVABILITY
+            ):
+                return _rejected(
+                    "league-market hard blocked",
+                    "LEAGUE_MARKET_HARD_BLOCK",
+                )
 
-            if league_market_roi < -0.20:
-                risk_flags.append("VERY_NEGATIVE_LEAGUE_MARKET_ROI")
-                risk_score += 20
-            elif league_market_roi < -0.10:
-                risk_flags.append("NEGATIVE_LEAGUE_MARKET_ROI")
+            if (
+                league_market_survivability
+                >= SAFE_SURVIVABILITY
+            ):
+                risk_score -= 12
+
+                risk_flags.append(
+                    "SAFE_LEAGUE_MARKET"
+                )
+
+            elif league_market_survivability < 20:
                 risk_score += 12
 
-            if league_market_survivability < 10:
-                risk_flags.append("VERY_LOW_LEAGUE_MARKET_SURVIVABILITY")
-                risk_score += 18
-            elif league_market_survivability < 20:
-                risk_flags.append("LOW_LEAGUE_MARKET_SURVIVABILITY")
-                risk_score += 8
-            elif league_market_survivability >= 60:
-                risk_flags.append("STRONG_LEAGUE_MARKET_SURVIVABILITY")
-                risk_score -= 8
+                risk_flags.append(
+                    "WEAK_LEAGUE_MARKET"
+                )
 
-        odds_row = context.odds_bands.get(
-            (market, selected_odds_band)
+        # =================================================
+        # LEAGUE TIER
+        # =================================================
+
+        tier_row = context.league_tiers.get(
+            selected_league
         )
-
-        if odds_row:
-            odds_roi = float(odds_row.roi or 0.0)
-
-            if not odds_row.prediction_allowed:
-                if odds_roi <= -0.35:
-                    return _rejected(
-                        "odds band hard-blocked by DB intelligence",
-                        "DB_ODDS_BAND_HARD_BLOCKED",
-                    )
-                risk_flags.append("DB_ODDS_BAND_SOFT_BLOCK")
-                risk_score += 18
-
-            if odds_roi < -0.20:
-                risk_flags.append("VERY_NEGATIVE_ODDS_BAND_ROI")
-                risk_score += 15
-            elif odds_roi < -0.10:
-                risk_flags.append("NEGATIVE_ODDS_BAND_ROI")
-                risk_score += 8
-
-        confidence_row = context.confidence_bands.get(
-            (market, selected_confidence_band)
-        )
-
-        if confidence_row:
-            confidence_roi = float(confidence_row.roi or 0.0)
-
-            if not confidence_row.prediction_allowed:
-                if confidence_roi <= -0.35:
-                    return _rejected(
-                        "confidence band hard-blocked by DB intelligence",
-                        "DB_CONFIDENCE_BAND_HARD_BLOCKED",
-                    )
-                risk_flags.append("DB_CONFIDENCE_BAND_SOFT_BLOCK")
-                risk_score += 16
-
-            if confidence_roi < -0.20:
-                risk_flags.append("VERY_NEGATIVE_CONFIDENCE_BAND_ROI")
-                risk_score += 15
-            elif confidence_roi < -0.10:
-                risk_flags.append("NEGATIVE_CONFIDENCE_BAND_ROI")
-                risk_score += 8
-
-        tier_row = context.league_tiers.get(selected_league)
 
         if tier_row:
-            if tier_row.tier == "VERY_STRONG":
-                risk_flags.append("VERY_STRONG_LEAGUE")
-                risk_score -= 10
-            elif tier_row.tier == "STRONG":
-                risk_flags.append("STRONG_LEAGUE")
-                risk_score -= 4
-            elif tier_row.tier == "WEAK":
-                risk_flags.append("WEAK_LEAGUE")
-                risk_score += 8
 
-        family_row = context.market_families.get(selected_market_family)
+            if tier_row.tier == "VERY_STRONG":
+                risk_score -= 12
+
+            elif tier_row.tier == "STRONG":
+                risk_score -= 5
+
+            elif tier_row.tier == "WEAK":
+                risk_score += 10
+
+        # =================================================
+        # FAMILY
+        # =================================================
+
+        family_row = (
+            context.market_families.get(
+                selected_market_family
+            )
+        )
 
         if family_row:
-            family_roi = float(family_row.roi or 0.0)
-            family_survivability = float(family_row.survivability_score or 0.0)
 
-            if family_roi < -0.15:
-                risk_flags.append("NEGATIVE_MARKET_FAMILY")
-                risk_score += 10
-            elif family_roi > 0.10:
-                risk_flags.append("PROFITABLE_MARKET_FAMILY")
-                risk_score -= 6
+            family_roi = float(
+                family_row.roi or 0.0
+            )
 
-            if family_survivability >= 60:
-                risk_flags.append("STRONG_MARKET_FAMILY")
-                risk_score -= 6
+            family_survivability = float(
+                family_row.survivability_score
+                or 0.0
+            )
 
-    risk_score = round(max(risk_score, 0.0), 2)
-    tier = resolve_risk_tier(risk_score)
+            if family_roi > 0.10:
+                risk_score -= 8
+
+            elif family_roi < -0.10:
+                risk_score += 8
+
+            if (
+                family_survivability
+                >= SAFE_SURVIVABILITY
+            ):
+                risk_score -= 8
+
+    # =====================================================
+    # FINAL
+    # =====================================================
+
+    risk_score = round(
+        max(risk_score, 0.0),
+        2,
+    )
+
+    tier = resolve_risk_tier(
+        risk_score
+    )
+
+    if strict and tier == "AGGRESSIVE":
+        return _rejected(
+            "aggressive pick rejected in strict mode",
+            "AGGRESSIVE_REJECTED",
+        )
 
     return PortfolioFilterResult(
         allowed=tier != "REJECTED",
         reason=f"{tier.lower()} portfolio tier",
-        risk_flags=sorted(set(risk_flags)),
+        risk_flags=sorted(
+            set(risk_flags)
+        ),
         risk_score=risk_score,
         tier=tier,
     )

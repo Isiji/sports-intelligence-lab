@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from math import prod
 from statistics import mean
 from typing import Any
@@ -33,6 +34,7 @@ from app.intelligence.stake_engine import (
     calculate_group_stake,
     resolve_group_tier,
 )
+from app.odds.executable_market_registry import parse_executable_market
 from app.odds.market_quality_engine import get_enabled_markets
 from app.services.league_production_filter_service import (
     filter_candidate_dicts_by_league_quality,
@@ -41,27 +43,33 @@ from app.services.production_pick_scoring_service import score_pick_list
 
 
 GROUPING_DEBUG = False
+GROUPING_DIAGNOSTICS = True
 
-MAX_RAW_CANDIDATES = 900
-MAX_ENRICHMENT_CANDIDATES = 450
-MAX_UNIQUE_MATCH_CANDIDATES = 220
-MAX_APPROVED_CANDIDATES = 150
+MAX_RAW_CANDIDATES = 500
+MAX_ENRICHMENT_CANDIDATES = 250
+MAX_UNIQUE_MATCH_CANDIDATES = 120
+MAX_APPROVED_CANDIDATES = 60
 
 MIN_GAMES_PER_GROUP = 2
 MAX_GAMES_PER_GROUP = 3
-MAX_GROUPS = 6
+MAX_GROUPS = 4
 
 PRODUCTION_MIN_GROUP_ODDS = 2.0
-PRODUCTION_MAX_GROUP_ODDS = 80.0
+PRODUCTION_MAX_GROUP_ODDS = 35.0
 
 DEFAULT_GROUPING_BANKROLL = 10_000.0
 DEFAULT_FLAT_STAKE = 100.0
 
+STRICT_GROUPING_MIN_CONFIDENCE = 0.60
+STRICT_GROUPING_MIN_VALUE_SCORE = 0.03
+STRICT_MIN_PRODUCTION_SCORE = 66.0
+STRICT_MAX_PORTFOLIO_RISK = 28.0
+
 AUTO_PROFILE_LADDERS = {
     "AUTO_SAFE": [
         "SAFE_B_CURRENT_BEST",
-        "SAFE_D_MORE_ROOM",
         "SAFE_C_HIGHER_CONF",
+        "SAFE_D_MORE_ROOM",
         "BALANCED_REFERENCE",
     ],
 }
@@ -75,24 +83,24 @@ class PortfolioGroupConfig:
 
     league_odds_filter_mode: str = "strict"
 
-    min_confidence: float = 0.55
-    min_value_score: float = 0.00
+    min_confidence: float = STRICT_GROUPING_MIN_CONFIDENCE
+    min_value_score: float = STRICT_GROUPING_MIN_VALUE_SCORE
 
     min_odds: float = 1.30
-    max_odds: float = 4.50
+    max_odds: float = 4.20
 
     min_group_odds: float = PRODUCTION_MIN_GROUP_ODDS
     max_group_odds: float = PRODUCTION_MAX_GROUP_ODDS
 
-    min_market_roi: float = -0.20
-    min_league_roi: float = -0.25
-    min_band_roi: float = -0.25
+    min_market_roi: float = -0.05
+    min_league_roi: float = -0.08
+    min_band_roi: float = -0.08
 
-    max_same_family_per_group: int = 2
+    max_same_family_per_group: int = 1
     min_sample_size: int = 10
 
     max_same_market_per_group: int = 1
-    max_same_league_per_group: int = 2
+    max_same_league_per_group: int = 1
 
     use_intelligence_filters: bool = True
 
@@ -105,17 +113,43 @@ def _debug(*args: Any) -> None:
         print(*args)
 
 
+def _diag(stage: str, value: Any) -> None:
+    if GROUPING_DIAGNOSTICS:
+        print(f"[GROUPING:{stage}] {value}")
+
+
+def _format_kickoff_time(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+
+    return str(value)
+
+
+def _candidate_kickoff_time(candidate: dict[str, Any]) -> str | None:
+    return _format_kickoff_time(
+        candidate.get("kickoff_time")
+        or candidate.get("kickoff_datetime")
+        or candidate.get("kickoff_date")
+    )
+
+
 def group_predictions(
     session: Session,
     slate: str,
-    min_confidence: float = 0.55,
+    min_confidence: float = STRICT_GROUPING_MIN_CONFIDENCE,
     min_group_odds: float = PRODUCTION_MIN_GROUP_ODDS,
     require_odds: bool = True,
     use_intelligence_filters: bool = True,
     profile: str | None = None,
     league_odds_filter_mode: str = "strict",
     bankroll: float = DEFAULT_GROUPING_BANKROLL,
-) -> dict[str, dict[str, float | str]]:
+) -> dict[str, Any]:
     profile_config = None
 
     if profile in AUTO_PROFILE_LADDERS:
@@ -145,7 +179,7 @@ def group_predictions(
             "message": {
                 "status": "no_auto_profile_qualified_groups",
                 "profile": profile,
-                "reason": "No approved profile produced a valid production-safe group.",
+                "reason": "No approved profile produced a strict profitable group.",
             }
         }
 
@@ -158,7 +192,7 @@ def group_predictions(
         min_confidence = float(profile_config["min_confidence"])
 
     config = PortfolioGroupConfig(
-        min_confidence=max(float(min_confidence), 0.55),
+        min_confidence=max(float(min_confidence), STRICT_GROUPING_MIN_CONFIDENCE),
         min_group_odds=max(float(min_group_odds), PRODUCTION_MIN_GROUP_ODDS),
         max_group_odds=PRODUCTION_MAX_GROUP_ODDS,
         min_sample_size=10,
@@ -166,9 +200,9 @@ def group_predictions(
         league_odds_filter_mode=league_odds_filter_mode,
         bankroll=float(bankroll),
         max_odds=(
-            min(float(profile_config["max_odds"]), 4.50)
+            min(float(profile_config["max_odds"]), 4.20)
             if profile_config
-            else 4.50
+            else 4.20
         ),
     )
 
@@ -196,14 +230,14 @@ def group_predictions(
             "message": {
                 "status": "no_profile_qualified_groups",
                 "profile": profile,
-                "reason": "No picks passed production-safe portfolio filters.",
+                "reason": "No picks passed strict profitability filters.",
             }
         }
 
     return _fallback_confidence_groups(
         session=session,
         slate=slate,
-        min_confidence=min_confidence,
+        min_confidence=config.min_confidence,
         min_group_odds=config.min_group_odds,
         max_group_odds=config.max_group_odds,
         require_odds=require_odds,
@@ -232,6 +266,7 @@ def _build_profitability_aware_groups(
     enabled_markets = portfolio_context.enabled_markets
 
     if not market_intel:
+        _diag("market_intel", "missing_market_intelligence")
         return []
 
     predictions = _load_live_prediction_candidates(
@@ -243,14 +278,33 @@ def _build_profitability_aware_groups(
         max_candidates=MAX_RAW_CANDIDATES,
     )
 
+    _diag("raw_predictions", len(predictions))
+
     predictions = _prefer_best_odds_candidates(predictions)
+
+    _diag("best_odds_candidates", len(predictions))
+
     predictions = predictions[:MAX_ENRICHMENT_CANDIDATES]
 
-    predictions, _league_rejections = filter_candidate_dicts_by_league_quality(
+    _diag("enrichment_candidates", len(predictions))
+
+    predictions, league_rejections = filter_candidate_dicts_by_league_quality(
         session=session,
         candidates=predictions,
         mode=config.league_odds_filter_mode,
     )
+
+    _diag("league_approved", len(predictions))
+    _diag("league_rejected", len(league_rejections))
+
+    if league_rejections:
+        rejection_summary: dict[str, int] = {}
+
+        for item in league_rejections:
+            reason = str(item.get("reason") or "unknown")
+            rejection_summary[reason] = rejection_summary.get(reason, 0) + 1
+
+        _diag("league_rejection_breakdown", rejection_summary)
 
     best_by_match: dict[int, dict[str, Any]] = {}
 
@@ -276,22 +330,30 @@ def _build_profitability_aware_groups(
         if current_best is None or _best_grouping_pick_score(enriched) > _best_grouping_pick_score(current_best):
             best_by_match[match_id] = enriched
 
+    _diag("best_by_match", len(best_by_match))
+
     enriched_candidates = sorted(
         best_by_match.values(),
         key=lambda item: (
-            item.get("portfolio_tier") == "AGGRESSIVE",
+            item.get("portfolio_tier") != "SAFE",
+            float(item.get("portfolio_risk_score") or 999.0),
             -float(item["selection_score"]),
             -float(item.get("odds_match_quality_score") or 0.0),
-            float(item.get("portfolio_risk_score") or 0.0),
             -float(item["confidence"]),
+            -float(item.get("value_score") or 0.0),
             item["prediction_id"],
         ),
     )[:MAX_UNIQUE_MATCH_CANDIDATES]
 
+    _diag("enriched_candidates", len(enriched_candidates))
+
     if len(enriched_candidates) < config.min_group_size:
+        _diag("failed_stage", "not_enough_enriched_candidates")
         return []
 
     scored_candidates = score_pick_list(enriched_candidates)
+
+    _diag("scored_candidates", len(scored_candidates))
 
     exposure_result = apply_exposure_controls(
         picks=scored_candidates,
@@ -304,20 +366,81 @@ def _build_profitability_aware_groups(
         exposure_result=exposure_result,
     )
 
-    approved_candidates = [
-        pick
-        for pick in recommendation_layer["approved_picks"]
-        if pick.get("risk_level") != "AVOID"
-        and float(pick.get("production_score") or 0.0) >= 70.0
-    ][:MAX_APPROVED_CANDIDATES]
+    approved_source = recommendation_layer.get("approved_picks", [])
+
+    _diag("recommendation_approved_source", len(approved_source))
+
+    approved_candidates: list[dict[str, Any]] = []
+    rejection_counts: dict[str, int] = {}
+
+    for pick in approved_source:
+        reason = None
+
+        market = str(pick.get("market") or "")
+        missing_market_intel = market not in market_intel
+
+        if pick.get("risk_level") == "AVOID":
+            reason = "risk_level_avoid"
+
+        elif pick.get("portfolio_tier") not in {"SAFE", "MODERATE"}:
+            reason = "portfolio_tier"
+
+        elif float(pick.get("portfolio_risk_score") or 999.0) > STRICT_MAX_PORTFOLIO_RISK:
+            reason = "risk_score"
+
+        elif float(pick.get("confidence") or 0.0) < config.min_confidence:
+            reason = "confidence"
+
+        elif float(pick.get("value_score") or 0.0) < config.min_value_score:
+            reason = "value_score"
+
+        elif pick.get("odds_match_quality") != "exact_executable_market":
+            reason = "odds_quality"
+
+        elif (
+            not missing_market_intel
+            and float(pick.get("production_score") or 0.0) < STRICT_MIN_PRODUCTION_SCORE
+        ):
+            reason = "production_score"
+
+        elif (
+            missing_market_intel
+            and float(pick.get("confidence") or 0.0) < 0.64
+        ):
+            reason = "missing_market_intel_confidence"
+
+        elif (
+            missing_market_intel
+            and float(pick.get("value_score") or 0.0) < 0.06
+        ):
+            reason = "missing_market_intel_value"
+
+        if reason:
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+            continue
+
+        approved_candidates.append(pick)
+
+    approved_candidates = approved_candidates[:MAX_APPROVED_CANDIDATES]
+
+    _diag("approved_candidates", len(approved_candidates))
+    _diag("approved_rejection_breakdown", rejection_counts)
 
     if len(approved_candidates) < config.min_group_size:
+        _diag("failed_stage", "not_enough_approved_candidates")
         return []
 
-    return _construct_diversified_groups(
+    groups = _construct_diversified_groups(
         candidates=approved_candidates,
         config=config,
     )
+
+    _diag("groups_constructed", len(groups))
+
+    if not groups:
+        _diag("failed_stage", "construct_diversified_groups")
+
+    return groups
 
 
 def _load_live_prediction_candidates(
@@ -351,32 +474,23 @@ def _load_live_prediction_candidates(
             p.odds_retrieved_at,
             p.odds_match_quality,
             p.model_name,
+            p.sport,
             m.league,
             m.home_team,
             m.away_team,
-            m.kickoff_date
+            m.kickoff_date,
+            m.kickoff_datetime
         FROM predictions p
         JOIN matches m ON m.id = p.match_id
         WHERE p.slate = :slate
           AND p.confidence >= :min_confidence
           AND p.market = ANY(:enabled_markets)
+          AND p.value_score IS NOT NULL
+          AND p.value_score >= :min_value_score
+          AND p.odds_match_quality = 'exact_executable_market'
+          AND p.odds_bookmaker IS NOT NULL
           {odds_filter}
         ORDER BY
-            CASE
-                WHEN p.odds_match_quality = 'exact_executable_market' THEN 10
-                WHEN p.odds_match_quality = 'exact_canonical' THEN 5
-                WHEN p.odds_match_quality = 'exact_market_fallback' THEN 4
-                WHEN p.odds_match_quality IN (
-                    'goal_total',
-                    'team_total',
-                    'corners',
-                    'shots_on_target',
-                    'first_half',
-                    'asian_handicap'
-                ) THEN 3
-                WHEN p.odds_match_quality = 'direct' THEN 2
-                ELSE 1
-            END DESC,
             p.value_score DESC NULLS LAST,
             p.confidence DESC,
             p.odds ASC NULLS LAST,
@@ -390,12 +504,18 @@ def _load_live_prediction_candidates(
         {
             "slate": slate,
             "min_confidence": float(min_confidence),
+            "min_value_score": STRICT_GROUPING_MIN_VALUE_SCORE,
             "enabled_markets": list(enabled_markets),
             "max_candidates": int(max_candidates),
         },
     ).fetchall()
 
-    return [dict(row._mapping) for row in rows]
+    candidates = [dict(row._mapping) for row in rows]
+
+    for candidate in candidates:
+        candidate["kickoff_time"] = _candidate_kickoff_time(candidate)
+
+    return candidates
 
 
 def _prefer_best_odds_candidates(
@@ -434,39 +554,33 @@ def _best_odds_quality_score(prediction: dict[str, Any]) -> float:
     confidence = float(prediction.get("confidence") or 0.0)
 
     quality_points = {
-        "exact_executable_market": 115.0,
-        "exact_canonical": 100.0,
-        "exact_market_fallback": 85.0,
-        "goal_total": 72.0,
-        "team_total": 72.0,
-        "corners": 70.0,
-        "shots_on_target": 70.0,
-        "first_half": 68.0,
-        "asian_handicap": 68.0,
-        "direct": 55.0,
-    }.get(str(quality), 20.0)
+        "exact_executable_market": 130.0,
+        "exact_canonical": 90.0,
+        "exact_market_fallback": 75.0,
+        "direct": 50.0,
+    }.get(str(quality), 10.0)
 
     odds_points = 0.0
 
     if odds is not None:
         selected_odds = float(odds)
 
-        if 1.30 <= selected_odds <= 2.50:
-            odds_points += 12.0
-        elif 2.50 < selected_odds <= 3.50:
-            odds_points += 6.0
-        elif selected_odds > 4.50:
-            odds_points -= 18.0
+        if 1.35 <= selected_odds <= 2.20:
+            odds_points += 16.0
+        elif 2.20 < selected_odds <= 3.00:
+            odds_points += 8.0
+        elif selected_odds > 4.20:
+            odds_points -= 35.0
         elif selected_odds < 1.30:
-            odds_points -= 30.0
+            odds_points -= 40.0
 
-    bookmaker_points = 8.0 if prediction.get("odds_bookmaker") else 0.0
+    bookmaker_points = 10.0 if prediction.get("odds_bookmaker") else -25.0
 
     return round(
         quality_points
         + bookmaker_points
-        + min(value_score * 80.0, 20.0)
-        + min(confidence * 10.0, 10.0)
+        + min(value_score * 120.0, 28.0)
+        + min(confidence * 12.0, 12.0)
         + odds_points,
         4,
     )
@@ -475,8 +589,8 @@ def _best_odds_quality_score(prediction: dict[str, Any]) -> float:
 def _best_grouping_pick_score(prediction: dict[str, Any]) -> float:
     return round(
         float(prediction.get("selection_score") or 0.0)
-        + (_best_odds_quality_score(prediction) / 1000.0)
-        - (float(prediction.get("portfolio_risk_score") or 0.0) / 1000.0),
+        + (_best_odds_quality_score(prediction) / 800.0)
+        - (float(prediction.get("portfolio_risk_score") or 0.0) / 600.0),
         6,
     )
 
@@ -495,6 +609,11 @@ def _enrich_candidate(
     market = prediction["market"]
     league = prediction.get("league") or "unknown"
 
+    executable = parse_executable_market(market)
+
+    if executable.execution_risk == "HIGH" or executable.volatility_tier == "EXTREME":
+        return None
+
     if market not in enabled_markets:
         return None
 
@@ -507,14 +626,29 @@ def _enrich_candidate(
 
     odds = float(odds)
 
+    if confidence < config.min_confidence:
+        return None
+
     if value_score < config.min_value_score:
         return None
 
     if odds < config.min_odds or odds > config.max_odds:
         return None
 
-    if market not in market_intel:
+    if prediction.get("odds_match_quality") != "exact_executable_market":
         return None
+
+    if not prediction.get("odds_bookmaker"):
+        return None
+
+    missing_market_intel = market not in market_intel
+
+    if missing_market_intel:
+        if confidence < 0.64:
+            return None
+
+        if value_score < 0.06:
+            return None
 
     if config.use_intelligence_filters:
         filter_result = evaluate_pick_for_portfolio(
@@ -543,7 +677,21 @@ def _enrich_candidate(
         prediction["portfolio_risk_score"] = 0.0
         prediction["portfolio_tier"] = "UNFILTERED"
 
-    market_data = market_intel[market]
+    if prediction["portfolio_tier"] not in {"SAFE", "MODERATE"}:
+        return None
+
+    if float(prediction["portfolio_risk_score"]) > STRICT_MAX_PORTFOLIO_RISK:
+        return None
+
+    market_data = market_intel.get(
+        market,
+        {
+            "roi": 0.0,
+            "hit_rate": 0.0,
+            "sample_size": 0,
+        },
+    )
+
     league_data = league_market_intel.get((league, market))
     odds_data = odds_band_intel.get((market, odds_band(odds)))
     confidence_data = confidence_band_intel.get((market, confidence_band(confidence)))
@@ -564,7 +712,7 @@ def _enrich_candidate(
     confidence_band_hit_rate = float(confidence_data.get("hit_rate") or 0.0) if confidence_data else 0.0
     confidence_band_sample_size = int(confidence_data.get("sample_size") or 0) if confidence_data else 0
 
-    if market_roi < config.min_market_roi:
+    if not missing_market_intel and market_roi < config.min_market_roi:
         return None
 
     if league_sample_size >= config.min_sample_size and league_roi < config.min_league_roi:
@@ -582,33 +730,30 @@ def _enrich_candidate(
         odds_band_sample_size=odds_band_sample_size,
         confidence_band_sample_size=confidence_band_sample_size,
         min_sample_size=config.min_sample_size,
+        missing_market_intel=missing_market_intel,
     )
 
     odds_quality = _odds_quality_component(odds)
-
-    risk_penalty = max(
-        float(prediction.get("portfolio_risk_score") or 0.0),
-        0.0,
-    ) / 140.0
-
-    bookmaker = prediction.get("odds_bookmaker")
-    odds_match_quality = prediction.get("odds_match_quality") or "none"
+    risk_penalty = max(float(prediction.get("portfolio_risk_score") or 0.0), 0.0) / 110.0
     odds_match_quality_score = _best_odds_quality_score(prediction)
     bookmaker_execution_score = odds_match_quality_score / 100.0
 
     selection_score = (
-        confidence * 0.26
-        + value_score * 0.28
-        + market_roi * 0.14
+        confidence * 0.30
+        + value_score * 0.32
+        + market_roi * 0.12
         + league_roi * 0.10
-        + odds_band_roi * 0.08
-        + confidence_band_roi * 0.08
+        + odds_band_roi * 0.06
+        + confidence_band_roi * 0.06
         + odds_quality * 0.08
         + bookmaker_execution_score * 0.10
         - sample_penalty
         - risk_penalty
     )
 
+    prediction["kickoff_time"] = _candidate_kickoff_time(prediction)
+    prediction["market_family"] = executable.family
+    prediction["missing_market_intel"] = missing_market_intel
     prediction["market_roi"] = market_roi
     prediction["market_hit_rate"] = market_hit_rate
     prediction["market_sample_size"] = market_sample_size
@@ -625,8 +770,6 @@ def _enrich_candidate(
     prediction["confidence_band_sample_size"] = confidence_band_sample_size
     prediction["bookmaker_execution_score"] = bookmaker_execution_score
     prediction["odds_match_quality_score"] = odds_match_quality_score
-    prediction["odds_bookmaker"] = bookmaker
-    prediction["odds_match_quality"] = odds_match_quality
     prediction["selection_score"] = selection_score
 
     return prediction
@@ -634,16 +777,16 @@ def _enrich_candidate(
 
 def _odds_quality_component(odds: float) -> float:
     if odds < 1.30:
-        return -0.40
+        return -0.50
     if odds <= 1.80:
-        return 0.25
+        return 0.35
     if odds <= 2.50:
         return 0.50
-    if odds <= 3.50:
-        return 0.30
-    if odds <= 4.50:
-        return 0.05
-    return -0.50
+    if odds <= 3.20:
+        return 0.25
+    if odds <= 4.20:
+        return -0.05
+    return -0.60
 
 
 def _sample_penalty(
@@ -652,19 +795,25 @@ def _sample_penalty(
     odds_band_sample_size: int,
     confidence_band_sample_size: int,
     min_sample_size: int,
+    missing_market_intel: bool = False,
 ) -> float:
     penalty = 0.0
 
-    if market_sample_size < min_sample_size * 2:
-        penalty += 0.02
-    if league_sample_size == 0:
+    if missing_market_intel:
+        penalty += 0.035
+    elif market_sample_size < min_sample_size * 2:
         penalty += 0.03
+
+    if league_sample_size == 0:
+        penalty += 0.04
     elif league_sample_size < min_sample_size:
-        penalty += 0.02
+        penalty += 0.03
+
     if odds_band_sample_size == 0:
-        penalty += 0.02
+        penalty += 0.03
+
     if confidence_band_sample_size == 0:
-        penalty += 0.02
+        penalty += 0.03
 
     return penalty
 
@@ -675,6 +824,16 @@ def _construct_diversified_groups(
 ) -> list[list[dict[str, Any]]]:
     groups: list[list[dict[str, Any]]] = []
     used_match_ids: set[int] = set()
+
+    candidates = sorted(
+        candidates,
+        key=lambda item: (
+            float(item.get("portfolio_risk_score") or 999.0),
+            -float(item.get("selection_score") or 0.0),
+            -float(item.get("confidence") or 0.0),
+            -float(item.get("value_score") or 0.0),
+        ),
+    )
 
     for _ in range(config.max_groups):
         group: list[dict[str, Any]] = []
@@ -732,7 +891,6 @@ def _group_odds_within_limits(
         return False
 
     cumulative = float(prod(odds_values))
-
     return min_group_odds <= cumulative <= max_group_odds
 
 
@@ -746,14 +904,11 @@ def _candidate_fits_group(
     market_family = candidate.get("market_family") or _resolve_group_market_family(market)
 
     same_market_count = sum(1 for item in group if item["market"] == market)
-    same_league_count = sum(
-        1 for item in group if (item.get("league") or "unknown") == league
-    )
+    same_league_count = sum(1 for item in group if (item.get("league") or "unknown") == league)
     same_family_count = sum(
         1
         for item in group
-        if (item.get("market_family") or _resolve_group_market_family(item["market"]))
-        == market_family
+        if (item.get("market_family") or _resolve_group_market_family(item["market"])) == market_family
     )
 
     if same_market_count >= config.max_same_market_per_group:
@@ -783,33 +938,11 @@ def _candidate_fits_group(
         return False
 
     candidate["market_family"] = market_family
-
     return True
 
 
 def _resolve_group_market_family(market: str) -> str:
-    if (
-        "over" in market
-        or "under" in market
-        or "btts" in market
-        or "goal" in market
-        or "score" in market
-    ):
-        return "GOALS"
-
-    if "handicap" in market:
-        return "HANDICAP"
-
-    if "win" in market or "draw" in market or "chance" in market or "ht_ft" in market:
-        return "RESULT"
-
-    if "corner" in market:
-        return "CORNERS"
-
-    if "shot" in market:
-        return "SHOTS"
-
-    return "OTHER"
+    return parse_executable_market(market).family
 
 
 def _save_groups(
@@ -839,35 +972,16 @@ def _save_groups(
 def _summarize_portfolio_groups(
     groups: list[list[dict[str, Any]]],
     config: PortfolioGroupConfig,
-) -> dict[str, dict[str, float | str]]:
-    summaries: dict[str, dict[str, float | str]] = {}
-
+) -> dict[str, Any]:
+    summaries: dict[str, Any] = {}
     daily_exposure_used = 0.0
 
     for group_index, group in enumerate(groups, start=1):
         group_name = f"Portfolio Group {group_index}"
 
-        odds_values = [
-            float(item["odds"])
-            for item in group
-            if item.get("odds") is not None
-        ]
-
-        confidence_values = [
-            float(item["confidence"] or 0.0)
-            for item in group
-        ]
-
-        risk_scores = [
-            float(item.get("portfolio_risk_score") or 0.0)
-            for item in group
-        ]
-
-        rejected_picks = sum(
-            1
-            for item in group
-            if item.get("risk_level") == "AVOID"
-        )
+        odds_values = [float(item["odds"]) for item in group if item.get("odds") is not None]
+        confidence_values = [float(item["confidence"] or 0.0) for item in group]
+        risk_scores = [float(item.get("portfolio_risk_score") or 0.0) for item in group]
 
         average_risk_score = mean(risk_scores) if risk_scores else 0.0
         max_risk_score = max(risk_scores) if risk_scores else 0.0
@@ -875,14 +989,10 @@ def _summarize_portfolio_groups(
         group_tier = resolve_group_tier(
             average_risk_score=average_risk_score,
             max_risk_score=max_risk_score,
-            rejected_picks=rejected_picks,
+            rejected_picks=0,
         )
 
-        cumulative_odds = (
-            float(prod(odds_values))
-            if len(odds_values) == len(group)
-            else 0.0
-        )
+        cumulative_odds = float(prod(odds_values)) if len(odds_values) == len(group) else 0.0
 
         if cumulative_odds > config.max_group_odds:
             group_tier = "REJECTED"
@@ -898,8 +1008,27 @@ def _summarize_portfolio_groups(
 
         daily_exposure_used += stake_decision.stake
 
+        group_matches = [
+            {
+                "match_id": item.get("match_id"),
+                "league": item.get("league"),
+                "home_team": item.get("home_team"),
+                "away_team": item.get("away_team"),
+                "kickoff_time": _candidate_kickoff_time(item),
+                "market": item.get("market"),
+                "predicted_label": item.get("predicted_label"),
+                "odds": item.get("odds"),
+                "confidence": item.get("confidence"),
+                "value_score": item.get("value_score"),
+                "bookmaker": item.get("odds_bookmaker"),
+                "odds_match_quality": item.get("odds_match_quality"),
+                "missing_market_intel": item.get("missing_market_intel"),
+            }
+            for item in group
+        ]
+
         summaries[group_name] = {
-            "group_type": "PROFITABILITY_PORTFOLIO",
+            "group_type": "STRICT_BEST_PICKS_PORTFOLIO",
             "group_tier": group_tier,
             "games": float(len(group)),
             "average_confidence": round(mean(confidence_values), 4),
@@ -932,6 +1061,7 @@ def _summarize_portfolio_groups(
             "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
             "applied_fraction": stake_decision.applied_fraction,
             "estimated_group_probability": stake_decision.estimated_probability,
+            "group_matches": group_matches,
             "expected_value": stake_decision.expected_value,
         }
 
@@ -941,24 +1071,26 @@ def _summarize_portfolio_groups(
 def _fallback_confidence_groups(
     session: Session,
     slate: str,
-    min_confidence: float = 0.65,
+    min_confidence: float = STRICT_GROUPING_MIN_CONFIDENCE,
     min_group_odds: float = PRODUCTION_MIN_GROUP_ODDS,
     max_group_odds: float = PRODUCTION_MAX_GROUP_ODDS,
     require_odds: bool = True,
     league_odds_filter_mode: str = "strict",
     bankroll: float = DEFAULT_GROUPING_BANKROLL,
     flat_stake: float = DEFAULT_FLAT_STAKE,
-) -> dict[str, dict[str, float | str]]:
+) -> dict[str, Any]:
     enabled_markets = set(get_enabled_markets(session))
 
     query = (
         select(Prediction)
         .where(
             Prediction.slate == slate,
-            Prediction.confidence >= max(min_confidence, 0.55),
+            Prediction.confidence >= max(min_confidence, STRICT_GROUPING_MIN_CONFIDENCE),
             Prediction.market.in_(enabled_markets),
             Prediction.value_score.isnot(None),
-            Prediction.value_score >= 0.0,
+            Prediction.value_score >= STRICT_GROUPING_MIN_VALUE_SCORE,
+            Prediction.odds_match_quality == "exact_executable_market",
+            Prediction.odds_bookmaker.isnot(None),
         )
         .order_by(
             Prediction.value_score.desc(),
@@ -972,7 +1104,7 @@ def _fallback_confidence_groups(
         query = query.where(
             Prediction.odds.isnot(None),
             Prediction.odds >= 1.30,
-            Prediction.odds <= 4.50,
+            Prediction.odds <= 4.20,
         )
 
     predictions = list(session.scalars(query))
@@ -982,6 +1114,9 @@ def _fallback_confidence_groups(
             "prediction_id": prediction.id,
             "match_id": prediction.match_id,
             "league": None,
+            "home_team": None,
+            "away_team": None,
+            "kickoff_time": None,
             "market": prediction.market,
             "predicted_label": prediction.predicted_label,
             "sport": prediction.sport,
@@ -995,7 +1130,11 @@ def _fallback_confidence_groups(
             """
             SELECT
                 p.id AS prediction_id,
-                m.league
+                m.league,
+                m.home_team,
+                m.away_team,
+                m.kickoff_date,
+                m.kickoff_datetime
             FROM predictions p
             JOIN matches m ON m.id = p.match_id
             WHERE p.slate = :slate
@@ -1004,19 +1143,28 @@ def _fallback_confidence_groups(
         {"slate": slate},
     ).mappings().all()
 
-    league_by_prediction_id = {
-        int(row["prediction_id"]): row["league"]
+    match_info_by_prediction_id = {
+        int(row["prediction_id"]): dict(row)
         for row in league_map_rows
     }
 
     for item in candidate_dicts:
-        item["league"] = league_by_prediction_id.get(int(item["prediction_id"]))
+        info = match_info_by_prediction_id.get(int(item["prediction_id"]), {})
+        item["league"] = info.get("league")
+        item["home_team"] = info.get("home_team")
+        item["away_team"] = info.get("away_team")
+        item["kickoff_date"] = info.get("kickoff_date")
+        item["kickoff_datetime"] = info.get("kickoff_datetime")
+        item["kickoff_time"] = _candidate_kickoff_time(item)
 
-    approved_dicts, _league_rejections = filter_candidate_dicts_by_league_quality(
+    approved_dicts, league_rejections = filter_candidate_dicts_by_league_quality(
         session=session,
         candidates=candidate_dicts,
         mode=league_odds_filter_mode,
     )
+
+    _diag("fallback_league_approved", len(approved_dicts))
+    _diag("fallback_league_rejected", len(league_rejections))
 
     predictions = [item["prediction"] for item in approved_dicts]
 
@@ -1041,7 +1189,7 @@ def _fallback_confidence_groups(
             "message": {
                 "status": "not_enough_predictions",
                 "available_games": float(len(ranked_games)),
-                "reason": "Not enough positive-value odds-backed predictions passed fallback production filters.",
+                "reason": "Not enough strict best-pick predictions passed filters.",
             }
         }
 
@@ -1051,7 +1199,7 @@ def _fallback_confidence_groups(
         )
     )
 
-    group_summaries: dict[str, dict[str, float | str]] = {}
+    group_summaries: dict[str, Any] = {}
     remaining_games = ranked_games.copy()
     daily_exposure_used = 0.0
 
@@ -1085,20 +1233,10 @@ def _fallback_confidence_groups(
         if cumulative_odds < min_group_odds or cumulative_odds > max_group_odds:
             continue
 
-        odds_available = all(prediction.odds is not None for prediction in selected_games)
+        odds_values = [float(prediction.odds or 0.0) for prediction in selected_games if prediction.odds is not None]
+        confidence_values = [float(prediction.confidence or 0.0) for prediction in selected_games]
 
-        confidence_values = [
-            float(prediction.confidence or 0.0)
-            for prediction in selected_games
-        ]
-
-        odds_values = [
-            float(prediction.odds or 0.0)
-            for prediction in selected_games
-            if prediction.odds is not None
-        ]
-
-        group_tier = "SAFE" if odds_available else "REJECTED"
+        group_tier = "SAFE"
 
         stake_decision = calculate_group_stake(
             bankroll=bankroll,
@@ -1120,19 +1258,19 @@ def _fallback_confidence_groups(
                 )
             )
 
+        group_matches = _build_fallback_group_matches(
+            session=session,
+            selected_games=selected_games,
+        )
+
         group_summaries[group_name] = {
-            "group_type": "FALLBACK_VALUE_GROUP_PRODUCTION_SAFE",
+            "group_type": "STRICT_FALLBACK_BEST_PICKS",
             "average_confidence": round(mean([p.confidence for p in selected_games]), 4),
             "average_value_score": round(mean([(p.value_score or 0.0) for p in selected_games]), 4),
             "cumulative_odds": round(cumulative_odds, 4),
-            "min_group_odds": round(min_group_odds, 4),
-            "max_group_odds": round(max_group_odds, 4),
             "games": float(len(selected_games)),
-            "odds_coverage": round(
-                sum(1 for p in selected_games if p.odds is not None) / len(selected_games),
-                4,
-            ),
-            "group_tier": "FALLBACK_SAFE" if odds_available else "FALLBACK_REJECTED",
+            "odds_coverage": 1.0,
+            "group_tier": "FALLBACK_SAFE",
             "recommended_stake": stake_decision.stake,
             "stake_method": stake_decision.method,
             "stake_reason": stake_decision.reason,
@@ -1140,6 +1278,7 @@ def _fallback_confidence_groups(
             "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
             "applied_fraction": stake_decision.applied_fraction,
             "estimated_group_probability": stake_decision.estimated_probability,
+            "group_matches": group_matches,
             "expected_value": stake_decision.expected_value,
         }
 
@@ -1149,13 +1288,78 @@ def _fallback_confidence_groups(
         return {
             "message": {
                 "status": "no_safe_fallback_groups",
-                "reason": "Predictions existed, but no fallback groups fit production odds limits.",
-                "min_group_odds": float(min_group_odds),
-                "max_group_odds": float(max_group_odds),
+                "reason": "Predictions existed, but no strict fallback groups fit production limits.",
             }
         }
 
     return group_summaries
+
+
+def _build_fallback_group_matches(
+    session: Session,
+    selected_games: list[Prediction],
+) -> list[dict[str, Any]]:
+    prediction_ids = [int(prediction.id) for prediction in selected_games]
+
+    if not prediction_ids:
+        return []
+
+    rows = session.execute(
+        text(
+            """
+            SELECT
+                p.id AS prediction_id,
+                p.match_id,
+                p.market,
+                p.predicted_label,
+                p.odds,
+                p.confidence,
+                p.value_score,
+                p.odds_bookmaker,
+                p.odds_match_quality,
+                m.league,
+                m.home_team,
+                m.away_team,
+                m.kickoff_date,
+                m.kickoff_datetime
+            FROM predictions p
+            JOIN matches m ON m.id = p.match_id
+            WHERE p.id = ANY(:prediction_ids)
+            """
+        ),
+        {"prediction_ids": prediction_ids},
+    ).mappings().all()
+
+    items = []
+
+    for row in rows:
+        item = dict(row)
+        item["kickoff_time"] = _candidate_kickoff_time(item)
+        items.append(
+            {
+                "prediction_id": item.get("prediction_id"),
+                "match_id": item.get("match_id"),
+                "league": item.get("league"),
+                "home_team": item.get("home_team"),
+                "away_team": item.get("away_team"),
+                "kickoff_time": item.get("kickoff_time"),
+                "market": item.get("market"),
+                "predicted_label": item.get("predicted_label"),
+                "odds": item.get("odds"),
+                "confidence": item.get("confidence"),
+                "value_score": item.get("value_score"),
+                "bookmaker": item.get("odds_bookmaker"),
+                "odds_match_quality": item.get("odds_match_quality"),
+            }
+        )
+
+    return sorted(
+        items,
+        key=lambda item: (
+            str(item.get("kickoff_time") or ""),
+            int(item.get("prediction_id") or 0),
+        ),
+    )
 
 
 def _select_safe_fallback_group(
@@ -1168,6 +1372,7 @@ def _select_safe_fallback_group(
     selected: list[Prediction] = []
     used_match_ids: set[int] = set()
     used_markets: set[str] = set()
+    used_families: set[str] = set()
 
     for candidate in available_games:
         if candidate.match_id in used_match_ids:
@@ -1176,13 +1381,21 @@ def _select_safe_fallback_group(
         if candidate.market in used_markets:
             continue
 
+        family = parse_executable_market(candidate.market).family
+
+        if family in used_families:
+            continue
+
         if candidate.odds is None:
             continue
 
-        if candidate.odds < 1.30 or candidate.odds > 4.50:
+        if candidate.odds < 1.30 or candidate.odds > 4.20:
             continue
 
-        if candidate.value_score is None or candidate.value_score < 0:
+        if candidate.value_score is None or candidate.value_score < STRICT_GROUPING_MIN_VALUE_SCORE:
+            continue
+
+        if candidate.confidence < STRICT_GROUPING_MIN_CONFIDENCE:
             continue
 
         test_group = selected + [candidate]
@@ -1197,6 +1410,7 @@ def _select_safe_fallback_group(
         selected.append(candidate)
         used_match_ids.add(candidate.match_id)
         used_markets.add(candidate.market)
+        used_families.add(family)
 
         if len(selected) >= min_group_size and test_odds >= min_group_odds:
             return selected
@@ -1224,126 +1438,23 @@ def _fallback_ranking_score(prediction: Prediction) -> float:
     odds_component = 0.0
 
     if 1.30 <= odds <= 1.80:
-        odds_component = 0.08
+        odds_component = 0.10
     elif 1.80 < odds <= 2.50:
         odds_component = 0.12
-    elif 2.50 < odds <= 3.50:
-        odds_component = 0.06
-    elif odds > 3.50:
-        odds_component = -0.06
+    elif 2.50 < odds <= 3.20:
+        odds_component = 0.04
+    elif odds > 3.20:
+        odds_component = -0.10
     elif 0 < odds < 1.30:
-        odds_component = -0.20
+        odds_component = -0.30
 
-    return confidence * 0.45 + value_score * 0.45 + odds_component
+    return confidence * 0.50 + value_score * 0.45 + odds_component
 
 
 def _cumulative_odds(predictions: list[Prediction]) -> float | None:
-    odds_values = [
-        p.odds
-        for p in predictions
-        if p.odds is not None
-    ]
+    odds_values = [p.odds for p in predictions if p.odds is not None]
 
     if len(odds_values) != len(predictions):
         return None
 
     return float(prod(odds_values))
-
-
-def _boost_group_to_min_odds(
-    selected_games: list[Prediction],
-    available_games: list[Prediction],
-    min_group_odds: float,
-    max_group_odds: float = PRODUCTION_MAX_GROUP_ODDS,
-) -> list[Prediction]:
-    selected_ids = {p.id for p in selected_games}
-
-    candidates = [
-        p
-        for p in available_games
-        if p.id not in selected_ids
-        and p.odds is not None
-        and p.value_score is not None
-        and p.value_score >= 0.0
-        and 1.30 <= p.odds <= 4.50
-    ]
-
-    current = selected_games[:]
-
-    for i in range(len(current)):
-        best_replacement = None
-        best_score = _fallback_group_score(current)
-
-        for candidate in candidates:
-            test_group = current[:]
-            test_group[i] = candidate
-
-            test_odds = _cumulative_odds(test_group)
-
-            if test_odds is None:
-                continue
-
-            if test_odds > max_group_odds:
-                continue
-
-            if test_odds < min_group_odds:
-                continue
-
-            test_score = _fallback_group_score(test_group)
-
-            if test_score > best_score:
-                best_score = test_score
-                best_replacement = candidate
-
-        if best_replacement:
-            current[i] = best_replacement
-
-        final_odds = _cumulative_odds(current)
-
-        if final_odds and min_group_odds <= final_odds <= max_group_odds:
-            break
-
-    return current
-
-
-def _fallback_group_score(group: list[Prediction]) -> float:
-    if not group:
-        return 0.0
-
-    odds_value = _cumulative_odds(group) or 0.0
-
-    if odds_value > PRODUCTION_MAX_GROUP_ODDS:
-        return -999.0
-
-    return round(
-        mean([float(p.confidence or 0.0) for p in group]) * 0.45
-        + mean([float(p.value_score or 0.0) for p in group]) * 0.45
-        - max((odds_value - 20.0) / 200.0, 0.0),
-        6,
-    )
-
-
-def _group_sizes(
-    total_games: int,
-    max_groups: int = MAX_GROUPS,
-    min_group_size: int = MIN_GAMES_PER_GROUP,
-    max_group_size: int = MAX_GAMES_PER_GROUP,
-) -> list[int]:
-    usable_games = min(total_games, max_groups * max_group_size)
-
-    if usable_games < min_group_size:
-        return []
-
-    sizes: list[int] = []
-    remaining = usable_games
-
-    while remaining >= min_group_size and len(sizes) < max_groups:
-        size = min(max_group_size, remaining)
-
-        if remaining - size > 0 and remaining - size < min_group_size:
-            size = remaining
-
-        sizes.append(size)
-        remaining -= size
-
-    return sizes

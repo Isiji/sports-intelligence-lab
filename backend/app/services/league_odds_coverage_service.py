@@ -10,16 +10,15 @@ from sqlalchemy.orm import Session
 from app.db.models import LeagueOddsCoverageSnapshot
 
 
-MIN_MATCHES_FOR_PRODUCTION = 10
-MIN_ODDS_PENETRATION_RATE = 0.03
-MIN_ODDS_SUCCESS_RATE = 0.55
-MIN_ODDS_ATTEMPTED_MATCHES = 8
-MIN_SUPPORTED_MARKETS = 3
+MIN_MATCHES_FOR_PRODUCTION = 5
+MIN_ODDS_PENETRATION_RATE = 0.005
+MIN_ODDS_SUCCESS_RATE = 0.10
+MIN_ODDS_ATTEMPTED_MATCHES = 3
+MIN_SUPPORTED_MARKETS = 2
 MIN_BOOKMAKERS = 1
 
-MIN_MARKET_DEPTH_SCORE = 0.20
-MIN_BOOKMAKER_DEPTH_SCORE = 0.20
-
+MIN_MARKET_DEPTH_SCORE = 0.05
+MIN_BOOKMAKER_DEPTH_SCORE = 0.05
 
 def rebuild_league_odds_coverage(
     session: Session,
@@ -536,21 +535,25 @@ def resolve_production_allowed(
     tier: str,
     min_matches: int,
 ) -> tuple[bool, str]:
+
     if total_matches < min_matches:
         return (
             False,
             "insufficient_match_sample",
         )
 
-    if odds_attempted_matches < MIN_ODDS_ATTEMPTED_MATCHES:
+    if matches_with_real_odds(
+        odds_attempted_matches=odds_attempted_matches,
+        supported_market_count=supported_market_count,
+        bookmaker_count=bookmaker_count,
+    ) is False:
         return (
             False,
-            "not_enough_odds_attempts",
+            "weak_real_odds_ecosystem",
         )
 
     if tier in {
         "NO_ODDS",
-        "POOR_ODDS_COVERAGE",
         "INSUFFICIENT_SAMPLE",
     }:
         return (
@@ -558,61 +561,33 @@ def resolve_production_allowed(
             f"blocked_by_tier:{tier}",
         )
 
-    if (
-        odds_coverage_rate
-        < MIN_ODDS_PENETRATION_RATE
-    ):
-        return (
-            False,
-            "odds_penetration_rate_too_low",
-        )
-
-    if (
-        odds_success_rate
-        < MIN_ODDS_SUCCESS_RATE
-    ):
-        return (
-            False,
-            "odds_success_rate_too_low",
-        )
-
-    if (
-        supported_market_count
-        < MIN_SUPPORTED_MARKETS
-    ):
-        return (
-            False,
-            "not_enough_supported_markets",
-        )
-
-    if bookmaker_count < MIN_BOOKMAKERS:
+    if bookmaker_count < 1:
         return (
             False,
             "no_bookmaker_depth",
-        )
-
-    if (
-        market_depth_score
-        < MIN_MARKET_DEPTH_SCORE
-    ):
-        return (
-            False,
-            "market_depth_too_low",
-        )
-
-    if (
-        bookmaker_depth_score
-        < MIN_BOOKMAKER_DEPTH_SCORE
-    ):
-        return (
-            False,
-            "bookmaker_depth_too_low",
         )
 
     return (
         True,
         "production_allowed",
     )
+
+def matches_with_real_odds(
+    odds_attempted_matches: int,
+    supported_market_count: int,
+    bookmaker_count: int,
+) -> bool:
+
+    if odds_attempted_matches <= 0:
+        return False
+
+    if supported_market_count <= 0:
+        return False
+
+    if bookmaker_count <= 0:
+        return False
+
+    return True
 
 def league_odds_coverage_report(
     session: Session,

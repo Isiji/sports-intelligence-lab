@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +16,26 @@ DEFAULT_ALLOWED_TIERS = {
     "STRONG_ODDS_COVERAGE",
     "USABLE_ODDS_COVERAGE",
 }
+
+
+def _format_kickoff_time(candidate: dict[str, Any]) -> str | None:
+    kickoff = (
+        candidate.get("kickoff_datetime")
+        or candidate.get("kickoff_date")
+        or candidate.get("match_kickoff")
+        or candidate.get("kickoff_time")
+    )
+
+    if kickoff is None:
+        return None
+
+    if isinstance(kickoff, datetime):
+        return kickoff.strftime("%Y-%m-%d %H:%M")
+
+    if isinstance(kickoff, date):
+        return kickoff.strftime("%Y-%m-%d")
+
+    return str(kickoff)
 
 
 def is_league_allowed_for_production(
@@ -68,6 +91,11 @@ def filter_candidate_dicts_by_league_quality(
     rejected: list[dict] = []
 
     for candidate in candidates:
+        kickoff_time = _format_kickoff_time(candidate)
+
+        if kickoff_time:
+            candidate["kickoff_time"] = kickoff_time
+
         allowed, reason = is_league_allowed_for_production(
             session=session,
             league=candidate.get("league"),
@@ -79,6 +107,9 @@ def filter_candidate_dicts_by_league_quality(
             "prediction_id": candidate.get("prediction_id"),
             "match_id": candidate.get("match_id"),
             "league": candidate.get("league"),
+            "home_team": candidate.get("home_team"),
+            "away_team": candidate.get("away_team"),
+            "kickoff_time": kickoff_time,
             "market": candidate.get("market"),
             "predicted_label": candidate.get("predicted_label"),
             "reason": reason,
