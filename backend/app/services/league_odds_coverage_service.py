@@ -496,32 +496,38 @@ def resolve_priority_tier(
     ecosystem_score: float,
     coverage_tier: str,
 ) -> str:
+
     if matches_with_odds <= 0:
         return "DISCOVERY_ROTATION"
 
     if (
-        coverage_tier == "ELITE_ODDS_COVERAGE"
-        and ecosystem_score >= 75
+        ecosystem_score >= 78
+        and odds_coverage_rate >= 0.025
+        and matches_with_odds >= 10
     ):
         return "CORE_PRODUCTION"
 
     if (
-        coverage_tier == "STRONG_ODDS_COVERAGE"
-        and ecosystem_score >= 55
+        ecosystem_score >= 65
+        and odds_coverage_rate >= 0.015
+        and matches_with_odds >= 6
     ):
         return "HIGH_PRIORITY"
 
     if (
-        coverage_tier == "USABLE_ODDS_COVERAGE"
-        and odds_coverage_rate >= 0.03
+        ecosystem_score >= 45
+        and odds_coverage_rate >= 0.008
+        and matches_with_odds >= 3
     ):
         return "GROWTH_PRIORITY"
 
-    if total_matches >= 20:
+    if (
+        ecosystem_score >= 15
+        and total_matches >= 20
+    ):
         return "EXPLORATION_PRIORITY"
 
     return "DISCOVERY_ROTATION"
-
 
 def resolve_production_allowed(
     total_matches: int,
