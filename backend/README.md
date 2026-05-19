@@ -61,7 +61,9 @@ python -m app.cli create-groups
 
 psql -U postgres -d sports_intelligence_lab
 
+python -m app.cli ingest-adaptive-stats --limit 1000 --season 2026
 
+python -m app.cli ingest-ecosystem-odds --limit 1000
 
 COMPETITIONS = [
     # =========================

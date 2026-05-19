@@ -6,7 +6,7 @@ from datetime import date
 from app.backtest.portfolio_profiles import run_portfolio_profiles
 from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
-from app.db.session import get_cli_session
+from app.db.session import get_cli_session, SessionLocal
 from sqlalchemy import text
 from app.utils.slate import resolve_slate
 from app.grouping.create_groups import group_predictions
@@ -25,6 +25,9 @@ from app.services.stats_coverage_service import (
     stats_coverage_report,
 )
 
+from app.services.adaptive_stats_orchestrator import (
+    AdaptiveStatsOrchestrator,
+)
 from app.intelligence.clv_analytics_service import (
     build_clv_analytics,
 )
@@ -1278,6 +1281,49 @@ def api_waste_report(
     finally:
         session.close()
 
+# backend/app/cli.py
+# ADD THIS COMMAND
+
+@app.command("ingest-adaptive-stats")
+def ingest_adaptive_stats_command(
+    limit: int = typer.Option(
+        300,
+        help="Maximum matches to process.",
+    ),
+    season: int | None = typer.Option(
+        None,
+        help="Optional season filter.",
+    ),
+    force: bool = typer.Option(
+        False,
+        help="Force ingestion even if previously skipped.",
+    ),
+):
+    """
+    Adaptive autonomous stats ingestion.
+
+    Production-safe:
+    - cooldown-aware
+    - ecosystem-aware
+    - waste-aware
+    - API-budget-aware
+    """
+
+    with SessionLocal() as session:
+
+        orchestrator = AdaptiveStatsOrchestrator(
+            session=session,
+            limit=limit,
+            season=season,
+            force=force,
+        )
+
+        result = orchestrator.run()
+
+        typer.echo("\n=== ADAPTIVE STATS INGESTION ===")
+
+        for key, value in result.items():
+            typer.echo(f"{key}: {value}")
 
 @app.command("league-ingestion-waste-report")
 def league_ingestion_waste_report(
