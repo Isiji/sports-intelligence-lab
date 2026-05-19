@@ -1,3 +1,5 @@
+# backend/app/odds/market_quality_engine.py
+
 from __future__ import annotations
 
 from sqlalchemy import text
@@ -26,6 +28,31 @@ CORE_PRODUCTION_MARKETS = [
     "btts_no",
 ]
 
+
+EXECUTABLE_DISCOVERY_MARKETS = [
+    "asian_handicap_home_minus_0_5",
+    "asian_handicap_away_minus_0_5",
+    "asian_handicap_home_plus_0_5",
+    "asian_handicap_away_plus_0_5",
+
+    "asian_handicap_home_minus_1_5",
+    "asian_handicap_away_minus_1_5",
+    "asian_handicap_home_plus_1_5",
+    "asian_handicap_away_plus_1_5",
+
+    "draw_no_bet_home",
+    "draw_no_bet_away",
+
+    "corners_over_8_5",
+    "corners_under_8_5",
+    "corners_over_9_5",
+    "corners_under_9_5",
+
+    "shots_on_target_over_8_5",
+    "shots_on_target_under_8_5",
+]
+
+
 BOOKMAKER_RICH_MARKET_FAMILIES = {
     "goals_total",
     "team_goals_total",
@@ -37,9 +64,15 @@ BOOKMAKER_RICH_MARKET_FAMILIES = {
     "draw_no_bet",
 }
 
+
 MIN_ODDS_ROWS_FOR_DYNAMIC_ENABLE = 50
 MIN_MATCHES_WITH_ODDS_FOR_DYNAMIC_ENABLE = 15
 MIN_BOOKMAKERS_FOR_RICH_MARKET = 3
+
+
+def _market_family(market: str) -> str:
+    canonical = CANONICAL_MARKETS.get(market)
+    return canonical.family if canonical else "unknown"
 
 
 def calculate_market_quality(session: Session) -> dict:
@@ -64,12 +97,28 @@ def calculate_market_quality(session: Session) -> dict:
     for market in CORE_PRODUCTION_MARKETS:
         markets[market] = {
             "market": market,
+            "family": _market_family(market),
             "odds_rows": 0,
             "matches_with_odds": 0,
             "bookmaker_count": 0,
             "enabled": True,
             "quality_tier": "core_production",
             "reason": "core_market_enabled_by_default",
+        }
+
+    for market in EXECUTABLE_DISCOVERY_MARKETS:
+        if market not in CANONICAL_MARKETS:
+            continue
+
+        markets[market] = {
+            "market": market,
+            "family": _market_family(market),
+            "odds_rows": 0,
+            "matches_with_odds": 0,
+            "bookmaker_count": 0,
+            "enabled": True,
+            "quality_tier": "executable_discovery_production",
+            "reason": "exact_executable_market_enabled_for_adaptive_growth",
         }
 
     for row in rows:
@@ -82,6 +131,7 @@ def calculate_market_quality(session: Session) -> dict:
         family = canonical.family if canonical else "unknown"
 
         is_core = market in CORE_PRODUCTION_MARKETS
+        is_executable_discovery = market in EXECUTABLE_DISCOVERY_MARKETS
         is_bookmaker_rich_family = family in BOOKMAKER_RICH_MARKET_FAMILIES
 
         dynamically_enabled = (
@@ -91,11 +141,15 @@ def calculate_market_quality(session: Session) -> dict:
             and bookmaker_count >= MIN_BOOKMAKERS_FOR_RICH_MARKET
         )
 
-        enabled = is_core or dynamically_enabled
+        enabled = is_core or is_executable_discovery or dynamically_enabled
 
         if is_core:
             quality_tier = "core_production"
             reason = "core_market_enabled_by_default"
+
+        elif is_executable_discovery:
+            quality_tier = "executable_discovery_production"
+            reason = "exact_executable_market_enabled_for_adaptive_growth"
 
         elif dynamically_enabled:
             quality_tier = "bookmaker_rich_dynamic_production"
@@ -123,6 +177,7 @@ def calculate_market_quality(session: Session) -> dict:
     return {
         "markets": markets,
         "core_production_markets": CORE_PRODUCTION_MARKETS,
+        "executable_discovery_markets": EXECUTABLE_DISCOVERY_MARKETS,
         "bookmaker_rich_market_families": sorted(BOOKMAKER_RICH_MARKET_FAMILIES),
         "dynamic_thresholds": {
             "min_odds_rows": MIN_ODDS_ROWS_FOR_DYNAMIC_ENABLE,
