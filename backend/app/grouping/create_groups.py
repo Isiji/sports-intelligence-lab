@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
+from app.services.prediction_market_timing_service import analyze_prediction_timing
 
 from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 from app.db.models import Prediction, PredictionGroupItem
@@ -40,6 +41,7 @@ from app.services.league_production_filter_service import (
     filter_candidate_dicts_by_league_quality,
 )
 from app.services.production_pick_scoring_service import score_pick_list
+
 
 
 GROUPING_DEBUG = False
@@ -775,6 +777,21 @@ def _enrich_candidate(
 
     odds = float(odds)
 
+    timing = analyze_prediction_timing(
+        kickoff_value=prediction.get("kickoff_datetime") or prediction.get("kickoff_date")
+    )
+
+    prediction["kickoff_time"] = timing.kickoff_eat
+    prediction["minutes_to_kickoff"] = timing.minutes_to_kickoff
+    prediction["timing_status"] = timing.timing_status
+    prediction["recommended_action"] = timing.recommended_action
+    prediction["timing_reason"] = timing.reason
+
+    if timing.recommended_action == "AVOID":
+        prediction["_rejection_reason"] = f"timing_{timing.timing_status}"
+        return None
+    
+
     if confidence < config.min_confidence:
         prediction["_rejection_reason"] = "confidence"
         return None
@@ -1213,33 +1230,43 @@ def _summarize_portfolio_groups(
 
         daily_exposure_used += stake_decision.stake
 
-        group_matches = [
-            {
-                "match_id": item.get("match_id"),
-                "league": item.get("league"),
-                "home_team": item.get("home_team"),
-                "away_team": item.get("away_team"),
-                "kickoff_time": _candidate_kickoff_time(item),
-                "market": item.get("market"),
-                "predicted_label": item.get("predicted_label"),
-                "executable_label": item.get("executable_label") or _render_executable_label(item),
-                "is_inversion_pick": item.get("is_inversion_pick"),
-                "odds": item.get("odds"),
-                "confidence": item.get("confidence"),
-                "value_score": item.get("value_score"),
-                "bookmaker": item.get("odds_bookmaker"),
-                "odds_market": item.get("odds_market"),
-                "odds_selection": item.get("odds_selection"),
-                "odds_match_quality": item.get("odds_match_quality"),
-                "portfolio_tier": item.get("portfolio_tier"),
-                "portfolio_risk_score": item.get("portfolio_risk_score"),
-                "production_score": item.get("production_score"),
-                "pick_grade": item.get("pick_grade"),
-                "risk_level": item.get("risk_level"),
-                "missing_market_intel": item.get("missing_market_intel"),
-            }
-            for item in group
-        ]
+        group_matches = []
+
+        for item in group:
+            timing = analyze_prediction_timing(
+                kickoff_value=item.get("kickoff_datetime") or item.get("kickoff_date")
+            )
+
+            group_matches.append(
+                {
+                    "match_id": item.get("match_id"),
+                    "league": item.get("league"),
+                    "home_team": item.get("home_team"),
+                    "away_team": item.get("away_team"),
+                    "kickoff_time": timing.kickoff_eat,
+                    "minutes_to_kickoff": timing.minutes_to_kickoff,
+                    "timing_status": timing.timing_status,
+                    "recommended_action": timing.recommended_action,
+                    "timing_reason": timing.reason,
+                    "market": item.get("market"),
+                    "predicted_label": item.get("predicted_label"),
+                    "executable_label": item.get("executable_label") or _render_executable_label(item),
+                    "is_inversion_pick": item.get("is_inversion_pick"),
+                    "odds": item.get("odds"),
+                    "confidence": item.get("confidence"),
+                    "value_score": item.get("value_score"),
+                    "bookmaker": item.get("odds_bookmaker"),
+                    "odds_market": item.get("odds_market"),
+                    "odds_selection": item.get("odds_selection"),
+                    "odds_match_quality": item.get("odds_match_quality"),
+                    "portfolio_tier": item.get("portfolio_tier"),
+                    "portfolio_risk_score": item.get("portfolio_risk_score"),
+                    "production_score": item.get("production_score"),
+                    "pick_grade": item.get("pick_grade"),
+                    "risk_level": item.get("risk_level"),
+                    "missing_market_intel": item.get("missing_market_intel"),
+                }
+            )
 
         summaries[group_name] = {
             "group_type": "STRICT_ADAPTIVE_INTELLIGENCE_PORTFOLIO",
