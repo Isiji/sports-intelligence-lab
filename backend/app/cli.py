@@ -18,7 +18,12 @@ from app.ingest.football_ingestion import (
     ingest_fixtures_for_league_season,
 )
 # backend/app/cli.py
-# ADD IMPORT
+
+from app.services.ecosystem_stats_orchestrator import EcosystemStatsOrchestrator
+from app.services.stats_coverage_service import (
+    rebuild_stats_coverage,
+    stats_coverage_report,
+)
 
 from app.intelligence.clv_analytics_service import (
     build_clv_analytics,
@@ -1001,7 +1006,7 @@ def update_finished_matches_command(
 @app.command("ingest-missing-stats")
 def ingest_missing_stats(
     limit: int = typer.Option(100),
-    season: int | None = typer.Option(None),
+    season: int | None = typer.Option(None, "--season"),
     force: bool = typer.Option(False, help="Retry even if stats were already attempted/unavailable."),
 ) -> None:
     with get_cli_session() as session:
@@ -1013,6 +1018,65 @@ def ingest_missing_stats(
         )
 
     typer.echo(result)
+
+@app.command("ingest-ecosystem-stats")
+def ingest_ecosystem_stats(
+    limit: int = typer.Option(300, "--limit"),
+    season: int | None = typer.Option(None, "--season"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    session = get_cli_session()
+
+    try:
+        orchestrator = EcosystemStatsOrchestrator(
+            session=session,
+            limit=limit,
+            season=season,
+            force=force,
+        )
+
+        result = orchestrator.run()
+
+        print("\n=== ECOSYSTEM STATS INGESTION ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("rebuild-stats-coverage")
+def rebuild_stats_coverage_command() -> None:
+    session = get_cli_session()
+
+    try:
+        result = rebuild_stats_coverage(session=session)
+
+        print("\n=== STATS COVERAGE REBUILT ===")
+        print(result)
+
+    finally:
+        session.close()
+
+
+@app.command("stats-coverage-report")
+def stats_coverage_report_command(
+    season: int | None = typer.Option(None, "--season"),
+    limit: int = typer.Option(80, "--limit"),
+) -> None:
+    session = get_cli_session()
+
+    try:
+        result = stats_coverage_report(
+            session=session,
+            season=season,
+            limit=limit,
+        )
+
+        print("\n=== STATS COVERAGE REPORT ===")
+        print(result)
+
+    finally:
+        session.close()
 
 @app.command("market-profitability")
 def market_profitability(

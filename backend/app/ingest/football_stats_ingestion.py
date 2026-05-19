@@ -82,7 +82,7 @@ def ingest_fixture_statistics(
     existing_stats = list(
         session.scalars(
             select(TeamMatchStat).where(
-                TeamMatchStat.match_id == match.id
+                TeamMatchStat.match_id == match.id,
             )
         )
     )
@@ -92,7 +92,6 @@ def ingest_fixture_statistics(
         match.stats_attempt_count = int(match.stats_attempt_count or 0) + 1
         match.stats_unavailable = True
         match.last_synced_at = datetime.utcnow()
-
         session.commit()
 
         return {
@@ -111,7 +110,6 @@ def ingest_fixture_statistics(
 
     match.stats_attempted_at = datetime.utcnow()
     match.stats_attempt_count = int(match.stats_attempt_count or 0) + 1
-
     session.commit()
 
     client = ApiFootballClient(session=session)
@@ -130,7 +128,6 @@ def ingest_fixture_statistics(
         match.has_stats = False
         match.stats_unavailable = True
         match.last_synced_at = datetime.utcnow()
-
         session.commit()
 
         return {
@@ -199,18 +196,11 @@ def ingest_fixture_statistics(
         match.stats_unavailable = True
 
         if unmatched_api_teams:
-            reason = (
-                "api teams could not be matched to local teams; "
-                "marked stats_unavailable"
-            )
+            reason = "api teams could not be matched to local teams; marked stats_unavailable"
         else:
-            reason = (
-                "api response existed but no usable real stats were saved; "
-                "marked stats_unavailable"
-            )
+            reason = "api response existed but no usable real stats were saved; marked stats_unavailable"
 
     match.last_synced_at = datetime.utcnow()
-
     session.commit()
 
     return {
@@ -261,7 +251,10 @@ def ingest_missing_statistics(
         session.scalars(
             select(Match)
             .where(*conditions)
-            .order_by(Match.kickoff_date.desc())
+            .order_by(
+                Match.has_odds.desc(),
+                Match.kickoff_date.desc(),
+            )
             .limit(limit)
         )
     )
@@ -270,7 +263,6 @@ def ingest_missing_statistics(
     skipped = 0
     failed = 0
     unavailable = 0
-
     failures = []
     results = []
 
@@ -286,16 +278,13 @@ def ingest_missing_statistics(
 
             if result.get("skipped"):
                 skipped += 1
-
             elif result.get("has_stats"):
                 processed += 1
-
             elif result.get("stats_unavailable"):
                 unavailable += 1
 
         except Exception as exc:
             failed += 1
-
             session.rollback()
 
             failures.append(
@@ -318,7 +307,7 @@ def ingest_missing_statistics(
         "matches_failed": failed,
         "failures": failures[:20],
         "sample_results": results[:10],
-        }
+    }
 
 
 def _stats_ingestion_eligibility(
@@ -326,67 +315,33 @@ def _stats_ingestion_eligibility(
     force: bool = False,
 ) -> dict:
     if match.provider != "api-football":
-        return {
-            "eligible": False,
-            "reason": "not an api-football match",
-        }
+        return {"eligible": False, "reason": "not an api-football match"}
 
     if not match.provider_fixture_id:
-        return {
-            "eligible": False,
-            "reason": "match has no provider fixture ID",
-        }
+        return {"eligible": False, "reason": "match has no provider fixture ID"}
 
     if match.is_cancelled:
-        return {
-            "eligible": False,
-            "reason": "match is cancelled",
-        }
+        return {"eligible": False, "reason": "match is cancelled"}
 
     if match.is_postponed:
-        return {
-            "eligible": False,
-            "reason": "match is postponed",
-        }
+        return {"eligible": False, "reason": "match is postponed"}
 
     if not match.is_finished:
-        return {
-            "eligible": False,
-            "reason": "match is not finished",
-        }
+        return {"eligible": False, "reason": "match is not finished"}
 
     if match.home_goals is None or match.away_goals is None:
-        return {
-            "eligible": False,
-            "reason": "finished match has missing score",
-        }
+        return {"eligible": False, "reason": "finished match has missing score"}
 
     if match.has_stats and not force:
-        return {
-            "eligible": False,
-            "reason": "match already has real stats",
-        }
+        return {"eligible": False, "reason": "match already has real stats"}
 
     if getattr(match, "stats_unavailable", False) and not force:
-        return {
-            "eligible": False,
-            "reason": "stats previously unavailable",
-        }
+        return {"eligible": False, "reason": "stats previously unavailable"}
 
-    if (
-        int(getattr(match, "stats_attempt_count", 0) or 0)
-        >= MAX_STATS_ATTEMPTS
-        and not force
-    ):
-        return {
-            "eligible": False,
-            "reason": "stats already attempted once",
-        }
+    if int(getattr(match, "stats_attempt_count", 0) or 0) >= MAX_STATS_ATTEMPTS and not force:
+        return {"eligible": False, "reason": "stats already attempted once"}
 
-    return {
-        "eligible": True,
-        "reason": "eligible",
-    }
+    return {"eligible": True, "reason": "eligible"}
 
 
 def _existing_real_stats_count(
@@ -438,10 +393,7 @@ def _find_matching_stat_row(
 
         candidates.append((score, stat_row))
 
-    candidates.sort(
-        key=lambda item: item[0],
-        reverse=True,
-    )
+    candidates.sort(key=lambda item: item[0], reverse=True)
 
     if candidates and candidates[0][0] >= 0.82:
         return candidates[0][1]
@@ -478,13 +430,7 @@ def _normalize_team_name(value: str | None) -> str:
         return ""
 
     value = value.lower().strip()
-
-    value = re.sub(
-        r"\b(fc|sc|cf|afc|club|football club)\b",
-        "",
-        value,
-    )
-
+    value = re.sub(r"\b(fc|sc|cf|afc|club|football club)\b", "", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
 
@@ -512,14 +458,12 @@ def _parse_statistics(stat_rows: list[dict]) -> dict:
         if stat_type == "Yellow Cards":
             if raw_value is not None:
                 parsed["_real_fields_seen"] += 1
-
             yellow_cards = _safe_int(raw_value)
             continue
 
         if stat_type == "Red Cards":
             if raw_value is not None:
                 parsed["_real_fields_seen"] += 1
-
             red_cards = _safe_int(raw_value)
             continue
 
