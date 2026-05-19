@@ -2286,16 +2286,29 @@ def ingest_odds_rotation_command(
     finally:
         session.close()
 
-# backend/app/cli.py
-# UPDATE EXISTING ingest-ecosystem-odds COMMAND
 
 @app.command("ingest-ecosystem-odds")
 def ingest_ecosystem_odds(
     limit: int = typer.Option(500, "--limit"),
+    season: int | None = typer.Option(None, "--season"),
+    mode: str = typer.Option(
+        "ecosystem",
+        "--mode",
+        help="ecosystem, upcoming, finished, season, or all",
+    ),
     force: bool = typer.Option(False, "--force"),
     use_league_cooldown: bool = typer.Option(
         True,
         "--use-league-cooldown/--no-league-cooldown",
+    ),
+    odds_window_hours: int = typer.Option(
+        72,
+        "--odds-window-hours",
+        help="For upcoming mode: only fetch odds for matches within this many hours.",
+    ),
+    require_stats_for_finished: bool = typer.Option(
+        True,
+        "--require-stats-for-finished/--no-require-stats-for-finished",
     ),
 ):
     session = get_cli_session()
@@ -2304,8 +2317,12 @@ def ingest_ecosystem_odds(
         orchestrator = EcosystemOddsOrchestrator(
             session=session,
             limit=limit,
+            season=season,
+            mode=mode,
             force=force,
             use_league_cooldown=use_league_cooldown,
+            odds_window_hours=odds_window_hours,
+            require_stats_for_finished=require_stats_for_finished,
         )
 
         result = orchestrator.run()
@@ -2314,7 +2331,7 @@ def ingest_ecosystem_odds(
 
     finally:
         session.close()
-
+        
 @app.command("ingest-odds-rich-leagues")
 def ingest_odds_rich_leagues_command(
     limit: int = typer.Option(
