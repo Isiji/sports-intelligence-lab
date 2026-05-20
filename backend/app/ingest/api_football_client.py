@@ -60,6 +60,20 @@ class ApiFootballClient:
     def get_leagues_by_season(self, season: int) -> dict[str, Any]:
         return self.get("leagues", {"season": season})
 
+    def search_leagues(
+        self,
+        search: str,
+        season: int | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "search": search,
+        }
+
+        if season is not None:
+            params["season"] = season
+
+        return self.get("leagues", params)
+
     def get_fixtures_by_date(self, date_value: str) -> dict[str, Any]:
         return self.get("fixtures", {"date": date_value})
 

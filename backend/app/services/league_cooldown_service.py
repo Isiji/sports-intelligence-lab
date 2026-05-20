@@ -13,32 +13,35 @@ class LeagueCooldownService:
     """
     Adaptive league cooldown intelligence.
 
-    No permanent whitelist.
-    No permanent exclusion.
-
-    Leagues with high API waste cool down temporarily.
-    Leagues with good odds/stats success recover naturally.
+    Important:
+    - Odds cooldowns are SHORT because provider odds can disappear quickly.
+    - Stats cooldowns can be longer because stats remain available longer.
+    - No permanent whitelist.
+    - No permanent exclusion.
     """
 
     def __init__(
         self,
         session: Session,
-        lookback_days: int = 3,
+        lookback_days: int = 2,
         min_attempts: int = 5,
     ):
         self.session = session
         self.lookback_days = lookback_days
         self.min_attempts = min_attempts
 
-    def get_league_cooldown_status(self, league: str | None) -> dict[str, Any]:
+    def get_league_cooldown_status(
+        self,
+        league: str | None,
+        data_type: str = "odds",
+    ) -> dict[str, Any]:
         if not league:
-            return {
-                "league": league,
-                "cooldown_active": False,
-                "cooldown_hours": 0,
-                "reason": "no league supplied",
-                "score": 0.0,
-            }
+            return self._allowed(
+                league=league,
+                reason="no league supplied",
+            )
+
+        data_type = (data_type or "odds").lower().strip()
 
         since = datetime.utcnow() - timedelta(days=self.lookback_days)
 
@@ -77,6 +80,7 @@ class LeagueCooldownService:
                     ) AS stats_empty,
 
                     MAX(stats_attempted_at) AS last_stats_attempted_at
+
                 FROM matches
                 WHERE league = :league
                 """
@@ -87,80 +91,76 @@ class LeagueCooldownService:
             },
         ).mappings().first()
 
-        odds_attempts = int(row["odds_attempts"] or 0)
-        odds_successes = int(row["odds_successes"] or 0)
-        odds_empty = int(row["odds_empty"] or 0)
+        if data_type == "stats":
+            attempts = int(row["stats_attempts"] or 0)
+            successes = int(row["stats_successes"] or 0)
+            empty = int(row["stats_empty"] or 0)
+            last_attempted_at = row["last_stats_attempted_at"]
+        else:
+            attempts = int(row["odds_attempts"] or 0)
+            successes = int(row["odds_successes"] or 0)
+            empty = int(row["odds_empty"] or 0)
+            last_attempted_at = row["last_odds_attempted_at"]
 
-        stats_attempts = int(row["stats_attempts"] or 0)
-        stats_successes = int(row["stats_successes"] or 0)
-        stats_empty = int(row["stats_empty"] or 0)
-
-        total_attempts = odds_attempts + stats_attempts
-        total_successes = odds_successes + stats_successes
-        total_empty = odds_empty + stats_empty
-
-        if total_attempts < self.min_attempts:
+        if attempts < self.min_attempts:
             return {
                 "league": league,
+                "data_type": data_type,
                 "cooldown_active": False,
                 "cooldown_hours": 0,
+                "cooldown_until": None,
                 "reason": "not enough attempts for cooldown decision",
                 "score": 0.0,
-                "odds_attempts": odds_attempts,
-                "odds_successes": odds_successes,
-                "odds_empty": odds_empty,
-                "stats_attempts": stats_attempts,
-                "stats_successes": stats_successes,
-                "stats_empty": stats_empty,
+                "attempts": attempts,
+                "successes": successes,
+                "empty": empty,
+                "waste_rate": 0.0,
+                "success_rate": 0.0,
             }
 
-        waste_rate = total_empty / total_attempts if total_attempts else 0.0
-        success_rate = total_successes / total_attempts if total_attempts else 0.0
+        waste_rate = empty / attempts if attempts else 0.0
+        success_rate = successes / attempts if attempts else 0.0
 
-        cooldown_hours = self._resolve_cooldown_hours(
+        cooldown_minutes = self._resolve_cooldown_minutes(
+            data_type=data_type,
             waste_rate=waste_rate,
             success_rate=success_rate,
-            total_attempts=total_attempts,
-        )
-
-        last_attempted_at = self._latest_datetime(
-            row["last_odds_attempted_at"],
-            row["last_stats_attempted_at"],
+            attempts=attempts,
         )
 
         cooldown_active = False
+        cooldown_until = None
 
-        if cooldown_hours > 0 and last_attempted_at is not None:
-            cooldown_until = last_attempted_at + timedelta(hours=cooldown_hours)
+        if cooldown_minutes > 0 and last_attempted_at is not None:
+            cooldown_until = last_attempted_at + timedelta(minutes=cooldown_minutes)
             cooldown_active = datetime.utcnow() < cooldown_until
-        else:
-            cooldown_until = None
 
         return {
             "league": league,
+            "data_type": data_type,
             "cooldown_active": cooldown_active,
-            "cooldown_hours": cooldown_hours,
+            "cooldown_minutes": cooldown_minutes,
+            "cooldown_hours": round(cooldown_minutes / 60, 2),
             "cooldown_until": cooldown_until.isoformat() if cooldown_until else None,
             "reason": self._reason(
+                data_type=data_type,
                 waste_rate=waste_rate,
                 success_rate=success_rate,
-                cooldown_hours=cooldown_hours,
+                cooldown_minutes=cooldown_minutes,
             ),
             "score": round(success_rate - waste_rate, 4),
+            "attempts": attempts,
+            "successes": successes,
+            "empty": empty,
             "waste_rate": round(waste_rate, 4),
             "success_rate": round(success_rate, 4),
-            "total_attempts": total_attempts,
-            "total_successes": total_successes,
-            "total_empty": total_empty,
-            "odds_attempts": odds_attempts,
-            "odds_successes": odds_successes,
-            "odds_empty": odds_empty,
-            "stats_attempts": stats_attempts,
-            "stats_successes": stats_successes,
-            "stats_empty": stats_empty,
         }
 
-    def build_cooldown_report(self, limit: int = 50) -> dict[str, Any]:
+    def build_cooldown_report(
+        self,
+        limit: int = 50,
+        data_type: str = "odds",
+    ) -> dict[str, Any]:
         since = datetime.utcnow() - timedelta(days=self.lookback_days)
 
         rows = self.session.execute(
@@ -185,7 +185,10 @@ class LeagueCooldownService:
         ).mappings().all()
 
         leagues = [
-            self.get_league_cooldown_status(row["league"])
+            self.get_league_cooldown_status(
+                row["league"],
+                data_type=data_type,
+            )
             for row in rows
         ]
 
@@ -193,7 +196,7 @@ class LeagueCooldownService:
             key=lambda item: (
                 item.get("cooldown_active", False),
                 item.get("waste_rate", 0.0),
-                item.get("total_attempts", 0),
+                item.get("attempts", 0),
             ),
             reverse=True,
         )
@@ -201,19 +204,34 @@ class LeagueCooldownService:
         return {
             "lookback_days": self.lookback_days,
             "min_attempts": self.min_attempts,
+            "data_type": data_type,
             "generated_at": datetime.utcnow().isoformat(),
             "leagues": leagues,
         }
 
-    def should_skip_league(self, league: str | None) -> bool:
-        status = self.get_league_cooldown_status(league)
+    def should_skip_league(
+        self,
+        league: str | None,
+        data_type: str = "odds",
+    ) -> bool:
+        status = self.get_league_cooldown_status(
+            league,
+            data_type=data_type,
+        )
         return bool(status["cooldown_active"])
 
-    def league_score_adjustment(self, league: str | None) -> float:
-        status = self.get_league_cooldown_status(league)
+    def league_score_adjustment(
+        self,
+        league: str | None,
+        data_type: str = "odds",
+    ) -> float:
+        status = self.get_league_cooldown_status(
+            league,
+            data_type=data_type,
+        )
 
         if status["cooldown_active"]:
-            return -1.0
+            return -0.55 if data_type == "odds" else -1.0
 
         success_rate = float(status.get("success_rate", 0.0) or 0.0)
         waste_rate = float(status.get("waste_rate", 0.0) or 0.0)
@@ -225,61 +243,87 @@ class LeagueCooldownService:
             return 0.10
 
         if waste_rate >= 0.90:
-            return -0.35
+            return -0.20 if data_type == "odds" else -0.35
 
         if waste_rate >= 0.80:
-            return -0.25
+            return -0.12 if data_type == "odds" else -0.25
 
         if waste_rate >= 0.65:
-            return -0.12
+            return -0.05 if data_type == "odds" else -0.12
 
         return 0.0
 
-    def _resolve_cooldown_hours(
+    def _resolve_cooldown_minutes(
         self,
+        data_type: str,
         waste_rate: float,
         success_rate: float,
-        total_attempts: int,
+        attempts: int,
     ) -> int:
-        if total_attempts < self.min_attempts:
+        if attempts < self.min_attempts:
             return 0
 
         if success_rate >= 0.50:
             return 0
 
+        if data_type == "odds":
+            if waste_rate >= 0.95:
+                return 180
+
+            if waste_rate >= 0.90:
+                return 120
+
+            if waste_rate >= 0.80:
+                return 90
+
+            if waste_rate >= 0.65:
+                return 45
+
+            return 0
+
         if waste_rate >= 0.95:
-            return 72
+            return 1440
 
         if waste_rate >= 0.90:
-            return 48
+            return 720
 
         if waste_rate >= 0.80:
-            return 24
+            return 360
 
         if waste_rate >= 0.65:
-            return 12
+            return 180
 
         return 0
 
     def _reason(
         self,
+        data_type: str,
         waste_rate: float,
         success_rate: float,
-        cooldown_hours: int,
+        cooldown_minutes: int,
     ) -> str:
-        if cooldown_hours <= 0:
+        if cooldown_minutes <= 0:
             return "league allowed"
 
         return (
-            f"temporary cooldown: waste_rate={round(waste_rate, 4)}, "
+            f"temporary {data_type} cooldown: "
+            f"waste_rate={round(waste_rate, 4)}, "
             f"success_rate={round(success_rate, 4)}, "
-            f"cooldown_hours={cooldown_hours}"
+            f"cooldown_minutes={cooldown_minutes}"
         )
 
-    def _latest_datetime(self, *values):
-        clean_values = [value for value in values if value is not None]
-
-        if not clean_values:
-            return None
-
-        return max(clean_values)
+    def _allowed(
+        self,
+        league: str | None,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "league": league,
+            "data_type": "odds",
+            "cooldown_active": False,
+            "cooldown_minutes": 0,
+            "cooldown_hours": 0,
+            "cooldown_until": None,
+            "reason": reason,
+            "score": 0.0,
+        }

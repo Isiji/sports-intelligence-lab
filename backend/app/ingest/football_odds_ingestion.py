@@ -9,9 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Match, MatchOdds, ProviderSyncLog
 from app.ingest.api_football_client import ApiFootballClient
 from app.ingest.odds_mapping import extract_line_value, normalize_market_selection
-from app.services.odds_ingestion_priority_service import (
-    OddsIngestionPriorityService,
-)
+from app.services.odds_ingestion_priority_service import OddsIngestionPriorityService
 
 
 MAX_ODDS_ATTEMPTS = 3
@@ -35,7 +33,6 @@ def ingest_odds_for_fixture(
     if existing_odds_count > 0 and not force:
         match.has_odds = True
         match.odds_unavailable = False
-
         session.commit()
 
         return {
@@ -96,16 +93,11 @@ def ingest_odds_for_fixture(
     unmapped_examples: list[dict[str, Any]] = []
 
     try:
-        payload = client.get_odds_by_fixture(
-            str(match.provider_fixture_id)
-        )
-
+        payload = client.get_odds_by_fixture(str(match.provider_fixture_id))
         responses = payload.get("response", [])
 
         if not isinstance(responses, list):
-            raise ValueError(
-                "API response field 'response' is not a list."
-            )
+            raise ValueError("API response field 'response' is not a list.")
 
         if len(responses) == 0:
             match.has_odds = False
@@ -151,13 +143,8 @@ def ingest_odds_for_fixture(
                         records_received += 1
 
                         provider_selection = value_item.get("value") or ""
-                        odds_value = _safe_float(
-                            value_item.get("odd")
-                        )
-
-                        line_value = extract_line_value(
-                            provider_selection
-                        )
+                        odds_value = _safe_float(value_item.get("odd"))
+                        line_value = extract_line_value(provider_selection)
 
                         if odds_value is None:
                             records_skipped += 1
@@ -260,7 +247,6 @@ def ingest_odds_for_upcoming_matches(
         conditions.extend(
             [
                 Match.has_odds.is_(False),
-                Match.odds_unavailable.is_(False),
                 Match.odds_attempt_count < MAX_ODDS_ATTEMPTS,
             ]
         )
@@ -285,78 +271,43 @@ def ingest_odds_for_finished_matches(
     session: Session,
     limit: int = 50,
     force: bool = False,
-) -> dict[str, Any]:
-    conditions = [
-        Match.provider == "api-football",
-        Match.provider_fixture_id.isnot(None),
-        Match.is_finished.is_(True),
-        Match.is_cancelled.is_(False),
-        Match.is_postponed.is_(False),
-        Match.home_goals.isnot(None),
-        Match.away_goals.isnot(None),
-    ]
-
-    if not force:
-        conditions.extend(
-            [
-                Match.has_odds.is_(False),
-                Match.odds_unavailable.is_(False),
-                Match.odds_attempt_count < MAX_ODDS_ATTEMPTS,
-            ]
-        )
-
-    matches = list(
-        session.scalars(
-            select(Match)
-            .where(*conditions)
-            .order_by(Match.kickoff_datetime.desc().nulls_last())
-            .limit(limit)
-        )
-    )
-
-    return _ingest_odds_for_matches(
-        session=session,
-        matches=matches,
-        force=force,
-    )
-
-def ingest_historical_odds_for_season(
-    session: Session,
-    season: int,
-    limit: int = 500,
-    force: bool = False,
-    max_attempts: int = 3,
+    season: int | None = None,
+    recent_hours: int | None = None,
+    max_age_days: int = 14,
     require_stats: bool = True,
+    max_attempts: int = MAX_ODDS_ATTEMPTS,
 ) -> dict[str, Any]:
+    now = datetime.utcnow()
 
     conditions = [
         Match.provider == "api-football",
         Match.provider_fixture_id.isnot(None),
-
-        Match.season == season,
-
         Match.is_finished.is_(True),
         Match.is_cancelled.is_(False),
         Match.is_postponed.is_(False),
-
         Match.home_goals.isnot(None),
         Match.away_goals.isnot(None),
     ]
 
-    # =====================================================
-    # PRIORITIZE MATCHES THAT ALREADY HAVE STATS
-    # =====================================================
+    if season is not None:
+        conditions.append(Match.season == season)
 
     if require_stats:
+        conditions.append(Match.has_stats.is_(True))
+
+    if recent_hours is not None:
         conditions.append(
-            Match.has_stats.is_(True)
+            Match.kickoff_datetime >= now - timedelta(hours=int(recent_hours))
+        )
+    elif max_age_days > 0:
+        conditions.append(
+            Match.kickoff_datetime >= now - timedelta(days=int(max_age_days))
         )
 
     if not force:
         conditions.extend(
             [
                 Match.has_odds.is_(False),
-
                 Match.odds_attempt_count < max_attempts,
             ]
         )
@@ -378,6 +329,64 @@ def ingest_historical_odds_for_season(
         matches=matches,
         force=force,
     )
+
+
+def ingest_historical_odds_for_season(
+    session: Session,
+    season: int,
+    limit: int = 500,
+    force: bool = False,
+    max_attempts: int = 3,
+    require_stats: bool = True,
+    max_age_days: int = 0,
+) -> dict[str, Any]:
+    now = datetime.utcnow()
+
+    conditions = [
+        Match.provider == "api-football",
+        Match.provider_fixture_id.isnot(None),
+        Match.season == season,
+        Match.is_finished.is_(True),
+        Match.is_cancelled.is_(False),
+        Match.is_postponed.is_(False),
+        Match.home_goals.isnot(None),
+        Match.away_goals.isnot(None),
+    ]
+
+    if require_stats:
+        conditions.append(Match.has_stats.is_(True))
+
+    if max_age_days > 0:
+        conditions.append(
+            Match.kickoff_datetime >= now - timedelta(days=int(max_age_days))
+        )
+
+    if not force:
+        conditions.extend(
+            [
+                Match.has_odds.is_(False),
+                Match.odds_attempt_count < max_attempts,
+            ]
+        )
+
+    matches = list(
+        session.scalars(
+            select(Match)
+            .where(*conditions)
+            .order_by(
+                Match.has_stats.desc(),
+                Match.kickoff_datetime.desc().nulls_last(),
+            )
+            .limit(limit)
+        )
+    )
+
+    return _ingest_odds_for_matches(
+        session=session,
+        matches=matches,
+        force=force,
+    )
+
 
 def ingest_odds_for_prediction_slate(
     session: Session,
@@ -408,9 +417,7 @@ def ingest_odds_priority(
     force: bool = False,
     max_attempts: int = 3,
 ) -> dict[str, Any]:
-    priority_service = OddsIngestionPriorityService(
-        session=session
-    )
+    priority_service = OddsIngestionPriorityService(session=session)
 
     candidates = priority_service.get_candidates(
         mode="priority",
@@ -442,9 +449,7 @@ def ingest_odds_rotation(
     max_attempts: int = 3,
     rotation_offset: int = 0,
 ) -> dict[str, Any]:
-    priority_service = OddsIngestionPriorityService(
-        session=session
-    )
+    priority_service = OddsIngestionPriorityService(session=session)
 
     candidates = priority_service.get_candidates(
         mode="rotation",
@@ -476,9 +481,7 @@ def ingest_odds_rich_leagues(
     force: bool = False,
     max_attempts: int = 3,
 ) -> dict[str, Any]:
-    priority_service = OddsIngestionPriorityService(
-        session=session
-    )
+    priority_service = OddsIngestionPriorityService(session=session)
 
     candidates = priority_service.get_candidates(
         mode="rich_leagues",
@@ -510,9 +513,7 @@ def ingest_odds_all_leagues_rotation(
     max_attempts: int = 3,
     rotation_offset: int = 0,
 ) -> dict[str, Any]:
-    priority_service = OddsIngestionPriorityService(
-        session=session
-    )
+    priority_service = OddsIngestionPriorityService(session=session)
 
     candidates = priority_service.get_candidates(
         mode="all_leagues_rotation",
@@ -545,23 +546,15 @@ def _load_matches_from_candidates(
     if not candidates:
         return []
 
-    match_ids = [
-        candidate.match_id
-        for candidate in candidates
-    ]
+    match_ids = [candidate.match_id for candidate in candidates]
 
     rows = list(
         session.scalars(
-            select(Match).where(
-                Match.id.in_(match_ids)
-            )
+            select(Match).where(Match.id.in_(match_ids))
         )
     )
 
-    match_map = {
-        match.id: match
-        for match in rows
-    }
+    match_map = {match.id: match for match in rows}
 
     ordered_matches: list[Match] = []
 
@@ -605,30 +598,18 @@ def _ingest_odds_for_matches(
                 continue
 
             processed += 1
-
-            inserted += int(
-                result["records_inserted"]
-            )
-
-            skipped += int(
-                result["records_skipped"]
-            )
+            inserted += int(result["records_inserted"])
+            skipped += int(result["records_skipped"])
 
             if result.get("odds_unavailable"):
                 unavailable += 1
 
-            for example in result.get(
-                "unmapped_examples",
-                [],
-            ):
+            for example in result.get("unmapped_examples", []):
                 if len(unmapped_examples) < 30:
-                    unmapped_examples.append(
-                        example
-                    )
+                    unmapped_examples.append(example)
 
         except Exception as exc:
             failed += 1
-
             session.rollback()
 
             if len(failures) < 20:
@@ -662,6 +643,8 @@ def _odds_ingestion_eligibility(
     match: Match,
     force: bool = False,
 ) -> dict[str, Any]:
+    now = datetime.utcnow()
+
     if match.provider != "api-football":
         return {
             "eligible": False,
@@ -692,28 +675,83 @@ def _odds_ingestion_eligibility(
             "reason": "match already has odds",
         }
 
-    if (
-        getattr(match, "odds_unavailable", False)
-        and not force
-    ):
+    if force:
         return {
-            "eligible": False,
-            "reason": "odds previously unavailable",
+            "eligible": True,
+            "reason": "forced",
         }
 
-    if (
-        int(getattr(match, "odds_attempt_count", 0) or 0)
-        >= MAX_ODDS_ATTEMPTS
-        and not force
-    ):
+    attempt_count = int(getattr(match, "odds_attempt_count", 0) or 0)
+    odds_unavailable = bool(getattr(match, "odds_unavailable", False))
+    last_attempted_at = getattr(match, "odds_attempted_at", None)
+
+    if attempt_count >= MAX_ODDS_ATTEMPTS:
         return {
             "eligible": False,
             "reason": "max odds attempts reached",
         }
 
+    if not odds_unavailable:
+        return {
+            "eligible": True,
+            "reason": "not previously unavailable",
+        }
+
+    if last_attempted_at is None:
+        return {
+            "eligible": True,
+            "reason": "retry allowed no previous timestamp",
+        }
+
+    if not match.is_finished:
+        if match.kickoff_datetime is None:
+            return {
+                "eligible": False,
+                "reason": "upcoming match missing kickoff datetime",
+            }
+
+        hours_to_kickoff = (
+            match.kickoff_datetime - now
+        ).total_seconds() / 3600
+
+        if hours_to_kickoff <= 6:
+            retry_minutes = 30
+        elif hours_to_kickoff <= 24:
+            retry_minutes = 60
+        elif hours_to_kickoff <= 72:
+            retry_minutes = 120
+        else:
+            retry_minutes = 180
+
+        next_retry_at = last_attempted_at + timedelta(minutes=retry_minutes)
+
+        if now >= next_retry_at:
+            return {
+                "eligible": True,
+                "reason": f"retry allowed upcoming after {retry_minutes} minute cooldown",
+            }
+
+        return {
+            "eligible": False,
+            "reason": f"upcoming retry cooldown active until {next_retry_at.isoformat()}",
+        }
+
+    retry_hours = 6
+
+    if attempt_count >= 2:
+        retry_hours = 12
+
+    next_retry_at = last_attempted_at + timedelta(hours=retry_hours)
+
+    if now >= next_retry_at:
+        return {
+            "eligible": True,
+            "reason": f"retry allowed finished after {retry_hours} hour cooldown",
+        }
+
     return {
-        "eligible": True,
-        "reason": "eligible",
+        "eligible": False,
+        "reason": f"finished retry cooldown active until {next_retry_at.isoformat()}",
     }
 
 
@@ -737,9 +775,7 @@ def _safe_float(value: Any) -> float | None:
         if value is None:
             return None
 
-        return float(
-            str(value).replace(",", ".")
-        )
+        return float(str(value).replace(",", "."))
 
     except (TypeError, ValueError):
         return None

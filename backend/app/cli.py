@@ -2,7 +2,7 @@ import typer
 
 from datetime import date
 
-
+from app.ingest.api_football_client import ApiFootballClient
 from app.backtest.portfolio_profiles import run_portfolio_profiles
 from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
@@ -495,15 +495,61 @@ def live_rejection_report(
 def ingest_odds_finished(
     limit: int = typer.Option(50, help="Number of finished matches to fetch odds for."),
     force: bool = typer.Option(False, help="Retry even if odds were already attempted/unavailable."),
+    season: int | None = typer.Option(None, "--season"),
+    recent_hours: int | None = typer.Option(None, "--recent-hours"),
+    max_age_days: int = typer.Option(14, "--max-age-days"),
+    require_stats: bool = typer.Option(
+        True,
+        "--require-stats/--allow-no-stats",
+    ),
+    max_attempts: int = typer.Option(3, "--max-attempts"),
 ) -> None:
     with get_cli_session() as session:
         result = ingest_odds_for_finished_matches(
             session=session,
             limit=limit,
             force=force,
+            season=season,
+            recent_hours=recent_hours,
+            max_age_days=max_age_days,
+            require_stats=require_stats,
+            max_attempts=max_attempts,
         )
 
     typer.echo(result)
+
+@app.command("search-leagues")
+def search_leagues(
+    name: str = typer.Argument(...),
+    season: int | None = typer.Option(None, "--season"),
+):
+    session = get_cli_session()
+
+    try:
+        client = ApiFootballClient(session=session)
+
+        payload = client.search_leagues(
+            search=name,
+            season=season,
+        )
+
+        responses = payload.get("response", [])
+
+        for item in responses:
+            league = item.get("league") or {}
+            country = item.get("country") or {}
+
+            print(
+                {
+                    "league_id": league.get("id"),
+                    "league_name": league.get("name"),
+                    "type": league.get("type"),
+                    "country": country.get("name"),
+                }
+            )
+
+    finally:
+        session.close()
 
 @app.command("league-survivability-report")
 def league_survivability_report_command(
@@ -1841,7 +1887,172 @@ def settle_production_predictions_command(
 
     finally:
         session.close()
-        
+
+@app.command("ingest-league-by-search")
+def ingest_league_by_search(
+    name: str = typer.Argument(...),
+    season: int = typer.Option(..., "--season"),
+    limit: int = typer.Option(5, "--limit"),
+    status: str | None = typer.Option(None, "--status"),
+):
+    session = get_cli_session()
+
+    try:
+        client = ApiFootballClient(session=session)
+
+        payload = client.search_leagues(
+            search=name,
+            season=season,
+        )
+
+        responses = payload.get("response", [])
+
+        if not responses:
+            print({"status": "not_found", "search": name, "season": season})
+            return
+
+        selected = []
+
+        for item in responses[:limit]:
+            league = item.get("league") or {}
+            country = item.get("country") or {}
+
+            league_id = league.get("id")
+            league_name = league.get("name")
+
+            if league_id is None:
+                continue
+
+            print(
+                {
+                    "selected_league_id": league_id,
+                    "league_name": league_name,
+                    "country": country.get("name"),
+                    "season": season,
+                }
+            )
+
+            result = ingest_fixtures_for_league_season(
+                session=session,
+                league_id=int(league_id),
+                season=season,
+                status=status,
+            )
+
+            selected.append(
+                {
+                    "league_id": league_id,
+                    "league_name": league_name,
+                    "result": result,
+                }
+            )
+
+        print(
+            {
+                "status": "done",
+                "search": name,
+                "season": season,
+                "leagues_ingested": selected,
+            }
+        )
+
+    finally:
+        session.close()
+
+@app.command("find-leagues-season")
+def find_leagues_season(
+    keyword: str = typer.Argument(...),
+    season: int = typer.Option(..., "--season"),
+    limit: int = typer.Option(30, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        client = ApiFootballClient(session=session)
+        payload = client.get_leagues_by_season(season=season)
+
+        rows = payload.get("response", [])
+        keyword_lower = keyword.lower()
+
+        matches = []
+
+        for item in rows:
+            league = item.get("league") or {}
+            country = item.get("country") or {}
+
+            league_name = league.get("name") or ""
+            country_name = country.get("name") or ""
+
+            haystack = f"{league_name} {country_name}".lower()
+
+            if keyword_lower in haystack:
+                matches.append(
+                    {
+                        "league_id": league.get("id"),
+                        "league_name": league_name,
+                        "type": league.get("type"),
+                        "country": country_name,
+                        "season": season,
+                    }
+                )
+
+        print(
+            {
+                "keyword": keyword,
+                "season": season,
+                "matches_found": len(matches),
+                "matches": matches[:limit],
+            }
+        )
+
+    finally:
+        session.close()
+
+@app.command("search-db-leagues")
+def search_db_leagues(
+    keyword: str = typer.Argument(...),
+    season: int | None = typer.Option(None, "--season"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        sql = """
+            SELECT
+                league,
+                season,
+                COUNT(*) AS matches,
+                COUNT(*) FILTER (WHERE has_stats = true) AS with_stats,
+                COUNT(*) FILTER (WHERE has_odds = true) AS with_odds,
+                MIN(kickoff_date) AS first_match,
+                MAX(kickoff_date) AS last_match
+            FROM matches
+            WHERE LOWER(league) LIKE :keyword
+        """
+
+        params = {"keyword": f"%{keyword.lower()}%"}
+
+        if season is not None:
+            sql += " AND season = :season"
+            params["season"] = season
+
+        sql += """
+            GROUP BY league, season
+            ORDER BY season DESC, matches DESC
+            LIMIT :limit
+        """
+
+        params["limit"] = limit
+
+        rows = session.execute(text(sql), params).mappings().all()
+
+        for row in rows:
+            print(dict(row))
+
+    finally:
+        session.close()
+
+
 @app.command("confidence-band-profitability-fast")
 def cli_confidence_band_profitability_fast(
     market: str | None = typer.Option(None),
@@ -2310,6 +2521,16 @@ def ingest_ecosystem_odds(
         True,
         "--require-stats-for-finished/--no-require-stats-for-finished",
     ),
+    max_age_days: int = typer.Option(
+        14,
+        "--max-age-days",
+        help="For finished/all mode: only retry finished matches this recent.",
+    ),
+    recent_hours: int | None = typer.Option(
+        None,
+        "--recent-hours",
+        help="For finished mode: only fetch finished matches from last N hours.",
+    ),
 ):
     session = get_cli_session()
 
@@ -2323,15 +2544,16 @@ def ingest_ecosystem_odds(
             use_league_cooldown=use_league_cooldown,
             odds_window_hours=odds_window_hours,
             require_stats_for_finished=require_stats_for_finished,
+            max_age_days=max_age_days,
+            recent_hours=recent_hours,
         )
 
         result = orchestrator.run()
-
         print(result)
 
     finally:
         session.close()
-        
+
 @app.command("ingest-odds-rich-leagues")
 def ingest_odds_rich_leagues_command(
     limit: int = typer.Option(
