@@ -7,7 +7,7 @@ from app.backtest.portfolio_profiles import run_portfolio_profiles
 from app.backtest.evaluate import evaluate_slate_by_group
 from app.backtest.settle import settle_and_score
 from app.db.session import get_cli_session, SessionLocal
-from sqlalchemy import text
+from sqlalchemy import text, select
 from app.utils.slate import resolve_slate
 from app.grouping.create_groups import group_predictions
 from app.ingest.demo_results import simulate_demo_results
@@ -82,7 +82,9 @@ from app.backtest.calibration import (
 )
 
 from app.services.league_cooldown_service import LeagueCooldownService
-
+from app.db.models import Match
+from app.ingest.football_stats_ingestion import ingest_fixture_statistics
+from app.ingest.football_odds_ingestion import ingest_odds_for_fixture
 from app.services.prediction_settlement_service import (
     settle_production_predictions,
 )
@@ -2048,6 +2050,173 @@ def search_db_leagues(
 
         for row in rows:
             print(dict(row))
+
+    finally:
+        session.close()
+
+@app.command("ingest-stats-league")
+def ingest_stats_league(
+    league: str = typer.Argument(...),
+    season: int = typer.Option(..., "--season"),
+    limit: int = typer.Option(500, "--limit"),
+    force: bool = typer.Option(False, "--force"),
+):
+    session = get_cli_session()
+
+    try:
+        rows = session.scalars(
+            select(Match)
+            .where(
+                Match.league == league,
+                Match.season == season,
+                Match.provider == "api-football",
+                Match.provider_fixture_id.isnot(None),
+                Match.is_finished.is_(True),
+                Match.is_cancelled.is_(False),
+                Match.is_postponed.is_(False),
+                Match.home_goals.isnot(None),
+                Match.away_goals.isnot(None),
+            )
+            .order_by(
+                Match.has_stats.asc(),
+                Match.kickoff_datetime.desc().nulls_last(),
+            )
+            .limit(limit)
+        ).all()
+
+        processed = 0
+        skipped = 0
+        unavailable = 0
+        failed = 0
+        sample = []
+
+        for match in rows:
+            try:
+                result = ingest_fixture_statistics(
+                    session=session,
+                    match_id=match.id,
+                    force=force,
+                )
+
+                if len(sample) < 10:
+                    sample.append(result)
+
+                if result.get("skipped"):
+                    skipped += 1
+                elif result.get("has_stats"):
+                    processed += 1
+                elif result.get("stats_unavailable"):
+                    unavailable += 1
+
+            except Exception as exc:
+                failed += 1
+                session.rollback()
+
+                if "Daily API safety limit reached" in str(exc):
+                    break
+
+        print(
+            {
+                "league": league,
+                "season": season,
+                "matches_found": len(rows),
+                "processed": processed,
+                "skipped": skipped,
+                "unavailable": unavailable,
+                "failed": failed,
+                "sample": sample,
+            }
+        )
+
+    finally:
+        session.close()
+
+@app.command("ingest-odds-league")
+def ingest_odds_league(
+    league: str = typer.Argument(...),
+    season: int = typer.Option(..., "--season"),
+    limit: int = typer.Option(500, "--limit"),
+    force: bool = typer.Option(False, "--force"),
+    require_stats: bool = typer.Option(
+        True,
+        "--require-stats/--allow-no-stats",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        conditions = [
+            Match.league == league,
+            Match.season == season,
+            Match.provider == "api-football",
+            Match.provider_fixture_id.isnot(None),
+            Match.is_cancelled.is_(False),
+            Match.is_postponed.is_(False),
+            Match.has_odds.is_(False),
+        ]
+
+        if require_stats:
+            conditions.append(Match.has_stats.is_(True))
+
+        rows = session.scalars(
+            select(Match)
+            .where(*conditions)
+            .order_by(
+                Match.is_finished.desc(),
+                Match.has_stats.desc(),
+                Match.kickoff_datetime.desc().nulls_last(),
+            )
+            .limit(limit)
+        ).all()
+
+        processed = 0
+        inserted = 0
+        skipped = 0
+        unavailable = 0
+        failed = 0
+        sample = []
+
+        for match in rows:
+            try:
+                result = ingest_odds_for_fixture(
+                    session=session,
+                    match_id=match.id,
+                    force=force,
+                )
+
+                if len(sample) < 10:
+                    sample.append(result)
+
+                if result.get("status") == "skipped":
+                    skipped += 1
+                    continue
+
+                processed += 1
+                inserted += int(result.get("records_inserted", 0) or 0)
+
+                if result.get("odds_unavailable"):
+                    unavailable += 1
+
+            except Exception as exc:
+                failed += 1
+                session.rollback()
+
+                if "Daily API safety limit reached" in str(exc):
+                    break
+
+        print(
+            {
+                "league": league,
+                "season": season,
+                "matches_found": len(rows),
+                "processed": processed,
+                "odds_inserted": inserted,
+                "skipped": skipped,
+                "unavailable": unavailable,
+                "failed": failed,
+                "sample": sample,
+            }
+        )
 
     finally:
         session.close()
