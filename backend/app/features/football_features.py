@@ -10,6 +10,16 @@ K_FACTOR = 32.0
 HOME_ADVANTAGE_ELO = 60.0
 
 
+TOURNAMENT_KNOCKOUT_STAGES = {
+    "knockout",
+    "round_of_16",
+    "quarterfinal",
+    "semifinal",
+    "final",
+    "playoff",
+}
+
+
 def feature_columns() -> list[str]:
     return [
         "home_win_rate",
@@ -70,6 +80,16 @@ def feature_columns() -> list[str]:
         "league_over_2_5_rate",
         "league_avg_corners",
         "league_avg_sot",
+
+        "is_international",
+        "is_neutral_venue",
+        "is_knockout",
+        "is_final",
+        "is_semifinal",
+        "is_qualifier",
+        "is_friendly",
+        "competition_priority",
+        "tournament_pressure_score",
     ]
 
 
@@ -180,6 +200,13 @@ def load_training_frame(session: Session) -> pd.DataFrame:
             m.away_goals,
             m.has_stats,
 
+            COALESCE(m.is_international, false) AS is_international,
+            COALESCE(m.is_neutral_venue, false) AS is_neutral_venue,
+            COALESCE(m.tournament_type, 'league') AS tournament_type,
+            COALESCE(m.tournament_stage, 'regular') AS tournament_stage,
+            COALESCE(m.competition_priority, 0) AS competition_priority,
+            COALESCE(m.tournament_pressure_score, 0) AS tournament_pressure_score,
+
             COALESCE(hs.corners, 0) AS home_corners,
             COALESCE(as1.corners, 0) AS away_corners,
             COALESCE(hs.shots_on_target, 0) AS home_sot,
@@ -221,6 +248,14 @@ def load_training_frame(session: Session) -> pd.DataFrame:
 
     for _, row in rows.iterrows():
         payload = row["features_json"] or {}
+        tournament_features = _resolve_tournament_features(
+            is_international=row["is_international"],
+            is_neutral_venue=row["is_neutral_venue"],
+            tournament_type=row["tournament_type"],
+            tournament_stage=row["tournament_stage"],
+            competition_priority=row["competition_priority"],
+            tournament_pressure_score=row["tournament_pressure_score"],
+        )
 
         item = {
             "match_id": row["match_id"],
@@ -235,9 +270,14 @@ def load_training_frame(session: Session) -> pd.DataFrame:
             "away_corners": row["away_corners"],
             "home_sot": row["home_sot"],
             "away_sot": row["away_sot"],
+            **tournament_features,
         }
 
         item.update(payload)
+
+        for key, value in tournament_features.items():
+            item[key] = value
+
         feature_rows.append(item)
 
     df = pd.DataFrame(feature_rows)
@@ -365,9 +405,11 @@ def _apply_persistent_elo_for_upcoming(
             df.at[i, "away_defense_elo"] = float(away_rating["defense_elo"])
             df.at[i, "away_elo_form"] = float(away_rating["form_elo"])
 
+        home_advantage = 0.0 if bool(row.get("is_neutral_venue")) else HOME_ADVANTAGE_ELO
+
         df.at[i, "elo_diff"] = (
             float(df.at[i, "home_elo"])
-            + HOME_ADVANTAGE_ELO
+            + home_advantage
             - float(df.at[i, "away_elo"])
         )
 
@@ -401,6 +443,13 @@ def _base_query(session: Session):
             m.has_stats,
             m.has_odds,
             m.odds_unavailable,
+
+            COALESCE(m.is_international, false) AS is_international,
+            COALESCE(m.is_neutral_venue, false) AS is_neutral_venue,
+            COALESCE(m.tournament_type, 'league') AS tournament_type,
+            COALESCE(m.tournament_stage, 'regular') AS tournament_stage,
+            COALESCE(m.competition_priority, 0) AS competition_priority,
+            COALESCE(m.tournament_pressure_score, 0) AS tournament_pressure_score,
 
             COALESCE(hs.shots_on_target, 0) AS home_sot,
             COALESCE(hs.corners, 0) AS home_corners,
@@ -465,6 +514,19 @@ def _base_query(session: Session):
         df["kickoff_date"],
         errors="coerce",
     )
+
+    for index, row in df.iterrows():
+        tournament_features = _resolve_tournament_features(
+            is_international=row.get("is_international"),
+            is_neutral_venue=row.get("is_neutral_venue"),
+            tournament_type=row.get("tournament_type"),
+            tournament_stage=row.get("tournament_stage"),
+            competition_priority=row.get("competition_priority"),
+            tournament_pressure_score=row.get("tournament_pressure_score"),
+        )
+
+        for key, value in tournament_features.items():
+            df.at[index, key] = value
 
     return df.reset_index(drop=True)
 
@@ -563,6 +625,18 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         away = row["away_team"]
         date = row["kickoff_date"]
 
+        tournament_features = _resolve_tournament_features(
+            is_international=row.get("is_international"),
+            is_neutral_venue=row.get("is_neutral_venue"),
+            tournament_type=row.get("tournament_type"),
+            tournament_stage=row.get("tournament_stage"),
+            competition_priority=row.get("competition_priority"),
+            tournament_pressure_score=row.get("tournament_pressure_score"),
+        )
+
+        for key, value in tournament_features.items():
+            df.at[i, key] = value
+
         league_hist = _league_history(df, row["league"], date)
         league_profile = _league_profile(league_hist)
 
@@ -581,9 +655,11 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         home_elo_form = _elo_form(elo_history.get(home, []), home_elo)
         away_elo_form = _elo_form(elo_history.get(away, []), away_elo)
 
+        home_advantage = 0.0 if bool(tournament_features["is_neutral_venue"]) else HOME_ADVANTAGE_ELO
+
         df.at[i, "home_elo"] = home_elo
         df.at[i, "away_elo"] = away_elo
-        df.at[i, "elo_diff"] = (home_elo + HOME_ADVANTAGE_ELO) - away_elo
+        df.at[i, "elo_diff"] = (home_elo + home_advantage) - away_elo
 
         df.at[i, "home_elo_form"] = home_elo_form
         df.at[i, "away_elo_form"] = away_elo_form
@@ -635,6 +711,7 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
                 away_elo=away_elo,
                 home_goals=float(row["home_goals"]),
                 away_goals=float(row["away_goals"]),
+                home_advantage=home_advantage,
             )
 
             new_home_attack, new_away_defense = _update_attack_defense_elo(
@@ -664,6 +741,34 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.fillna(0.0)
 
 
+def _resolve_tournament_features(
+    *,
+    is_international,
+    is_neutral_venue,
+    tournament_type,
+    tournament_stage,
+    competition_priority,
+    tournament_pressure_score,
+) -> dict[str, float]:
+    stage = str(tournament_stage or "regular").lower().strip()
+    tournament = str(tournament_type or "league").lower().strip()
+
+    is_qualifier = stage == "qualifier" or tournament == "international_qualifier"
+    is_friendly = stage == "friendly" or tournament == "international_friendly"
+
+    return {
+        "is_international": float(bool(is_international)),
+        "is_neutral_venue": float(bool(is_neutral_venue)),
+        "is_knockout": float(stage in TOURNAMENT_KNOCKOUT_STAGES),
+        "is_final": float(stage == "final"),
+        "is_semifinal": float(stage == "semifinal"),
+        "is_qualifier": float(is_qualifier),
+        "is_friendly": float(is_friendly),
+        "competition_priority": _safe_float(competition_priority),
+        "tournament_pressure_score": _safe_float(tournament_pressure_score),
+    }
+
+
 def _elo_form(history: list[float], current_elo: float) -> float:
     if not history:
         return 0.0
@@ -678,8 +783,9 @@ def _update_result_elo(
     away_elo: float,
     home_goals: float,
     away_goals: float,
+    home_advantage: float = HOME_ADVANTAGE_ELO,
 ) -> tuple[float, float]:
-    adjusted_home = home_elo + HOME_ADVANTAGE_ELO
+    adjusted_home = home_elo + home_advantage
 
     expected_home = 1 / (1 + 10 ** ((away_elo - adjusted_home) / 400))
     expected_away = 1 - expected_home
@@ -963,6 +1069,18 @@ def build_upcoming_match_features(
         away = row["away_team"]
         league = row["league"]
 
+        tournament_features = _resolve_tournament_features(
+            is_international=row.get("is_international"),
+            is_neutral_venue=row.get("is_neutral_venue"),
+            tournament_type=row.get("tournament_type"),
+            tournament_stage=row.get("tournament_stage"),
+            competition_priority=row.get("competition_priority"),
+            tournament_pressure_score=row.get("tournament_pressure_score"),
+        )
+
+        for key, value in tournament_features.items():
+            upcoming_df.at[i, key] = value
+
         home_hist = historical_df[
             (historical_df["home_team"] == home)
             | (historical_df["away_team"] == home)
@@ -1054,3 +1172,12 @@ def _league_profile(hist: pd.DataFrame) -> dict[str, float]:
         "league_avg_corners": float(total_corners.mean()),
         "league_avg_sot": float(total_sot.mean()),
     }
+
+
+def _safe_float(value) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

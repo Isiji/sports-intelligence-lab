@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.services.tournament_context_service import resolve_tournament_context
 
 from app.db.models import (
     Competition,
@@ -252,6 +253,7 @@ def _upsert_fixture(
     teams_data = item.get("teams") or {}
     goals_data = item.get("goals") or {}
 
+
     fixture_id = fixture_data.get("id")
 
     if fixture_id is None:
@@ -297,6 +299,12 @@ def _upsert_fixture(
     )
 
     status_short = fixture_data.get("status", {}).get("short") or "scheduled"
+    tournament_context = resolve_tournament_context(
+        league_name=league_data.get("name"),
+        round_name=league_data.get("round"),
+        country_name=league_data.get("country"),
+    )
+
 
     match = session.scalar(
         select(Match).where(
@@ -344,6 +352,13 @@ def _upsert_fixture(
 
     match.status = status_short
     match.round_name = league_data.get("round")
+    match.is_international = tournament_context.is_international
+    match.is_neutral_venue = tournament_context.is_neutral_venue
+    match.tournament_type = tournament_context.tournament_type
+    match.tournament_stage = tournament_context.tournament_stage
+    match.competition_priority = tournament_context.competition_priority
+    match.tournament_pressure_score = tournament_context.tournament_pressure_score
+
 
     match.home_goals = goals_data.get("home")
     match.away_goals = goals_data.get("away")
@@ -606,4 +621,10 @@ def _match_state(match: Match) -> dict[str, Any]:
         "is_postponed": bool(match.is_postponed),
         "is_cancelled": bool(match.is_cancelled),
         "is_valid_for_training": bool(match.is_valid_for_training),
+        "is_international": bool(match.is_international),
+        "is_neutral_venue": bool(match.is_neutral_venue),
+        "tournament_type": match.tournament_type,
+        "tournament_stage": match.tournament_stage,
+        "competition_priority": match.competition_priority,
+        "tournament_pressure_score": match.tournament_pressure_score,
     }

@@ -86,6 +86,13 @@ class Match(Base):
     status: Mapped[str] = mapped_column(String(40), default="scheduled", index=True)
     round_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    is_international: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_neutral_venue: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    tournament_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    tournament_stage: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    competition_priority: Mapped[float] = mapped_column(Float, default=0.0)
+    tournament_pressure_score: Mapped[float] = mapped_column(Float, default=0.0)
+
     kickoff_datetime: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     is_finished: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -97,6 +104,7 @@ class Match(Base):
     is_valid_for_training: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     stats_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     stats_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     stats_unavailable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -104,7 +112,7 @@ class Match(Base):
     odds_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     odds_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     odds_unavailable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    
+        
 class TeamMatchStat(Base):
     __tablename__ = "team_match_stats"
 

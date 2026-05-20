@@ -3,6 +3,19 @@
 from app.features.football_features import feature_columns
 
 
+TOURNAMENT_FEATURES = [
+    "is_international",
+    "is_neutral_venue",
+    "is_knockout",
+    "is_final",
+    "is_semifinal",
+    "is_qualifier",
+    "is_friendly",
+    "competition_priority",
+    "tournament_pressure_score",
+]
+
+
 RESULT_FEATURES = [
     "home_win_rate",
     "away_win_rate",
@@ -31,7 +44,9 @@ RESULT_FEATURES = [
     "league_home_win_rate",
     "league_away_win_rate",
     "league_draw_rate",
+    *TOURNAMENT_FEATURES,
 ]
+
 
 GOAL_FEATURES = [
     "home_goals_for_avg",
@@ -57,7 +72,9 @@ GOAL_FEATURES = [
     "league_over_2_5_rate",
     "h2h_avg_goals",
     "h2h_over_2_5_rate",
+    *TOURNAMENT_FEATURES,
 ]
+
 
 CORNER_FEATURES = [
     "home_corner_avg",
@@ -71,7 +88,9 @@ CORNER_FEATURES = [
     "team_strength_diff",
     "league_avg_corners",
     "league_avg_sot",
+    *TOURNAMENT_FEATURES,
 ]
+
 
 SOT_FEATURES = [
     "home_sot_avg",
@@ -88,6 +107,7 @@ SOT_FEATURES = [
     "team_strength_diff",
     "league_avg_sot",
     "league_avg_goals",
+    *TOURNAMENT_FEATURES,
 ]
 
 
@@ -95,6 +115,7 @@ MARKET_FEATURES = {
     "home_win": RESULT_FEATURES,
     "away_win": RESULT_FEATURES,
     "draw": RESULT_FEATURES,
+
     "double_chance_1x": RESULT_FEATURES,
     "double_chance_x2": RESULT_FEATURES,
     "double_chance_12": RESULT_FEATURES,
@@ -105,12 +126,28 @@ MARKET_FEATURES = {
     "under_2_5_goals": GOAL_FEATURES,
     "over_3_5_goals": GOAL_FEATURES,
     "under_3_5_goals": GOAL_FEATURES,
+
     "btts_yes": GOAL_FEATURES,
     "btts_no": GOAL_FEATURES,
+
     "home_over_0_5_goals": GOAL_FEATURES,
     "away_over_0_5_goals": GOAL_FEATURES,
     "home_clean_sheet": GOAL_FEATURES,
     "away_clean_sheet": GOAL_FEATURES,
+
+    "draw_no_bet_home": RESULT_FEATURES,
+    "draw_no_bet_away": RESULT_FEATURES,
+    "home_win_to_nil": GOAL_FEATURES,
+    "away_win_to_nil": GOAL_FEATURES,
+
+    "asian_handicap_home_plus_0_5": RESULT_FEATURES,
+    "asian_handicap_away_plus_0_5": RESULT_FEATURES,
+    "asian_handicap_home_minus_0_5": RESULT_FEATURES,
+    "asian_handicap_away_minus_0_5": RESULT_FEATURES,
+    "asian_handicap_home_plus_1_5": RESULT_FEATURES,
+    "asian_handicap_away_plus_1_5": RESULT_FEATURES,
+    "asian_handicap_home_minus_1_5": RESULT_FEATURES,
+    "asian_handicap_away_minus_1_5": RESULT_FEATURES,
 
     "corners_over_8_5": CORNER_FEATURES,
     "shots_on_target_over_8_5": SOT_FEATURES,

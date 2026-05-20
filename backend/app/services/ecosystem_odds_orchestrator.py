@@ -12,11 +12,34 @@ from app.services.league_cooldown_service import LeagueCooldownService
 
 
 PRIORITY_WEIGHTS = {
-    "CORE_PRODUCTION": 1.25,
-    "HIGH_PRIORITY": 1.05,
-    "GROWTH_PRIORITY": 0.82,
-    "EXPLORATION_PRIORITY": 0.42,
-    "DISCOVERY_ROTATION": 0.08,
+    "CORE_PRODUCTION": 1.35,
+    "HIGH_PRIORITY": 1.15,
+    "GROWTH_PRIORITY": 0.90,
+    "EXPLORATION_PRIORITY": 0.48,
+    "DISCOVERY_ROTATION": 0.10,
+}
+
+
+TOURNAMENT_STAGE_WEIGHTS = {
+    "final": 0.70,
+    "semifinal": 0.55,
+    "quarterfinal": 0.42,
+    "round_of_16": 0.30,
+    "knockout": 0.25,
+    "group_stage": 0.12,
+    "qualifier": 0.18,
+    "playoff": 0.22,
+}
+
+
+TOURNAMENT_TYPE_WEIGHTS = {
+    "world_cup": 0.60,
+    "continental_cup": 0.42,
+    "continental_qualifier": 0.30,
+    "international": 0.22,
+    "domestic_cup": 0.18,
+    "league": 0.0,
+    None: 0.0,
 }
 
 
@@ -31,6 +54,7 @@ class EcosystemOddsOrchestrator:
     - recency-aware
     - no permanent league exclusion
     - avoids old finished-match API waste
+    - tournament-aware prioritization
     """
 
     def __init__(
@@ -110,6 +134,14 @@ class EcosystemOddsOrchestrator:
                             "coverage_score": snapshot["coverage_score"],
                             "bookmaker_count": snapshot["bookmaker_count"],
                             "supported_market_count": snapshot["supported_market_count"],
+                            "competition_priority": getattr(match, "competition_priority", None),
+                            "tournament_type": getattr(match, "tournament_type", None),
+                            "tournament_stage": getattr(match, "tournament_stage", None),
+                            "tournament_pressure_score": getattr(
+                                match,
+                                "tournament_pressure_score",
+                                None,
+                            ),
                             "cooldown": cooldown_status,
                             "home_team": match.home_team,
                             "away_team": match.away_team,
@@ -252,6 +284,7 @@ class EcosystemOddsOrchestrator:
         if self.recent_hours is not None:
             cutoff = now - timedelta(hours=int(self.recent_hours))
             query = query.where(Match.kickoff_datetime >= cutoff)
+
         elif self.max_age_days > 0:
             cutoff = now - timedelta(days=self.max_age_days)
             query = query.where(Match.kickoff_datetime >= cutoff)
@@ -309,25 +342,32 @@ class EcosystemOddsOrchestrator:
                 PRIORITY_WEIGHTS["DISCOVERY_ROTATION"],
             )
 
-            attempt_penalty = min(float(match.odds_attempt_count or 0) * 0.10, 0.35)
+            attempt_penalty = min(
+                float(match.odds_attempt_count or 0) * 0.10,
+                0.35,
+            )
 
             maturity_bonus = min(
                 float(snapshot["ecosystem_score"] or 0.0) / 100.0,
                 1.0,
-            ) * 0.30
+            ) * 0.35
 
             bookmaker_bonus = min(
                 float(snapshot["bookmaker_count"] or 0) / 12.0,
                 1.0,
-            ) * 0.12
+            ) * 0.15
 
             market_bonus = min(
                 float(snapshot["supported_market_count"] or 0) / 250.0,
                 1.0,
-            ) * 0.10
+            ) * 0.12
 
             freshness_bonus = self._freshness_bonus(match, now)
             urgency_bonus = self._urgency_bonus(match, now)
+
+            tournament_bonus = self._tournament_bonus(match)
+            pressure_bonus = self._pressure_bonus(match)
+            international_bonus = self._international_bonus(match)
 
             league_adjustment = 0.0
 
@@ -352,6 +392,9 @@ class EcosystemOddsOrchestrator:
                 + market_bonus
                 + freshness_bonus
                 + urgency_bonus
+                + tournament_bonus
+                + pressure_bonus
+                + international_bonus
                 + league_adjustment
                 - attempt_penalty
             )
@@ -380,10 +423,22 @@ class EcosystemOddsOrchestrator:
 
         for item in scored:
             match = item["match"]
+
             league_key = match.league or "UNKNOWN"
+
             tier = item["priority_tier"]
 
             league_limit = self._league_limit_for_tier(tier)
+
+            if getattr(match, "is_international", False):
+                league_limit += 2
+
+            if getattr(match, "tournament_stage", None) in [
+                "final",
+                "semifinal",
+                "quarterfinal",
+            ]:
+                league_limit += 2
 
             if self.mode in ["finished", "season"]:
                 league_limit = max(league_limit, 10)
@@ -392,6 +447,7 @@ class EcosystemOddsOrchestrator:
                 continue
 
             selected.append(match)
+
             league_counts[league_key] += 1
 
             if len(selected) >= self.limit:
@@ -404,22 +460,31 @@ class EcosystemOddsOrchestrator:
             return 0.0
 
         if match.is_finished:
-            age_hours = (now - match.kickoff_datetime).total_seconds() / 3600
+            age_hours = (
+                now - match.kickoff_datetime
+            ).total_seconds() / 3600
 
             if age_hours <= 24:
                 return 0.55
+
             if age_hours <= 72:
                 return 0.35
+
             if age_hours <= 168:
                 return 0.15
+
             return -0.25
 
-        hours_to_kickoff = (match.kickoff_datetime - now).total_seconds() / 3600
+        hours_to_kickoff = (
+            match.kickoff_datetime - now
+        ).total_seconds() / 3600
 
         if hours_to_kickoff <= 6:
             return 0.70
+
         if hours_to_kickoff <= 24:
             return 0.55
+
         if hours_to_kickoff <= 72:
             return 0.30
 
@@ -432,14 +497,48 @@ class EcosystemOddsOrchestrator:
         if match.is_finished:
             return 0.0
 
-        hours_to_kickoff = (match.kickoff_datetime - now).total_seconds() / 3600
+        hours_to_kickoff = (
+            match.kickoff_datetime - now
+        ).total_seconds() / 3600
 
         if 0 <= hours_to_kickoff <= 2:
             return 0.60
+
         if 0 <= hours_to_kickoff <= 6:
             return 0.45
+
         if 0 <= hours_to_kickoff <= 12:
             return 0.25
+
+        return 0.0
+
+    def _tournament_bonus(self, match: Match) -> float:
+        tournament_type = getattr(match, "tournament_type", None)
+
+        tournament_stage = getattr(match, "tournament_stage", None)
+
+        type_bonus = TOURNAMENT_TYPE_WEIGHTS.get(
+            tournament_type,
+            0.0,
+        )
+
+        stage_bonus = TOURNAMENT_STAGE_WEIGHTS.get(
+            tournament_stage,
+            0.0,
+        )
+
+        return type_bonus + stage_bonus
+
+    def _pressure_bonus(self, match: Match) -> float:
+        pressure = float(
+            getattr(match, "tournament_pressure_score", 0.0) or 0.0
+        )
+
+        return min(pressure, 1.0) * 0.35
+
+    def _international_bonus(self, match: Match) -> float:
+        if getattr(match, "is_international", False):
+            return 0.20
 
         return 0.0
 
@@ -492,7 +591,9 @@ class EcosystemOddsOrchestrator:
             "ecosystem_score": float(row["ecosystem_score"] or 0.0),
             "coverage_score": float(row["coverage_score"] or 0.0),
             "bookmaker_count": int(row["bookmaker_count"] or 0),
-            "supported_market_count": int(row["supported_market_count"] or 0),
+            "supported_market_count": int(
+                row["supported_market_count"] or 0
+            ),
         }
 
     def _default_snapshot(self) -> dict:
