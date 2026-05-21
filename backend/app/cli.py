@@ -1338,24 +1338,32 @@ def ingest_adaptive_stats_command(
         300,
         help="Maximum matches to process.",
     ),
+
     season: int | None = typer.Option(
         None,
         help="Optional season filter.",
     ),
+
+    league: str | None = typer.Option(
+        None,
+        "--league",
+        help="Comma-separated league names.",
+    ),
+
     force: bool = typer.Option(
         False,
         help="Force ingestion even if previously skipped.",
     ),
 ):
-    """
-    Adaptive autonomous stats ingestion.
 
-    Production-safe:
-    - cooldown-aware
-    - ecosystem-aware
-    - waste-aware
-    - API-budget-aware
-    """
+    leagues = []
+
+    if league:
+        leagues = [
+            x.strip()
+            for x in league.split(",")
+            if x.strip()
+        ]
 
     with SessionLocal() as session:
 
@@ -1363,6 +1371,7 @@ def ingest_adaptive_stats_command(
             session=session,
             limit=limit,
             season=season,
+            leagues=leagues,
             force=force,
         )
 
@@ -1372,7 +1381,7 @@ def ingest_adaptive_stats_command(
 
         for key, value in result.items():
             typer.echo(f"{key}: {value}")
-
+            
 @app.command("league-ingestion-waste-report")
 def league_ingestion_waste_report(
     days: int = typer.Option(1, "--days"),
@@ -2668,39 +2677,40 @@ def ingest_odds_rotation_command(
 
 
 @app.command("ingest-ecosystem-odds")
-def ingest_ecosystem_odds(
+def ingest_ecosystem_odds_command(
     limit: int = typer.Option(500, "--limit"),
-    season: int | None = typer.Option(None, "--season"),
+
+    season: int | None = typer.Option(
+        None,
+        "--season",
+    ),
+
+    league: str | None = typer.Option(
+        None,
+        "--league",
+        help="Comma-separated league names.",
+    ),
+
     mode: str = typer.Option(
         "ecosystem",
         "--mode",
-        help="ecosystem, upcoming, finished, season, or all",
     ),
-    force: bool = typer.Option(False, "--force"),
-    use_league_cooldown: bool = typer.Option(
-        True,
-        "--use-league-cooldown/--no-league-cooldown",
-    ),
-    odds_window_hours: int = typer.Option(
-        72,
-        "--odds-window-hours",
-        help="For upcoming mode: only fetch odds for matches within this many hours.",
-    ),
-    require_stats_for_finished: bool = typer.Option(
-        True,
-        "--require-stats-for-finished/--no-require-stats-for-finished",
-    ),
-    max_age_days: int = typer.Option(
-        14,
-        "--max-age-days",
-        help="For finished/all mode: only retry finished matches this recent.",
-    ),
-    recent_hours: int | None = typer.Option(
-        None,
-        "--recent-hours",
-        help="For finished mode: only fetch finished matches from last N hours.",
+
+    force: bool = typer.Option(
+        False,
+        "--force",
     ),
 ):
+
+    leagues = []
+
+    if league:
+        leagues = [
+            x.strip()
+            for x in league.split(",")
+            if x.strip()
+        ]
+
     session = get_cli_session()
 
     try:
@@ -2708,16 +2718,14 @@ def ingest_ecosystem_odds(
             session=session,
             limit=limit,
             season=season,
+            leagues=leagues,
             mode=mode,
             force=force,
-            use_league_cooldown=use_league_cooldown,
-            odds_window_hours=odds_window_hours,
-            require_stats_for_finished=require_stats_for_finished,
-            max_age_days=max_age_days,
-            recent_hours=recent_hours,
         )
 
         result = orchestrator.run()
+
+        print("\n=== ECOSYSTEM ODDS INGESTION ===")
         print(result)
 
     finally:

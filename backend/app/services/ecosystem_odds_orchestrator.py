@@ -51,6 +51,7 @@ class EcosystemOddsOrchestrator:
     - fast retries for odds
     - short cooldowns
     - season-aware
+    - league-aware
     - recency-aware
     - no permanent league exclusion
     - avoids old finished-match API waste
@@ -63,6 +64,7 @@ class EcosystemOddsOrchestrator:
         limit: int = 500,
         season: int | None = None,
         mode: str = "ecosystem",
+        leagues: list[str] | None = None,
         force: bool = False,
         use_league_cooldown: bool = True,
         odds_window_hours: int = 72,
@@ -74,6 +76,13 @@ class EcosystemOddsOrchestrator:
         self.limit = int(limit)
         self.season = season
         self.mode = (mode or "ecosystem").lower().strip()
+
+        self.leagues = [
+            league.strip()
+            for league in (leagues or [])
+            if league.strip()
+        ]
+
         self.force = force
         self.use_league_cooldown = use_league_cooldown
         self.odds_window_hours = int(odds_window_hours)
@@ -134,9 +143,21 @@ class EcosystemOddsOrchestrator:
                             "coverage_score": snapshot["coverage_score"],
                             "bookmaker_count": snapshot["bookmaker_count"],
                             "supported_market_count": snapshot["supported_market_count"],
-                            "competition_priority": getattr(match, "competition_priority", None),
-                            "tournament_type": getattr(match, "tournament_type", None),
-                            "tournament_stage": getattr(match, "tournament_stage", None),
+                            "competition_priority": getattr(
+                                match,
+                                "competition_priority",
+                                None,
+                            ),
+                            "tournament_type": getattr(
+                                match,
+                                "tournament_type",
+                                None,
+                            ),
+                            "tournament_stage": getattr(
+                                match,
+                                "tournament_stage",
+                                None,
+                            ),
                             "tournament_pressure_score": getattr(
                                 match,
                                 "tournament_pressure_score",
@@ -169,6 +190,7 @@ class EcosystemOddsOrchestrator:
         return {
             "mode": self.mode,
             "season": self.season,
+            "leagues": self.leagues,
             "limit": self.limit,
             "odds_window_hours": self.odds_window_hours,
             "max_age_days": self.max_age_days,
@@ -198,6 +220,9 @@ class EcosystemOddsOrchestrator:
 
         if self.season is not None:
             query = query.where(Match.season == self.season)
+
+        if self.leagues:
+            query = query.where(Match.league.in_(self.leagues))
 
         if self.mode in ["ecosystem", "upcoming"]:
             max_window = now + timedelta(hours=self.odds_window_hours)
@@ -514,7 +539,6 @@ class EcosystemOddsOrchestrator:
 
     def _tournament_bonus(self, match: Match) -> float:
         tournament_type = getattr(match, "tournament_type", None)
-
         tournament_stage = getattr(match, "tournament_stage", None)
 
         type_bonus = TOURNAMENT_TYPE_WEIGHTS.get(

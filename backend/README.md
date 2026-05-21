@@ -65,6 +65,12 @@ python -m app.cli ingest-adaptive-stats --limit 1000 --season 2026
 
 python -m app.cli ingest-ecosystem-odds --limit 1000
 
+python -m app.cli ingest-fixtures-date --date-value 2026-05-21 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-22 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-23 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-24 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-25 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-26 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-27
+
+python -m app.cli ingest-adaptive-stats --limit 3000 --season 2026 ; python -m app.cli ingest-ecosystem-odds --limit 3000 --season 2026 --mode finished ; python -m app.cli ingest-ecosystem-odds --limit 3000 --season 2026 --mode upcoming
+
+
+python -m app.cli ingest-adaptive-stats --limit 1000 --season 2026 --force ; python -m app.cli ingest-ecosystem-odds --limit 1000 --season 2026 --mode finished --force ; python -m app.cli ingest-ecosystem-odds --limit 1000 --season 2026 --mode upcoming --force
 COMPETITIONS = [
     # =========================
     # INTERNATIONAL

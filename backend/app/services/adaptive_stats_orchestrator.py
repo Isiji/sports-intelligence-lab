@@ -1,5 +1,3 @@
-# backend/app/services/adaptive_stats_orchestrator.py
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -38,11 +36,17 @@ class AdaptiveStatsOrchestrator:
         session: Session,
         limit: int = 300,
         season: int | None = None,
+        leagues: list[str] | None = None,
         force: bool = False,
     ):
         self.session = session
         self.limit = int(limit)
         self.season = season
+        self.leagues = [
+            x.strip()
+            for x in (leagues or [])
+            if x.strip()
+        ]
         self.force = force
 
         self.engine = AdaptiveIngestionDecisionEngine(
@@ -137,6 +141,7 @@ class AdaptiveStatsOrchestrator:
 
         return {
             "season": self.season,
+            "leagues": self.leagues,
             "matches_selected": len(matches),
             "matches_processed": processed,
             "matches_skipped": skipped,
@@ -176,6 +181,11 @@ class AdaptiveStatsOrchestrator:
         if self.season is not None:
             conditions.append(
                 Match.season == self.season
+            )
+
+        if self.leagues:
+            conditions.append(
+                Match.league.in_(self.leagues)
             )
 
         candidates = list(

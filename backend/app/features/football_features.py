@@ -248,6 +248,7 @@ def load_training_frame(session: Session) -> pd.DataFrame:
 
     for _, row in rows.iterrows():
         payload = row["features_json"] or {}
+
         tournament_features = _resolve_tournament_features(
             is_international=row["is_international"],
             is_neutral_venue=row["is_neutral_venue"],
@@ -276,7 +277,7 @@ def load_training_frame(session: Session) -> pd.DataFrame:
         item.update(payload)
 
         for key, value in tournament_features.items():
-            item[key] = value
+            item[key] = _safe_float(value)
 
         feature_rows.append(item)
 
@@ -287,6 +288,7 @@ def load_training_frame(session: Session) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
 
+    df = _coerce_feature_columns(df)
     df = _add_targets(df)
 
     return df.fillna(0.0).reset_index(drop=True)
@@ -339,6 +341,8 @@ def load_upcoming_frame(
         if col not in upcoming_df.columns:
             upcoming_df[col] = 0.0
 
+    upcoming_df = _coerce_feature_columns(upcoming_df)
+
     return upcoming_df.fillna(0.0).reset_index(drop=True)
 
 
@@ -386,6 +390,23 @@ def _apply_persistent_elo_for_upcoming(
 
     df = df.copy()
 
+    for col in [
+        "home_elo",
+        "away_elo",
+        "home_attack_elo",
+        "away_attack_elo",
+        "home_defense_elo",
+        "away_defense_elo",
+        "home_elo_form",
+        "away_elo_form",
+        "elo_diff",
+        "elo_form_diff",
+        "attack_defense_diff",
+    ]:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+
     for i, row in df.iterrows():
         home_team_id = row.get("home_team_id")
         away_team_id = row.get("away_team_id")
@@ -394,39 +415,39 @@ def _apply_persistent_elo_for_upcoming(
         away_rating = ratings.get(int(away_team_id)) if pd.notna(away_team_id) else None
 
         if home_rating is not None:
-            df.at[i, "home_elo"] = float(home_rating["overall_elo"])
-            df.at[i, "home_attack_elo"] = float(home_rating["attack_elo"])
-            df.at[i, "home_defense_elo"] = float(home_rating["defense_elo"])
-            df.at[i, "home_elo_form"] = float(home_rating["form_elo"])
+            df.at[i, "home_elo"] = _safe_float(home_rating["overall_elo"])
+            df.at[i, "home_attack_elo"] = _safe_float(home_rating["attack_elo"])
+            df.at[i, "home_defense_elo"] = _safe_float(home_rating["defense_elo"])
+            df.at[i, "home_elo_form"] = _safe_float(home_rating["form_elo"])
 
         if away_rating is not None:
-            df.at[i, "away_elo"] = float(away_rating["overall_elo"])
-            df.at[i, "away_attack_elo"] = float(away_rating["attack_elo"])
-            df.at[i, "away_defense_elo"] = float(away_rating["defense_elo"])
-            df.at[i, "away_elo_form"] = float(away_rating["form_elo"])
+            df.at[i, "away_elo"] = _safe_float(away_rating["overall_elo"])
+            df.at[i, "away_attack_elo"] = _safe_float(away_rating["attack_elo"])
+            df.at[i, "away_defense_elo"] = _safe_float(away_rating["defense_elo"])
+            df.at[i, "away_elo_form"] = _safe_float(away_rating["form_elo"])
 
         home_advantage = 0.0 if bool(row.get("is_neutral_venue")) else HOME_ADVANTAGE_ELO
 
         df.at[i, "elo_diff"] = (
-            float(df.at[i, "home_elo"])
+            _safe_float(df.at[i, "home_elo"])
             + home_advantage
-            - float(df.at[i, "away_elo"])
+            - _safe_float(df.at[i, "away_elo"])
         )
 
         df.at[i, "elo_form_diff"] = (
-            float(df.at[i, "home_elo_form"])
-            - float(df.at[i, "away_elo_form"])
+            _safe_float(df.at[i, "home_elo_form"])
+            - _safe_float(df.at[i, "away_elo_form"])
         )
 
         df.at[i, "attack_defense_diff"] = (
-            float(df.at[i, "home_attack_elo"])
-            - float(df.at[i, "away_defense_elo"])
+            _safe_float(df.at[i, "home_attack_elo"])
+            - _safe_float(df.at[i, "away_defense_elo"])
         )
 
     return df.fillna(0.0)
 
 
-def _base_query(session: Session):
+def _base_query(session: Session) -> pd.DataFrame:
     query = text(
         """
         SELECT
@@ -515,6 +536,12 @@ def _base_query(session: Session):
         errors="coerce",
     )
 
+    for col in feature_columns():
+        if col not in df.columns:
+            df[col] = 0.0
+
+    df = _coerce_feature_columns(df)
+
     for index, row in df.iterrows():
         tournament_features = _resolve_tournament_features(
             is_international=row.get("is_international"),
@@ -525,8 +552,7 @@ def _base_query(session: Session):
             tournament_pressure_score=row.get("tournament_pressure_score"),
         )
 
-        for key, value in tournament_features.items():
-            df.at[index, key] = value
+        _assign_numeric_features(df, index, tournament_features)
 
     return df.reset_index(drop=True)
 
@@ -615,6 +641,8 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
 
+    df = _coerce_feature_columns(df)
+
     elo: dict[str, float] = {}
     attack_elo: dict[str, float] = {}
     defense_elo: dict[str, float] = {}
@@ -634,14 +662,11 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
             tournament_pressure_score=row.get("tournament_pressure_score"),
         )
 
-        for key, value in tournament_features.items():
-            df.at[i, key] = value
+        _assign_numeric_features(df, i, tournament_features)
 
         league_hist = _league_history(df, row["league"], date)
         league_profile = _league_profile(league_hist)
-
-        for key, value in league_profile.items():
-            df.at[i, key] = value
+        _assign_numeric_features(df, i, league_profile)
 
         home_elo = elo.get(home, INITIAL_ELO)
         away_elo = elo.get(away, INITIAL_ELO)
@@ -682,9 +707,7 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
         h2h = _head_to_head_history(df, home, away, date).tail(6)
-
-        for key, value in _h2h_features(h2h, home, away).items():
-            df.at[i, key] = value
+        _assign_numeric_features(df, i, _h2h_features(h2h, home, away))
 
         home_home_hist = df[(df["home_team"] == home) & (df["kickoff_date"] < date)].tail(8)
         away_away_hist = df[(df["away_team"] == away) & (df["kickoff_date"] < date)].tail(8)
@@ -695,10 +718,10 @@ def _add_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         df.at[i, "away_current_streak"] = _current_streak(away_hist, away)
 
         for key, value in _team_profile(home_hist, home).items():
-            df.at[i, f"home_{key}"] = value
+            _assign_numeric_features(df, i, {f"home_{key}": value})
 
         for key, value in _team_profile(away_hist, away).items():
-            df.at[i, f"away_{key}"] = value
+            _assign_numeric_features(df, i, {f"away_{key}": value})
 
         home_strength = _team_strength(home_hist, home)
         away_strength = _team_strength(away_hist, away)
@@ -1064,6 +1087,12 @@ def build_upcoming_match_features(
     upcoming_df = upcoming_df.copy()
     historical_df = historical_df.sort_values(["kickoff_date", "match_id"])
 
+    for col in feature_columns():
+        if col not in upcoming_df.columns:
+            upcoming_df[col] = 0.0
+
+    upcoming_df = _coerce_feature_columns(upcoming_df)
+
     for i, row in upcoming_df.iterrows():
         home = row["home_team"]
         away = row["away_team"]
@@ -1078,8 +1107,7 @@ def build_upcoming_match_features(
             tournament_pressure_score=row.get("tournament_pressure_score"),
         )
 
-        for key, value in tournament_features.items():
-            upcoming_df.at[i, key] = value
+        _assign_numeric_features(upcoming_df, i, tournament_features)
 
         home_hist = historical_df[
             (historical_df["home_team"] == home)
@@ -1116,17 +1144,14 @@ def build_upcoming_match_features(
         upcoming_df.at[i, "home_form_score"] = _form_score(home_hist, home)
         upcoming_df.at[i, "away_form_score"] = _form_score(away_hist, away)
 
-        for key, value in _h2h_features(h2h_hist, home, away).items():
-            upcoming_df.at[i, key] = value
-
-        for key, value in _league_profile(league_hist).items():
-            upcoming_df.at[i, key] = value
+        _assign_numeric_features(upcoming_df, i, _h2h_features(h2h_hist, home, away))
+        _assign_numeric_features(upcoming_df, i, _league_profile(league_hist))
 
         for key, value in _team_profile(home_hist, home).items():
-            upcoming_df.at[i, f"home_{key}"] = value
+            _assign_numeric_features(upcoming_df, i, {f"home_{key}": value})
 
         for key, value in _team_profile(away_hist, away).items():
-            upcoming_df.at[i, f"away_{key}"] = value
+            _assign_numeric_features(upcoming_df, i, {f"away_{key}": value})
 
         upcoming_df.at[i, "team_strength_diff"] = (
             _team_strength(home_hist, home)
@@ -1172,6 +1197,39 @@ def _league_profile(hist: pd.DataFrame) -> dict[str, float]:
         "league_avg_corners": float(total_corners.mean()),
         "league_avg_sot": float(total_sot.mean()),
     }
+
+
+def _assign_numeric_features(
+    df: pd.DataFrame,
+    index,
+    values: dict[str, float],
+) -> None:
+    for key, value in values.items():
+        if key not in df.columns:
+            df[key] = 0.0
+
+        if str(df[key].dtype) == "bool":
+            df[key] = df[key].astype(float)
+
+        if not pd.api.types.is_numeric_dtype(df[key]):
+            df[key] = pd.to_numeric(df[key], errors="coerce").fillna(0.0).astype(float)
+
+        df.at[index, key] = _safe_float(value)
+
+
+def _coerce_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in feature_columns():
+        if col not in df.columns:
+            df[col] = 0.0
+
+        if str(df[col].dtype) == "bool":
+            df[col] = df[col].astype(float)
+        else:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+
+    return df
 
 
 def _safe_float(value) -> float:

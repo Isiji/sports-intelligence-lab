@@ -102,7 +102,7 @@ class PortfolioGroupConfig:
     min_league_roi: float = -0.08
     min_band_roi: float = -0.08
 
-    max_same_family_per_group: int = 2
+    max_same_family_per_group: int = 4
     min_sample_size: int = 10
 
     max_same_market_per_group: int = 1
