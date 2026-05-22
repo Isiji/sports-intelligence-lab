@@ -83,6 +83,16 @@ def score_production_pick(
         row.get("stale_odds")
     )
 
+    execution_ready = bool(
+        row.get("execution_ready")
+    )
+
+    survivability_bucket = str(
+        row.get(
+            "survivability_bucket"
+        ) or ""
+    )
+
     alternatives = resolve_market_alternatives(
         market
     )
@@ -101,6 +111,8 @@ def score_production_pick(
             "persistence_score": persistence_score,
             "downgrade_risk_score": downgrade_risk_score,
             "stale_odds": stale_odds,
+            "execution_ready": execution_ready,
+            "survivability_bucket": survivability_bucket,
         }
 
     score += confidence * 48.0
@@ -225,6 +237,17 @@ def score_production_pick(
             "production-supported market family"
         )
 
+    if executable.family == "ASIAN_HANDICAP":
+
+        if selected_odds >= 3.20:
+            score -= 24.0
+            reasons.append(
+                "unstable handicap pricing"
+            )
+
+        else:
+            score -= 6.0
+
     if executable.execution_risk == "MEDIUM":
         score -= 4.0
         reasons.append(
@@ -295,6 +318,18 @@ def score_production_pick(
             "stale bookmaker odds"
         )
 
+    if not execution_ready:
+        score -= 22.0
+        reasons.append(
+            "not execution ready"
+        )
+
+    else:
+        score += 6.0
+        reasons.append(
+            "execution ready"
+        )
+
     if survivability_score < 0.40:
         score -= 22.0
         reasons.append(
@@ -313,6 +348,15 @@ def score_production_pick(
             "strong survivability"
         )
 
+    if survivability_bucket == "WEAK":
+        score -= 15.0
+
+    elif survivability_bucket == "MODERATE":
+        score -= 4.0
+
+    elif survivability_bucket == "ELITE":
+        score += 8.0
+
     score -= economics.penalty * 0.45
 
     reasons.extend(
@@ -324,15 +368,15 @@ def score_production_pick(
         4,
     )
 
-    if score >= 82:
+    if score >= 86:
         grade = "A"
         risk_level = "LOW"
 
-    elif score >= 66:
+    elif score >= 70:
         grade = "B"
         risk_level = "MODERATE"
 
-    elif score >= 52:
+    elif score >= 55:
         grade = "C"
         risk_level = "HIGH"
 
@@ -353,6 +397,8 @@ def score_production_pick(
         "persistence_score": persistence_score,
         "downgrade_risk_score": downgrade_risk_score,
         "stale_odds": stale_odds,
+        "execution_ready": execution_ready,
+        "survivability_bucket": survivability_bucket,
     }
 
 def score_pick_list(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

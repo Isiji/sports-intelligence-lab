@@ -22,8 +22,14 @@ from app.odds.executable_market_registry import (
     parse_executable_market,
 )
 from app.odds.odds_matcher import find_best_odds_for_prediction
+from app.services.odds_survivability_service import (
+    evaluate_odds_survivability,
+)
 from app.services.prediction_intelligence_service import (
     apply_prediction_intelligence,
+)
+from app.services.prediction_market_timing_service import (
+    analyze_prediction_timing,
 )
 from app.services.production_validation_service import (
     validate_prediction_for_production,
@@ -37,6 +43,7 @@ def predict_all_football_markets(
     min_confidence: float = 0.55,
     require_odds: bool = True,
 ) -> int:
+
     upcoming_df = load_upcoming_frame(
         session=session,
         limit=limit,
@@ -60,6 +67,21 @@ def predict_all_football_markets(
         executable_market = parse_executable_market(
             market
         )
+
+        if executable_market.volatility_tier == "EXTREME":
+            print(
+                f"[SKIPPED] {market}: extreme volatility market"
+            )
+            continue
+
+        if executable_market.family in {
+            "EXACT_SCORE",
+            "HT_FT",
+        }:
+            print(
+                f"[SKIPPED] {market}: derivative family blocked"
+            )
+            continue
 
         model_path = model_path_for_market(
             market
@@ -123,6 +145,31 @@ def predict_all_football_markets(
 
         for row_index, row in upcoming_df.iterrows():
 
+            match_id = int(row["match_id"])
+
+            timing = analyze_prediction_timing(
+                kickoff_value=(
+                    row.get("kickoff_datetime")
+                    or row.get("kickoff_date")
+                )
+            )
+
+            if timing.recommended_action == "AVOID":
+                continue
+
+            if (
+                timing.minutes_to_kickoff is not None
+                and timing.minutes_to_kickoff <= 8
+            ):
+                continue
+
+            if (
+                executable_market.family == "ASIAN_HANDICAP"
+                and timing.minutes_to_kickoff is not None
+                and timing.minutes_to_kickoff <= 35
+            ):
+                continue
+
             probability = float(
                 probabilities[row_index]
             )
@@ -151,7 +198,7 @@ def predict_all_football_markets(
 
             odds_payload = _resolve_prediction_odds(
                 session=session,
-                match_id=int(row["match_id"]),
+                match_id=match_id,
                 market=market,
                 predicted_label=predicted_label,
                 home_team=str(row["home_team"]),
@@ -161,6 +208,40 @@ def predict_all_football_markets(
             if (
                 require_odds
                 and odds_payload["odds"] is None
+            ):
+                continue
+
+            survivability = evaluate_odds_survivability(
+                market=market,
+                bookmaker=odds_payload.get(
+                    "odds_bookmaker"
+                ),
+                odds_retrieved_at=odds_payload.get(
+                    "odds_retrieved_at"
+                ),
+                minutes_to_kickoff=(
+                    timing.minutes_to_kickoff
+                ),
+            )
+
+            if require_odds:
+
+                if not survivability.allowed:
+                    continue
+
+                if survivability.stale:
+                    continue
+
+                if (
+                    survivability.survivability_score
+                    < 0.45
+                ):
+                    continue
+
+            if (
+                executable_market.family == "ASIAN_HANDICAP"
+                and odds_payload["odds"] is not None
+                and float(odds_payload["odds"]) >= 3.50
             ):
                 continue
 
@@ -185,6 +266,7 @@ def predict_all_football_markets(
                 odds=odds_payload["odds"],
                 confidence=confidence,
                 value_score=value_score,
+                market=market,
                 production_mode=True,
             )
 
@@ -196,10 +278,39 @@ def predict_all_football_markets(
 
             match_object = session.get(
                 Match,
-                int(row["match_id"]),
+                match_id,
             )
 
             if not match_object:
+                continue
+
+            if getattr(match_object, "is_finished", False):
+                continue
+
+            if getattr(match_object, "is_postponed", False):
+                continue
+
+            if getattr(match_object, "is_cancelled", False):
+                continue
+
+            status = str(
+                getattr(match_object, "status", "") or ""
+            ).upper()
+
+            if status in {
+                "FT",
+                "AET",
+                "PEN",
+                "LIVE",
+                "1H",
+                "2H",
+                "HT",
+                "BREAK",
+                "INT",
+                "PST",
+                "CANC",
+                "ABD",
+            }:
                 continue
 
             intelligence = apply_prediction_intelligence(
@@ -232,7 +343,7 @@ def predict_all_football_markets(
 
             prediction_payload = {
                 "slate": slate,
-                "match_id": int(row["match_id"]),
+                "match_id": match_id,
                 "sport": "football",
                 "model_name": bundle.get(
                     "selected_model_name",
@@ -270,6 +381,7 @@ def _upsert_prediction(
     session: Session,
     payload: dict[str, Any],
 ) -> None:
+
     stmt = pg_insert(
         Prediction
     ).values(**payload)
@@ -299,6 +411,7 @@ def _upsert_prediction(
 def _load_model_bundle(
     path: Path,
 ) -> dict[str, Any]:
+
     with path.open("rb") as file:
         bundle = pickle.load(file)
 
@@ -314,6 +427,7 @@ def _predict_probabilities(
     bundle: dict[str, Any],
     x,
 ) -> list[float]:
+
     models = bundle.get("models") or {}
 
     weights = bundle.get("weights") or {}
@@ -327,7 +441,9 @@ def _predict_probabilities(
 
     for model_name, model in models.items():
 
-        model_probability = model.predict_proba(x)[:, 1]
+        model_probability = (
+            model.predict_proba(x)[:, 1]
+        )
 
         weight = float(
             weights.get(
@@ -473,6 +589,7 @@ def predict_football_market(
     min_confidence: float = 0.55,
     require_odds: bool = True,
 ) -> int:
+
     return predict_all_football_markets(
         session=session,
         slate=slate,
@@ -485,6 +602,7 @@ def predict_football_market(
 def _safe_float(
     value: Any,
 ) -> float | None:
+
     if value is None:
         return None
 
