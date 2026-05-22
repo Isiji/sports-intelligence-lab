@@ -24,7 +24,17 @@ from app.services.stats_coverage_service import (
     rebuild_stats_coverage,
     stats_coverage_report,
 )
+from app.services.live_group_validation_service import (
+    validate_group_for_execution,
+)
 
+from app.services.prediction_market_timing_service import (
+    analyze_prediction_timing,
+)
+
+from app.services.odds_survivability_service import (
+    evaluate_odds_survivability,
+)
 from app.services.adaptive_stats_orchestrator import (
     AdaptiveStatsOrchestrator,
 )
@@ -998,8 +1008,118 @@ def production_review_command(
         )
 
     print("\n=== PRODUCTION REVIEW ===")
-    print(result)
 
+    summary = result.get("summary") or {}
+
+    print("\n=== SUMMARY ===")
+    print(summary)
+
+    picks = result.get("ranked_picks") or []
+
+    print("\n=== EXECUTION PICKS ===")
+
+    for item in picks:
+
+        kickoff = item.get(
+            "kickoff_eat"
+        )
+
+        timing_status = item.get(
+            "timing_status"
+        )
+
+        action = item.get(
+            "recommended_action"
+        )
+
+        survivability = item.get(
+            "survivability_score"
+        )
+
+        stale_odds = item.get(
+            "stale_odds"
+        )
+
+        alternatives = item.get(
+            "market_alternatives"
+        ) or []
+
+        print(
+            {
+                "match": (
+                    f"{item.get('home_team')} vs "
+                    f"{item.get('away_team')}"
+                ),
+
+                "league": item.get(
+                    "league"
+                ),
+
+                "kickoff_eat": kickoff,
+
+                "market": item.get(
+                    "market"
+                ),
+
+                "pick": item.get(
+                    "predicted_label"
+                ),
+
+                "confidence": round(
+                    float(
+                        item.get(
+                            "confidence"
+                        ) or 0.0
+                    ),
+                    4,
+                ),
+
+                "odds": item.get(
+                    "odds"
+                ),
+
+                "bookmaker": item.get(
+                    "odds_bookmaker"
+                ),
+
+                "timing_status": timing_status,
+
+                "recommended_action": action,
+
+                "survivability_score": survivability,
+
+                "stale_odds": stale_odds,
+
+                "execution_ready": (
+                    survivability is not None
+                    and survivability >= 0.40
+                    and not stale_odds
+                    and timing_status
+                    not in {
+                        "LIVE_OR_FINISHED",
+                        "TOO_CLOSE_TO_KICKOFF",
+                    }
+                ),
+
+                "fallback_markets": [
+                    x.get("market")
+                    for x in alternatives
+                ],
+            }
+        )
+
+    groups = result.get(
+        "groups"
+    ) or []
+
+    if groups:
+
+        print("\n=== GROUPS ===")
+
+        for group in groups:
+            print(group)
+
+            
 @app.command("data-coverage-report")
 def data_coverage_report():
     session = get_cli_session()
