@@ -113,12 +113,12 @@ def analyze_prediction_timing(
 
     elif minutes <= 20:
         status = "FINAL_EXECUTION_WINDOW"
-        action = "RECHECK_ODDS_ONLY"
+        action = "BET_NOW_IF_ODDS_VERIFIED"        
         reason = (
             "Final execution window; only use freshly checked odds."
         )
 
-    elif minutes <= 45:
+    elif minutes <= 30:
         status = "LATE_MOVEMENT_WINDOW"
         action = "BET_ONLY_IF_ODDS_STILL_MATCH"
         reason = (

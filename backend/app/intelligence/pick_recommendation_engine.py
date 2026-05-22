@@ -103,10 +103,17 @@ def classify_pick_recommendation(
             "High downgrade risk"
         )
 
-    if production_score >= 86 and not exposure_rejected:
+    if (
+        production_score >= 75
+        and execution_ready
+        and not exposure_rejected
+    ):
         status = "APPROVED"
 
-    elif production_score >= 60 and not exposure_rejected:
+    elif (
+        production_score >= 55
+        and not exposure_rejected
+    ):
         status = "WATCHLIST"
 
     else:

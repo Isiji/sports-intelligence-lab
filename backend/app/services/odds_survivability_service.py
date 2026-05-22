@@ -255,14 +255,13 @@ def evaluate_odds_survivability(
         0.0,
     )
 
-    stale = age_hours >= 12
+    stale = age_hours >= 72
 
     allowed = (
-        survivability_score >= 0.40
-        and not stale
-        and downgrade_risk_score <= 0.80
+        survivability_score >= 0.25
+        and downgrade_risk_score <= 0.90
     )
-
+    
     if not allowed:
         reasons.append(
             "poor survivability"
