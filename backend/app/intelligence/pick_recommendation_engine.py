@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
-
+from app.services.market_alternatives_engine import (
+    resolve_market_alternatives,
+)
 
 def classify_pick_recommendation(
     pick: dict[str, Any],
@@ -21,8 +23,34 @@ def classify_pick_recommendation(
 
     reasons: list[str] = []
 
+    alternatives = resolve_market_alternatives(
+        str(
+            pick.get("market") or ""
+        )
+    )
+
+    survivability_score = float(
+        pick.get(
+            "survivability_score"
+        ) or 0.0
+    )
+
+    stale_odds = bool(
+        pick.get("stale_odds")
+    )
+
     if exposure_rejected:
         reasons.append("Rejected by exposure control")
+
+    if stale_odds:
+        reasons.append(
+            "Stale bookmaker odds"
+        )
+
+    if survivability_score < 0.45:
+        reasons.append(
+            "Low market survivability"
+        )
 
     if odds is None:
         reasons.append("Missing odds")
@@ -52,10 +80,24 @@ def classify_pick_recommendation(
     if exposure_rejected:
         status = "REJECTED"
 
+    if survivability_score < 0.35:
+        status = "REJECTED"
+
+    elif survivability_score < 0.50:
+        if status == "APPROVED":
+            status = "WATCHLIST"
+
+    if stale_odds:
+        if status == "APPROVED":
+            status = "WATCHLIST"
+
     return {
         **pick,
         "recommendation_status": status,
         "recommendation_reasons": reasons,
+        "market_alternatives": alternatives,
+        "survivability_score": survivability_score,
+        "stale_odds": stale_odds,        
     }
 
 

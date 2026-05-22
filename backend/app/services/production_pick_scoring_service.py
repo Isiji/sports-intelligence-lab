@@ -6,6 +6,9 @@ from typing import Any
 
 from app.intelligence.odds_economics import evaluate_odds_economics
 from app.odds.executable_market_registry import parse_executable_market
+from app.services.market_alternatives_engine import (
+    resolve_market_alternatives,
+)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -18,16 +21,31 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def score_production_pick(row: dict[str, Any]) -> dict[str, Any]:
-    confidence = _safe_float(row.get("confidence"))
-    value_score = _safe_float(row.get("value_score"))
+def score_production_pick(
+    row: dict[str, Any]
+) -> dict[str, Any]:
+
+    confidence = _safe_float(
+        row.get("confidence")
+    )
+
+    value_score = _safe_float(
+        row.get("value_score")
+    )
+
     odds = row.get("odds")
-    market = str(row.get("market") or "")
+
+    market = str(
+        row.get("market") or ""
+    )
 
     score = 0.0
+
     reasons: list[str] = []
 
-    executable = parse_executable_market(market)
+    executable = parse_executable_market(
+        market
+    )
 
     economics = evaluate_odds_economics(
         odds=odds,
@@ -35,6 +53,38 @@ def score_production_pick(row: dict[str, Any]) -> dict[str, Any]:
         value_score=value_score,
         market=market,
         production_mode=True,
+    )
+
+    survivability_score = _safe_float(
+        row.get(
+            "survivability_score"
+        )
+    )
+
+    freshness_score = _safe_float(
+        row.get(
+            "freshness_score"
+        )
+    )
+
+    persistence_score = _safe_float(
+        row.get(
+            "persistence_score"
+        )
+    )
+
+    downgrade_risk_score = _safe_float(
+        row.get(
+            "downgrade_risk_score"
+        )
+    )
+
+    stale_odds = bool(
+        row.get("stale_odds")
+    )
+
+    alternatives = resolve_market_alternatives(
+        market
     )
 
     if not economics.allowed:
@@ -45,72 +95,120 @@ def score_production_pick(row: dict[str, Any]) -> dict[str, Any]:
             "risk_level": "AVOID",
             "selection_reasons": economics.reasons,
             "odds_economics_tier": economics.tier,
+            "market_alternatives": alternatives,
+            "survivability_score": survivability_score,
+            "freshness_score": freshness_score,
+            "persistence_score": persistence_score,
+            "downgrade_risk_score": downgrade_risk_score,
+            "stale_odds": stale_odds,
         }
 
-    # Confidence
     score += confidence * 48.0
 
     if confidence >= 0.82:
         score += 12.0
-        reasons.append("strong confidence")
+        reasons.append(
+            "strong confidence"
+        )
+
     elif confidence >= 0.70:
         score += 8.0
-        reasons.append("good confidence")
+        reasons.append(
+            "good confidence"
+        )
+
     elif confidence >= 0.60:
         score += 3.0
-        reasons.append("acceptable confidence")
+        reasons.append(
+            "acceptable confidence"
+        )
+
     else:
         score -= 12.0
-        reasons.append("low confidence")
+        reasons.append(
+            "low confidence"
+        )
 
-    # Value edge
     if value_score >= 0.25:
         score += 28.0
-        reasons.append("elite value edge")
+        reasons.append(
+            "elite value edge"
+        )
+
     elif value_score >= 0.15:
         score += 22.0
-        reasons.append("strong value edge")
+        reasons.append(
+            "strong value edge"
+        )
+
     elif value_score >= 0.08:
         score += 15.0
-        reasons.append("good value edge")
+        reasons.append(
+            "good value edge"
+        )
+
     elif value_score >= 0.03:
         score += 8.0
-        reasons.append("positive value edge")
+        reasons.append(
+            "positive value edge"
+        )
+
     else:
         score -= 18.0
-        reasons.append("weak value edge")
+        reasons.append(
+            "weak value edge"
+        )
 
     selected_odds = _safe_float(odds)
 
     if 1.35 <= selected_odds <= 2.20:
         score += 18.0
-        reasons.append("healthy production odds")
+        reasons.append(
+            "healthy production odds"
+        )
+
     elif 2.20 < selected_odds <= 3.00:
         score += 10.0
-        reasons.append("acceptable value odds")
+        reasons.append(
+            "acceptable value odds"
+        )
+
     elif 3.00 < selected_odds <= 4.20:
         score += 2.0
-        reasons.append("higher variance odds")
+        reasons.append(
+            "higher variance odds"
+        )
+
     else:
         score -= 18.0
-        reasons.append("weak odds economics")
+        reasons.append(
+            "weak odds economics"
+        )
 
-    # Exact execution
     if row.get("odds_match_quality") == "exact_executable_market":
         score += 12.0
-        reasons.append("exact executable odds match")
+        reasons.append(
+            "exact executable odds match"
+        )
+
     else:
         score -= 30.0
-        reasons.append("non-exact executable odds")
+        reasons.append(
+            "non-exact executable odds"
+        )
 
     if row.get("odds_bookmaker"):
         score += 6.0
-        reasons.append("bookmaker traced")
+        reasons.append(
+            "bookmaker traced"
+        )
+
     else:
         score -= 20.0
-        reasons.append("missing bookmaker")
+        reasons.append(
+            "missing bookmaker"
+        )
 
-    # Market-family bonuses/penalties
     if executable.family in {
         "ASIAN_HANDICAP",
         "DOUBLE_CHANCE",
@@ -123,48 +221,121 @@ def score_production_pick(row: dict[str, Any]) -> dict[str, Any]:
         "SECOND_HALF_RESULT",
     }:
         score += 6.0
-        reasons.append("production-supported market family")
+        reasons.append(
+            "production-supported market family"
+        )
 
     if executable.execution_risk == "MEDIUM":
         score -= 4.0
-        reasons.append("medium execution risk")
+        reasons.append(
+            "medium execution risk"
+        )
+
     elif executable.execution_risk == "HIGH":
         score -= 25.0
-        reasons.append("high execution risk")
+        reasons.append(
+            "high execution risk"
+        )
 
     if executable.volatility_tier == "HIGH":
         score -= 8.0
-        reasons.append("high volatility")
+        reasons.append(
+            "high volatility"
+        )
+
     elif executable.volatility_tier == "EXTREME":
         score -= 35.0
-        reasons.append("extreme volatility")
+        reasons.append(
+            "extreme volatility"
+        )
 
-    portfolio_risk_score = _safe_float(row.get("portfolio_risk_score"))
+    portfolio_risk_score = _safe_float(
+        row.get(
+            "portfolio_risk_score"
+        )
+    )
+
     if portfolio_risk_score <= 12:
         score += 8.0
-        reasons.append("low portfolio risk")
+        reasons.append(
+            "low portfolio risk"
+        )
+
     elif portfolio_risk_score <= 28:
         score += 3.0
-        reasons.append("acceptable portfolio risk")
+        reasons.append(
+            "acceptable portfolio risk"
+        )
+
     else:
         score -= 18.0
-        reasons.append("elevated portfolio risk")
+        reasons.append(
+            "elevated portfolio risk"
+        )
 
-    # Keep economics penalty, but softer because upstream already filtered.
+    score += (
+        survivability_score * 18.0
+    )
+
+    score += (
+        freshness_score * 10.0
+    )
+
+    score += (
+        persistence_score * 8.0
+    )
+
+    score -= (
+        downgrade_risk_score * 16.0
+    )
+
+    if stale_odds:
+        score -= 18.0
+        reasons.append(
+            "stale bookmaker odds"
+        )
+
+    if survivability_score < 0.40:
+        score -= 22.0
+        reasons.append(
+            "low survivability"
+        )
+
+    elif survivability_score < 0.55:
+        score -= 8.0
+        reasons.append(
+            "moderate survivability risk"
+        )
+
+    else:
+        score += 6.0
+        reasons.append(
+            "strong survivability"
+        )
+
     score -= economics.penalty * 0.45
-    reasons.extend(economics.reasons)
 
-    score = round(max(score, 0.0), 4)
+    reasons.extend(
+        economics.reasons
+    )
+
+    score = round(
+        max(score, 0.0),
+        4,
+    )
 
     if score >= 82:
         grade = "A"
         risk_level = "LOW"
+
     elif score >= 66:
         grade = "B"
         risk_level = "MODERATE"
+
     elif score >= 52:
         grade = "C"
         risk_level = "HIGH"
+
     else:
         grade = "D"
         risk_level = "AVOID"
@@ -176,8 +347,13 @@ def score_production_pick(row: dict[str, Any]) -> dict[str, Any]:
         "risk_level": risk_level,
         "selection_reasons": reasons,
         "odds_economics_tier": economics.tier,
+        "market_alternatives": alternatives,
+        "survivability_score": survivability_score,
+        "freshness_score": freshness_score,
+        "persistence_score": persistence_score,
+        "downgrade_risk_score": downgrade_risk_score,
+        "stale_odds": stale_odds,
     }
-
 
 def score_pick_list(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scored = [score_production_pick(row) for row in rows]

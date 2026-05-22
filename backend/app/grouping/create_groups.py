@@ -7,7 +7,9 @@ from datetime import date, datetime
 from math import prod
 from statistics import mean
 from typing import Any
-
+from app.services.odds_survivability_service import (
+    evaluate_odds_survivability,
+)
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 from app.services.prediction_market_timing_service import analyze_prediction_timing
@@ -92,8 +94,8 @@ class PortfolioGroupConfig:
     min_confidence: float = STRICT_GROUPING_MIN_CONFIDENCE
     min_value_score: float = STRICT_GROUPING_MIN_VALUE_SCORE
 
-    min_odds: float = 1.30
-    max_odds: float = 4.20
+    min_odds: float = 1.50
+    max_odds: float = 5.20
 
     min_group_odds: float = PRODUCTION_MIN_GROUP_ODDS
     max_group_odds: float = PRODUCTION_MAX_GROUP_ODDS
@@ -105,8 +107,8 @@ class PortfolioGroupConfig:
     max_same_family_per_group: int = 4
     min_sample_size: int = 10
 
-    max_same_market_per_group: int = 1
-    max_same_league_per_group: int = 1
+    max_same_market_per_group: int = 4
+    max_same_league_per_group: int = 2
 
     use_intelligence_filters: bool = True
 
@@ -791,6 +793,24 @@ def _enrich_candidate(
         prediction["_rejection_reason"] = f"timing_{timing.timing_status}"
         return None
     
+    survivability = evaluate_odds_survivability(
+        market=market,
+        bookmaker=prediction.get("odds_bookmaker"),
+        odds_retrieved_at=prediction.get("odds_retrieved_at"),
+        minutes_to_kickoff=timing.minutes_to_kickoff,
+    )
+
+    prediction["survivability_score"] = survivability.survivability_score
+    prediction["freshness_score"] = survivability.freshness_score
+    prediction["persistence_score"] = survivability.persistence_score
+    prediction["downgrade_risk_score"] = survivability.downgrade_risk_score
+    prediction["fallback_markets"] = survivability.fallback_markets
+    prediction["survivability_reasons"] = survivability.reasons
+    prediction["stale_odds"] = survivability.stale
+
+    if not survivability.allowed:
+        prediction["_rejection_reason"] = "poor_survivability"
+        return None
 
     if confidence < config.min_confidence:
         prediction["_rejection_reason"] = "confidence"
@@ -943,7 +963,13 @@ def _enrich_candidate(
     odds_match_quality_score = _best_odds_quality_score(prediction)
     bookmaker_execution_score = odds_match_quality_score / 100.0
 
-    execution_risk_penalty = 0.0
+    execution_risk_penalty = (
+        float(
+            prediction.get(
+                "downgrade_risk_score"
+            ) or 0.0
+        ) * 0.12
+    )
 
     if executable.execution_risk == "HIGH":
         execution_risk_penalty += 0.04
@@ -953,6 +979,9 @@ def _enrich_candidate(
 
     selection_score = (
         confidence * 0.30
+        + float(
+            prediction["survivability_score"]
+        ) * 0.14        
         + value_score * 0.34
         + market_roi * 0.10
         + league_roi * 0.08
@@ -1265,6 +1294,13 @@ def _summarize_portfolio_groups(
                     "pick_grade": item.get("pick_grade"),
                     "risk_level": item.get("risk_level"),
                     "missing_market_intel": item.get("missing_market_intel"),
+                    "survivability_score": item.get("survivability_score"),
+                    "freshness_score": item.get("freshness_score"),
+                    "persistence_score": item.get("persistence_score"),
+                    "downgrade_risk_score": item.get("downgrade_risk_score"),
+                    "fallback_markets": item.get("fallback_markets"),
+                    "stale_odds": item.get("stale_odds"),
+                    "survivability_reasons": item.get("survivability_reasons"),                    
                 }
             )
 
