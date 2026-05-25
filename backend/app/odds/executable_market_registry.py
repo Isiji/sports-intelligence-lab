@@ -33,6 +33,10 @@ BOOKMAKER_RICH_FAMILIES = {
     "ASIAN_HANDICAP",
     "FIRST_HALF_RESULT",
     "SECOND_HALF_RESULT",
+    "DRAW_NO_BET",
+    "TEAM_TOTAL",
+    "CORNERS",
+    "SHOTS_ON_TARGET",
 }
 
 LOW_RISK_FAMILIES = {
@@ -67,10 +71,11 @@ PRODUCTION_ENABLED_FAMILIES = {
     "ASIAN_HANDICAP",
     "FIRST_HALF_RESULT",
     "SECOND_HALF_RESULT",
+    "DRAW_NO_BET",
     "TEAM_TOTAL",
     "CORNERS",
+    "SHOTS_ON_TARGET",
 }
-
 
 def parse_executable_market(
     canonical_market: str,
@@ -126,6 +131,9 @@ def resolve_family(market: str) -> str:
     if market.startswith("double_chance"):
         return "DOUBLE_CHANCE"
 
+    if market.startswith("draw_no_bet"):
+        return "DRAW_NO_BET"
+
     if market.startswith("btts"):
         return "BTTS"
 
@@ -138,11 +146,23 @@ def resolve_family(market: str) -> str:
     if market.startswith("asian_handicap"):
         return "ASIAN_HANDICAP"
 
+    if market.startswith("handicap_result"):
+        return "HANDICAP_RESULT"
+
+    if market.startswith("result_total"):
+        return "RESULT_TOTAL"
+
+    if market.startswith("home_away"):
+        return "HOME_AWAY"
+
     if market.startswith("ht_ft"):
         return "HT_FT"
 
     if market.startswith("exact_score"):
         return "EXACT_SCORE"
+
+    if market.startswith("first_half_double_chance"):
+        return "FIRST_HALF_DOUBLE_CHANCE"
 
     if market.startswith("first_half_home"):
         return "FIRST_HALF_RESULT"
@@ -185,7 +205,6 @@ def resolve_family(market: str) -> str:
 
     return "OTHER"
 
-
 def resolve_scope(market: str) -> str:
     if market.startswith("first_half"):
         return "FIRST_HALF"
@@ -211,6 +230,27 @@ def resolve_side(market: str) -> str | None:
 
     return None
 
+def is_local_realistic_market(
+    canonical_market: str,
+) -> bool:
+    parsed = parse_executable_market(
+        canonical_market
+    )
+
+    if parsed.family in {
+        "MATCH_RESULT",
+        "DOUBLE_CHANCE",
+        "DRAW_NO_BET",
+        "GOALS_TOTAL",
+        "BTTS",
+        "TEAM_TOTAL",
+        "ASIAN_HANDICAP",
+        "FIRST_HALF_GOALS_TOTAL",
+        "FIRST_HALF_RESULT",
+    }:
+        return True
+
+    return False
 
 def resolve_line(market: str) -> float | None:
     if "zero" in market:

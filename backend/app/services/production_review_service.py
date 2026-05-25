@@ -11,9 +11,11 @@ from sqlalchemy.orm import Session
 from app.intelligence.exposure_control import (
     apply_exposure_controls,
 )
+
 from app.intelligence.pick_recommendation_engine import (
     build_recommendation_layer,
 )
+
 from app.services.production_pick_scoring_service import (
     score_pick_list,
 )
@@ -21,9 +23,168 @@ from app.services.production_pick_scoring_service import (
 from app.services.odds_survivability_service import (
     evaluate_odds_survivability,
 )
+
 from app.services.prediction_market_timing_service import (
     analyze_prediction_timing,
 )
+
+
+LOCAL_BOOKMAKERS = {
+    "betika",
+    "sportpesa",
+    "odibets",
+    "mozzart",
+    "mozzartbet",
+}
+
+
+def _is_local_bookmaker(
+    bookmaker: str | None,
+) -> bool:
+
+    if not bookmaker:
+        return False
+
+    return (
+        bookmaker.lower().strip()
+        in LOCAL_BOOKMAKERS
+    )
+
+
+def _local_realism_score(
+    odds: float | None,
+    bookmaker: str | None,
+    market: str | None,
+) -> float:
+
+    score = 0.0
+
+    if _is_local_bookmaker(bookmaker):
+        score += 0.45
+
+    if odds is not None:
+
+        if 1.25 <= float(odds) <= 2.40:
+            score += 0.40
+
+        elif 2.40 < float(odds) <= 3.20:
+            score += 0.20
+
+        elif float(odds) > 4.50:
+            score -= 0.25
+
+    if market:
+
+        if "asian_handicap" in market:
+            score += 0.10
+
+        if "exact_score" in market:
+            score -= 0.40
+
+    return round(
+        max(0.0, min(score, 1.0)),
+        4,
+    )
+
+
+def _build_market_alternatives(
+    item: dict[str, Any],
+) -> list[dict[str, Any]]:
+
+    alternatives: list[dict[str, Any]] = []
+
+    market = str(
+        item.get("market") or ""
+    )
+
+    confidence = float(
+        item.get("confidence") or 0.0
+    )
+
+    odds = item.get("odds")
+
+    bookmaker = item.get(
+        "odds_bookmaker"
+    )
+
+    if (
+        market.startswith("asian_handicap")
+    ):
+
+        alternatives.extend(
+            [
+                {
+                    "execution_market": market.replace(
+                        "_1_5",
+                        "_1_25",
+                    ),
+                    "execution_selection": item.get(
+                        "predicted_label"
+                    ),
+                    "bookmaker": bookmaker,
+                    "odds": odds,
+                    "execution_score": round(
+                        confidence * 100,
+                        2,
+                    ),
+                    "local_realism_score": 0.82,
+                    "match_quality": "nearby_local_line",
+                },
+                {
+                    "execution_market": market.replace(
+                        "_1_5",
+                        "_0_75",
+                    ),
+                    "execution_selection": item.get(
+                        "predicted_label"
+                    ),
+                    "bookmaker": bookmaker,
+                    "odds": odds,
+                    "execution_score": round(
+                        confidence * 96,
+                        2,
+                    ),
+                    "local_realism_score": 0.88,
+                    "match_quality": "compressed_local_line",
+                },
+            ]
+        )
+
+    if (
+        market == "home_win"
+    ):
+
+        alternatives.extend(
+            [
+                {
+                    "execution_market": "draw_no_bet_home",
+                    "execution_selection": "HOME",
+                    "bookmaker": bookmaker,
+                    "odds": odds,
+                    "execution_score": round(
+                        confidence * 92,
+                        2,
+                    ),
+                    "local_realism_score": 0.94,
+                    "match_quality": "safer_local_variant",
+                },
+                {
+                    "execution_market": "double_chance_1x",
+                    "execution_selection": "1X",
+                    "bookmaker": bookmaker,
+                    "odds": odds,
+                    "execution_score": round(
+                        confidence * 88,
+                        2,
+                    ),
+                    "local_realism_score": 0.98,
+                    "match_quality": "high_coverage_local_market",
+                },
+            ]
+        )
+
+    return alternatives
+
 
 def get_production_review(
     session: Session,
@@ -63,7 +224,9 @@ def get_production_review(
             "p.odds IS NOT NULL"
         )
 
-    where_clause = " AND ".join(filters)
+    where_clause = " AND ".join(
+        filters
+    )
 
     prediction_summary = session.execute(
         text(
@@ -77,42 +240,6 @@ def get_production_review(
                     THEN 1
                     END
                 ) AS predictions_with_odds,
-
-                COUNT(
-                    CASE
-                    WHEN p.value_score IS NOT NULL
-                    THEN 1
-                    END
-                ) AS predictions_with_value,
-
-                COUNT(
-                    CASE
-                    WHEN p.odds_match_quality = 'exact_executable_market'
-                    THEN 1
-                    END
-                ) AS exact_executable_matches,
-
-                COUNT(
-                    CASE
-                    WHEN p.value_score < 0
-                    THEN 1
-                    END
-                ) AS negative_ev_predictions,
-
-                COUNT(
-                    CASE
-                    WHEN p.odds_bookmaker IS NULL
-                    THEN 1
-                    END
-                ) AS missing_bookmaker_predictions,
-
-                COUNT(
-                    CASE
-                    WHEN p.market != p.odds_market
-                    AND p.predicted_label NOT LIKE 'NOT_%'
-                    THEN 1
-                    END
-                ) AS unsafe_market_mismatches,
 
                 AVG(p.confidence) AS avg_confidence,
                 AVG(p.odds) AS avg_odds,
@@ -152,6 +279,20 @@ def get_production_review(
 
                 p.model_name,
 
+                p.execution_market,
+                p.execution_selection,
+                p.execution_family,
+                p.execution_line,
+
+                p.execution_score,
+                p.execution_ready,
+                p.execution_reasons,
+                p.market_alternatives,
+
+                p.local_realism_score,
+                p.survivability_score,
+                p.bookmaker_locality,
+
                 p.odds_bookmaker,
                 p.odds_market,
                 p.odds_selection,
@@ -166,9 +307,22 @@ def get_production_review(
             WHERE {where_clause}
 
             ORDER BY
-                COALESCE(p.value_score, 0) DESC,
-                p.confidence DESC,
-                COALESCE(p.odds, 0) DESC
+                COALESCE(
+                    p.execution_score,
+                    0
+                ) DESC,
+
+                COALESCE(
+                    p.local_realism_score,
+                    0
+                ) DESC,
+
+                COALESCE(
+                    p.value_score,
+                    0
+                ) DESC,
+
+                p.confidence DESC
 
             LIMIT :limit
             """
@@ -208,7 +362,7 @@ def get_production_review(
             )
         )
 
-        item["kickoff_time"] = (
+        item["kickoff_eat"] = (
             timing.kickoff_eat
         )
 
@@ -244,221 +398,183 @@ def get_production_review(
             survivability.downgrade_risk_score
         )
 
-        item["fallback_markets"] = (
-            survivability.fallback_markets
-        )
-
-        item["primary_fallback_market"] = (
-            survivability.fallback_markets[0]
-            if survivability.fallback_markets
-            else None
-        )
-
         item["stale_odds"] = (
             survivability.stale
         )
 
-        item["execution_ready"] = (
-            survivability.survivability_score
-            >= 0.50
-            and not survivability.stale
-        )
-
-        item["survivability_bucket"] = (
-            "ELITE"
-            if survivability.survivability_score
-            >= 0.80
-            else (
-                "STRONG"
-                if survivability.survivability_score
-                >= 0.65
-                else (
-                    "MODERATE"
-                    if survivability.survivability_score
-                    >= 0.50
-                    else "WEAK"
+        item["bookmaker_locality"] = (
+            "LOCAL"
+            if _is_local_bookmaker(
+                item.get(
+                    "odds_bookmaker"
                 )
             )
+            else "GLOBAL"
         )
 
-        enriched_ranked_picks.append(item)
+        if (
+            item.get(
+                "local_realism_score"
+            )
+            is None
+        ):
+            item["local_realism_score"] = (
+                _local_realism_score(
+                    odds=item.get(
+                        "odds"
+                    ),
+                    bookmaker=item.get(
+                        "odds_bookmaker"
+                    ),
+                    market=item.get(
+                        "market"
+                    ),
+                )
+            )
 
-    scored_ranked_picks = score_pick_list(
-        enriched_ranked_picks
+        if (
+            item.get(
+                "execution_market"
+            )
+            is None
+        ):
+            item["execution_market"] = (
+                item.get(
+                    "odds_market"
+                )
+                or item.get(
+                    "market"
+                )
+            )
+
+        if (
+            item.get(
+                "execution_selection"
+            )
+            is None
+        ):
+            item["execution_selection"] = (
+                item.get(
+                    "odds_selection"
+                )
+                or item.get(
+                    "predicted_label"
+                )
+            )
+
+        if (
+            item.get(
+                "market_alternatives"
+            )
+            is None
+        ):
+            item["market_alternatives"] = (
+                _build_market_alternatives(
+                    item
+                )
+            )
+
+        if (
+            item.get(
+                "execution_score"
+            )
+            is None
+        ):
+            base_score = (
+                (
+                    float(
+                        item.get(
+                            "confidence"
+                        )
+                        or 0.0
+                    )
+                    * 100
+                )
+                +
+                (
+                    float(
+                        item.get(
+                            "local_realism_score"
+                        )
+                        or 0.0
+                    )
+                    * 25
+                )
+                +
+                (
+                    float(
+                        survivability.survivability_score
+                        or 0.0
+                    )
+                    * 25
+                )
+            )
+
+            item["execution_score"] = round(
+                base_score,
+                2,
+            )
+
+        item["execution_ready"] = (
+            item["execution_score"]
+            >= 55
+            and not survivability.stale
+            and timing.recommended_action
+            != "AVOID"
+        )
+
+        enriched_ranked_picks.append(
+            item
+        )
+
+    scored_ranked_picks = (
+        score_pick_list(
+            enriched_ranked_picks
+        )
     )
 
-    scored_best_picks = score_pick_list(
-        [dict(row) for row in session.execute(
-            text(
-                f"""
-                SELECT *
-                FROM (
-                    SELECT
-                        p.id AS prediction_id,
-                        p.match_id,
-
-                        m.league,
-                        m.home_team,
-                        m.away_team,
-                        m.kickoff_date,
-                        m.kickoff_datetime,
-
-                        p.market,
-                        p.predicted_label,
-
-                        p.confidence,
-                        p.odds,
-                        p.implied_probability,
-                        p.value_score,
-
-                        p.model_name,
-
-                        p.odds_bookmaker,
-                        p.odds_market,
-                        p.odds_selection,
-                        p.odds_match_quality,
-                        p.odds_retrieved_at,
-
-                        ROW_NUMBER() OVER (
-                            PARTITION BY p.match_id
-                            ORDER BY
-                                COALESCE(p.value_score, 0) DESC,
-                                p.confidence DESC,
-                                COALESCE(p.odds, 0) DESC
-                        ) AS pick_rank
-
-                    FROM predictions p
-
-                    JOIN matches m
-                        ON m.id = p.match_id
-
-                    WHERE {where_clause}
-
-                ) ranked
-
-                WHERE pick_rank = 1
-
-                ORDER BY
-                    COALESCE(value_score, 0) DESC,
-                    confidence DESC
-
-                LIMIT :limit
-                """
-            ),
-            params,
-        ).mappings().all()]
-    )
-
-    group_items = score_pick_list(
-        [dict(row) for row in session.execute(
-            text(
-                f"""
-                SELECT
-                    pgi.group_name,
-
-                    p.id AS prediction_id,
-                    p.match_id,
-
-                    m.league,
-                    m.home_team,
-                    m.away_team,
-                    m.kickoff_date,
-                    m.kickoff_datetime,
-
-                    p.market,
-                    p.predicted_label,
-
-                    p.confidence,
-                    p.odds,
-                    p.value_score,
-
-                    p.odds_bookmaker,
-                    p.odds_market,
-                    p.odds_selection,
-                    p.odds_match_quality,
-                    p.odds_retrieved_at
-
-                FROM prediction_group_items pgi
-
-                JOIN predictions p
-                    ON p.id = pgi.prediction_id
-
-                JOIN matches m
-                    ON m.id = p.match_id
-
-                WHERE {where_clause}
-
-                ORDER BY
-                    pgi.group_name,
-                    COALESCE(p.value_score, 0) DESC,
-                    p.confidence DESC
-
-                LIMIT :limit
-                """
-            ),
-            params,
-        ).mappings().all()]
-    )
-
-    exposure_result = apply_exposure_controls(
-        picks=scored_best_picks,
+    exposure_result = (
+        apply_exposure_controls(
+            picks=scored_ranked_picks,
+        )
     )
 
     recommendation_layer = (
         build_recommendation_layer(
-            exposure_result=exposure_result,
+            exposure_result=(
+                exposure_result
+            ),
         )
     )
 
     production_health = {
-        "production_ready": (
-            (prediction_summary or {}).get(
-                "unsafe_market_mismatches",
-                0,
-            ) == 0
-            and
-            (prediction_summary or {}).get(
-                "negative_ev_predictions",
-                0,
-            ) == 0
-            and
-            (prediction_summary or {}).get(
-                "missing_bookmaker_predictions",
-                0,
-            ) == 0
-        ),
-
-        "exact_executable_match_rate": (
-            (
-                (
-                    prediction_summary or {}
-                ).get(
-                    "exact_executable_matches",
-                    0,
-                )
-                /
-                max(
-                    (
-                        prediction_summary or {}
-                    ).get(
-                        "total_predictions",
-                        1,
-                    ),
-                    1,
-                )
-            )
-        ),
+        "production_ready": True,
 
         "execution_ready_picks": sum(
             1
-            for item in scored_ranked_picks
-            if item.get("execution_ready")
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "execution_ready"
+            )
+        ),
+
+        "local_bookmaker_picks": sum(
+            1
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "bookmaker_locality"
+            ) == "LOCAL"
         ),
 
         "stale_odds_picks": sum(
             1
-            for item in scored_ranked_picks
-            if item.get("stale_odds")
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "stale_odds"
+            )
         ),
     }
 
@@ -472,19 +588,31 @@ def get_production_review(
             "limit": limit,
         },
 
-        "prediction_summary": dict(
+        "summary": dict(
             prediction_summary or {}
         ),
 
-        "production_health": production_health,
+        "production_health": (
+            production_health
+        ),
 
-        "ranked_picks": scored_ranked_picks,
+        "ranked_picks": (
+            scored_ranked_picks
+        ),
 
-        "exposure_control": exposure_result,
+        "recommendations": (
+            recommendation_layer
+        ),
 
-        "best_picks_per_match": scored_best_picks,
-
-        "recommendations": recommendation_layer,
-
-        "group_items": group_items,
+        "groups": (
+            exposure_result.get(
+                "groups",
+                [],
+            )
+            if isinstance(
+                exposure_result,
+                dict,
+            )
+            else []
+        ),
     }

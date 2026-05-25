@@ -999,7 +999,11 @@ def prediction_review_report(
         
 @app.command("production-review")
 def production_review_command(
-    slate: str | None = None,
+    slate: str | None = typer.Option(
+        None,
+        "--slate",
+        help="Optional prediction slate.",
+    ),
 ):
     with get_cli_session() as session:
         result = get_production_review(
@@ -1020,29 +1024,27 @@ def production_review_command(
 
     for item in picks:
 
-        kickoff = item.get(
-            "kickoff_eat"
-        )
+        kickoff = item.get("kickoff_eat")
+        timing_status = item.get("timing_status")
+        action = item.get("recommended_action")
+        survivability = item.get("survivability_score")
+        stale_odds = bool(item.get("stale_odds"))
 
-        timing_status = item.get(
-            "timing_status"
-        )
+        alternatives = item.get("market_alternatives") or []
 
-        action = item.get(
-            "recommended_action"
-        )
+        execution_ready = item.get("execution_ready")
 
-        survivability = item.get(
-            "survivability_score"
-        )
-
-        stale_odds = item.get(
-            "stale_odds"
-        )
-
-        alternatives = item.get(
-            "market_alternatives"
-        ) or []
+        if execution_ready is None:
+            execution_ready = (
+                survivability is not None
+                and float(survivability) >= 0.40
+                and not stale_odds
+                and timing_status
+                not in {
+                    "LIVE_OR_FINISHED",
+                    "TOO_CLOSE_TO_KICKOFF",
+                }
+            )
 
         print(
             {
@@ -1050,67 +1052,74 @@ def production_review_command(
                     f"{item.get('home_team')} vs "
                     f"{item.get('away_team')}"
                 ),
-
-                "league": item.get(
-                    "league"
-                ),
-
+                "league": item.get("league"),
                 "kickoff_eat": kickoff,
 
-                "market": item.get(
-                    "market"
-                ),
-
-                "pick": item.get(
-                    "predicted_label"
-                ),
-
+                "model_market": item.get("market"),
+                "model_pick": item.get("predicted_label"),
                 "confidence": round(
-                    float(
-                        item.get(
-                            "confidence"
-                        ) or 0.0
-                    ),
+                    float(item.get("confidence") or 0.0),
                     4,
                 ),
 
-                "odds": item.get(
-                    "odds"
+                "execution_market": (
+                    item.get("execution_market")
+                    or item.get("odds_market")
+                    or item.get("market")
                 ),
-
-                "bookmaker": item.get(
-                    "odds_bookmaker"
+                "execution_selection": (
+                    item.get("execution_selection")
+                    or item.get("odds_selection")
+                    or item.get("predicted_label")
                 ),
+                "execution_family": item.get("execution_family"),
+                "execution_line": item.get("execution_line"),
 
-                "timing_status": timing_status,
+                "odds": item.get("odds"),
+                "bookmaker": item.get("odds_bookmaker"),
+                "bookmaker_locality": item.get("bookmaker_locality"),
+                "odds_match_quality": item.get("odds_match_quality"),
 
-                "recommended_action": action,
-
+                "value_score": item.get("value_score"),
+                "local_realism_score": item.get("local_realism_score"),
+                "execution_score": item.get("execution_score"),
                 "survivability_score": survivability,
 
+                "timing_status": timing_status,
+                "recommended_action": action,
                 "stale_odds": stale_odds,
+                "execution_ready": execution_ready,
 
-                "execution_ready": (
-                    survivability is not None
-                    and survivability >= 0.40
-                    and not stale_odds
-                    and timing_status
-                    not in {
-                        "LIVE_OR_FINISHED",
-                        "TOO_CLOSE_TO_KICKOFF",
+                "execution_reasons": item.get("execution_reasons") or [],
+
+                "ranked_alternatives": [
+                    {
+                        "market": (
+                            alt.get("execution_market")
+                            or alt.get("market")
+                        ),
+                        "selection": (
+                            alt.get("execution_selection")
+                            or alt.get("selection")
+                        ),
+                        "bookmaker": (
+                            alt.get("bookmaker")
+                            or alt.get("odds_bookmaker")
+                        ),
+                        "odds": alt.get("odds"),
+                        "execution_score": alt.get("execution_score"),
+                        "local_realism_score": alt.get("local_realism_score"),
+                        "match_quality": (
+                            alt.get("match_quality")
+                            or alt.get("odds_match_quality")
+                        ),
                     }
-                ),
-
-                "fallback_markets": [
-                    x.get("market")
-                    for x in alternatives
+                    for alt in alternatives[:8]
                 ],
             }
         )
 
-    groups = result.get(
-        "groups"
-    ) or []
+    groups = result.get("groups") or []
 
     if groups:
 
@@ -1118,7 +1127,7 @@ def production_review_command(
 
         for group in groups:
             print(group)
-
+            
             
 @app.command("data-coverage-report")
 def data_coverage_report():

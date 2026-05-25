@@ -234,6 +234,74 @@ class Prediction(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
+# backend/app/db/models.py
+# ADD THESE FIELDS INSIDE Prediction CLASS
+
+    # =====================================================
+    # EXECUTION INTELLIGENCE
+    # =====================================================
+
+    execution_market: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+        index=True,
+    )
+
+    execution_selection: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+        index=True,
+    )
+
+    execution_family: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
+
+    execution_line: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    bookmaker_locality: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    local_realism_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    execution_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        index=True,
+    )
+
+    survivability_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        index=True,
+    )
+
+    execution_ready: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+        index=True,
+    )
+
+    execution_reasons: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    market_alternatives: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
 class PredictionGroupItem(Base):
     __tablename__ = "prediction_group_items"
 

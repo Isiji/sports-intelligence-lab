@@ -21,7 +21,9 @@ from app.odds.executable_market_registry import (
     is_production_ready_market,
     parse_executable_market,
 )
-from app.odds.odds_matcher import find_best_odds_for_prediction
+from app.services.odds_lookup_service import (
+    find_best_odds_for_prediction,
+)
 from app.services.odds_survivability_service import (
     evaluate_odds_survivability,
 )
@@ -64,17 +66,17 @@ def predict_all_football_markets(
             )
             continue
 
-        executable_market = parse_executable_market(
+        parsed_market = parse_executable_market(
             market
         )
 
-        if executable_market.volatility_tier == "EXTREME":
+        if parsed_market.volatility_tier == "EXTREME":
             print(
                 f"[SKIPPED] {market}: extreme volatility market"
             )
             continue
 
-        if executable_market.family in {
+        if parsed_market.family in {
             "EXACT_SCORE",
             "HT_FT",
         }:
@@ -145,7 +147,9 @@ def predict_all_football_markets(
 
         for row_index, row in upcoming_df.iterrows():
 
-            match_id = int(row["match_id"])
+            match_id = int(
+                row["match_id"]
+            )
 
             timing = analyze_prediction_timing(
                 kickoff_value=(
@@ -164,7 +168,7 @@ def predict_all_football_markets(
                 continue
 
             if (
-                executable_market.family == "ASIAN_HANDICAP"
+                parsed_market.family == "ASIAN_HANDICAP"
                 and timing.minutes_to_kickoff is not None
                 and timing.minutes_to_kickoff <= 35
             ):
@@ -212,7 +216,10 @@ def predict_all_football_markets(
                 continue
 
             survivability = evaluate_odds_survivability(
-                market=market,
+                market=(
+                    odds_payload.get("execution_market")
+                    or market
+                ),
                 bookmaker=odds_payload.get(
                     "odds_bookmaker"
                 ),
@@ -239,7 +246,7 @@ def predict_all_football_markets(
                     continue
 
             if (
-                executable_market.family == "ASIAN_HANDICAP"
+                parsed_market.family == "ASIAN_HANDICAP"
                 and odds_payload["odds"] is not None
                 and float(odds_payload["odds"]) >= 3.50
             ):
@@ -266,7 +273,10 @@ def predict_all_football_markets(
                 odds=odds_payload["odds"],
                 confidence=confidence,
                 value_score=value_score,
-                market=market,
+                market=(
+                    odds_payload.get("execution_market")
+                    or market
+                ),
                 production_mode=True,
             )
 
@@ -341,6 +351,33 @@ def predict_all_football_markets(
             if not production_validation.allowed:
                 continue
 
+            execution_score = _safe_float(
+                odds_payload.get("execution_score")
+            )
+
+            local_realism_score = _safe_float(
+                odds_payload.get("local_realism_score")
+            )
+
+            survivability_score = _safe_float(
+                getattr(
+                    survivability,
+                    "survivability_score",
+                    None,
+                )
+            )
+
+            execution_ready = (
+                odds_payload["odds"] is not None
+                and not survivability.stale
+                and survivability_score is not None
+                and survivability_score >= 0.45
+                and (
+                    execution_score is None
+                    or execution_score >= 55.0
+                )
+            )
+
             prediction_payload = {
                 "slate": slate,
                 "match_id": match_id,
@@ -358,11 +395,40 @@ def predict_all_football_markets(
                 "odds": odds_payload["odds"],
                 "implied_probability": implied_probability,
                 "value_score": value_score,
+
                 "odds_bookmaker": odds_payload["odds_bookmaker"],
                 "odds_market": odds_payload["odds_market"],
                 "odds_selection": odds_payload["odds_selection"],
                 "odds_retrieved_at": odds_payload["odds_retrieved_at"],
                 "odds_match_quality": odds_payload["odds_match_quality"],
+
+                "execution_market": odds_payload.get(
+                    "execution_market"
+                ),
+                "execution_selection": odds_payload.get(
+                    "execution_selection"
+                ),
+                "execution_family": odds_payload.get(
+                    "execution_family"
+                ),
+                "execution_line": odds_payload.get(
+                    "execution_line"
+                ),
+                "bookmaker_locality": odds_payload.get(
+                    "bookmaker_locality"
+                ),
+                "local_realism_score": local_realism_score,
+                "execution_score": execution_score,
+                "survivability_score": survivability_score,
+                "execution_ready": execution_ready,
+                "execution_reasons": odds_payload.get(
+                    "execution_reasons"
+                )
+                or [],
+                "market_alternatives": odds_payload.get(
+                    "market_alternatives"
+                )
+                or [],
             }
 
             _upsert_prediction(
@@ -398,6 +464,18 @@ def _upsert_prediction(
         "odds_selection": stmt.excluded.odds_selection,
         "odds_retrieved_at": stmt.excluded.odds_retrieved_at,
         "odds_match_quality": stmt.excluded.odds_match_quality,
+
+        "execution_market": stmt.excluded.execution_market,
+        "execution_selection": stmt.excluded.execution_selection,
+        "execution_family": stmt.excluded.execution_family,
+        "execution_line": stmt.excluded.execution_line,
+        "bookmaker_locality": stmt.excluded.bookmaker_locality,
+        "local_realism_score": stmt.excluded.local_realism_score,
+        "execution_score": stmt.excluded.execution_score,
+        "survivability_score": stmt.excluded.survivability_score,
+        "execution_ready": stmt.excluded.execution_ready,
+        "execution_reasons": stmt.excluded.execution_reasons,
+        "market_alternatives": stmt.excluded.market_alternatives,
     }
 
     stmt = stmt.on_conflict_do_update(
@@ -489,6 +567,16 @@ def _resolve_prediction_odds(
         "odds_selection": None,
         "odds_retrieved_at": None,
         "odds_match_quality": None,
+
+        "execution_market": None,
+        "execution_selection": None,
+        "execution_family": None,
+        "execution_line": None,
+        "bookmaker_locality": None,
+        "local_realism_score": None,
+        "execution_score": None,
+        "execution_reasons": [],
+        "market_alternatives": [],
     }
 
     try:
@@ -506,11 +594,13 @@ def _resolve_prediction_odds(
             session=session,
             match_id=match_id,
             target_market=market,
-            home_team=home_team,
-            away_team=away_team,
+            predicted_label=predicted_label,
         )
 
-    except Exception:
+    except Exception as exc:
+        print(
+            f"[ODDS_LOOKUP_FAILED] match_id={match_id} market={market}: {exc}"
+        )
         return default_payload
 
     if result is None:
@@ -518,25 +608,25 @@ def _resolve_prediction_odds(
 
     if isinstance(result, dict):
 
+        odds = _safe_float(
+            result.get("odds")
+            or result.get("price")
+            or result.get("decimal_odds")
+        )
+
         return {
-            "odds": _safe_float(
-                result.get("odds")
-                or result.get("price")
-                or result.get("decimal_odds")
-            ),
+            "odds": odds,
             "odds_bookmaker": (
                 result.get("bookmaker")
                 or result.get("odds_bookmaker")
             ),
             "odds_market": (
                 result.get("odds_market")
-                or result.get("executable_market")
                 or result.get("market")
                 or result.get("raw_market")
             ),
             "odds_selection": (
                 result.get("odds_selection")
-                or result.get("executable_selection")
                 or result.get("selection")
                 or result.get("raw_selection")
             ),
@@ -549,6 +639,38 @@ def _resolve_prediction_odds(
                 or result.get("odds_match_quality")
                 or result.get("reason")
             ),
+
+            "execution_market": (
+                result.get("execution_market")
+                or result.get("executable_market")
+            ),
+            "execution_selection": (
+                result.get("execution_selection")
+                or result.get("executable_selection")
+            ),
+            "execution_family": result.get(
+                "execution_family"
+            ),
+            "execution_line": _safe_float(
+                result.get("execution_line")
+            ),
+            "bookmaker_locality": result.get(
+                "bookmaker_locality"
+            ),
+            "local_realism_score": _safe_float(
+                result.get("local_realism_score")
+            ),
+            "execution_score": _safe_float(
+                result.get("execution_score")
+            ),
+            "execution_reasons": (
+                result.get("execution_reasons")
+                or []
+            ),
+            "market_alternatives": (
+                result.get("market_alternatives")
+                or []
+            ),
         }
 
     return {
@@ -560,13 +682,15 @@ def _resolve_prediction_odds(
             "bookmaker",
             None,
         ),
-        "odds_market": (
-            getattr(result, "odds_market", None)
-            or getattr(result, "market", None)
+        "odds_market": getattr(
+            result,
+            "provider_market",
+            None,
         ),
-        "odds_selection": (
-            getattr(result, "odds_selection", None)
-            or getattr(result, "selection", None)
+        "odds_selection": getattr(
+            result,
+            "provider_selection",
+            None,
         ),
         "odds_retrieved_at": getattr(
             result,
@@ -577,6 +701,63 @@ def _resolve_prediction_odds(
             result,
             "match_quality",
             None,
+        ),
+        "execution_market": getattr(
+            result,
+            "executable_market",
+            None,
+        ),
+        "execution_selection": getattr(
+            result,
+            "executable_selection",
+            None,
+        ),
+        "execution_family": getattr(
+            result,
+            "execution_family",
+            None,
+        ),
+        "execution_line": _safe_float(
+            getattr(
+                result,
+                "execution_line",
+                None,
+            )
+        ),
+        "bookmaker_locality": getattr(
+            result,
+            "bookmaker_locality",
+            None,
+        ),
+        "local_realism_score": _safe_float(
+            getattr(
+                result,
+                "local_realism_score",
+                None,
+            )
+        ),
+        "execution_score": _safe_float(
+            getattr(
+                result,
+                "execution_score",
+                None,
+            )
+        ),
+        "execution_reasons": (
+            getattr(
+                result,
+                "execution_reasons",
+                None,
+            )
+            or []
+        ),
+        "market_alternatives": (
+            getattr(
+                result,
+                "market_alternatives",
+                None,
+            )
+            or []
         ),
     }
 

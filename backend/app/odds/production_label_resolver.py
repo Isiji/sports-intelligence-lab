@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.odds.execution_market_mapping import (
+    build_asian_handicap_family_candidates,
+    market_execution_family,
+)
+
 
 LABEL_TO_MARKET: dict[str, str] = {
     "HOME_WIN": "home_win",
@@ -20,20 +25,29 @@ LABEL_TO_MARKET: dict[str, str] = {
     "NOT_DOUBLE_CHANCE_X2": "home_win",
     "NOT_DOUBLE_CHANCE_12": "draw",
 
+    "OVER_0_5": "over_0_5_goals",
+    "UNDER_0_5": "under_0_5_goals",
     "OVER_1_5": "over_1_5_goals",
     "UNDER_1_5": "under_1_5_goals",
     "OVER_2_5": "over_2_5_goals",
     "UNDER_2_5": "under_2_5_goals",
     "OVER_3_5": "over_3_5_goals",
     "UNDER_3_5": "under_3_5_goals",
+    "OVER_4_5": "over_4_5_goals",
+    "UNDER_4_5": "under_4_5_goals",
 
     "BTTS_YES": "btts_yes",
     "BTTS_NO": "btts_no",
 
     "HOME_OVER_0_5": "home_over_0_5_goals",
     "HOME_UNDER_0_5": "home_under_0_5_goals",
+    "HOME_OVER_1_5": "home_over_1_5_goals",
+    "HOME_UNDER_1_5": "home_under_1_5_goals",
+
     "AWAY_OVER_0_5": "away_over_0_5_goals",
     "AWAY_UNDER_0_5": "away_under_0_5_goals",
+    "AWAY_OVER_1_5": "away_over_1_5_goals",
+    "AWAY_UNDER_1_5": "away_under_1_5_goals",
 
     "HOME_CLEAN_SHEET": "home_clean_sheet",
     "AWAY_CLEAN_SHEET": "away_clean_sheet",
@@ -50,10 +64,19 @@ LABEL_TO_MARKET: dict[str, str] = {
     "DRAW_NO_BET_AWAY": "draw_no_bet_away",
     "NOT_DRAW_NO_BET_HOME": "draw_no_bet_away",
     "NOT_DRAW_NO_BET_AWAY": "draw_no_bet_home",
+
+    "HOME_AWAY_HOME": "home_away_home",
+    "HOME_AWAY_AWAY": "home_away_away",
+
+    "FIRST_HALF_DOUBLE_CHANCE_1X": "first_half_double_chance_1x",
+    "FIRST_HALF_DOUBLE_CHANCE_X2": "first_half_double_chance_x2",
+    "FIRST_HALF_DOUBLE_CHANCE_12": "first_half_double_chance_12",
 }
 
 
 INVERSE_MARKET_MAP: dict[str, str] = {
+    "over_0_5_goals": "under_0_5_goals",
+    "under_0_5_goals": "over_0_5_goals",
     "over_1_5_goals": "under_1_5_goals",
     "under_1_5_goals": "over_1_5_goals",
     "over_2_5_goals": "under_2_5_goals",
@@ -107,6 +130,37 @@ def resolve_executable_market(
             return INVERSE_MARKET_MAP.get(positive_market, target_market)
 
     return target_market
+
+
+def resolve_execution_family(
+    *,
+    target_market: str,
+    predicted_label: str | None,
+) -> str:
+    executable_market = resolve_executable_market(
+        target_market=target_market,
+        predicted_label=predicted_label,
+    )
+
+    return market_execution_family(executable_market)
+
+
+def resolve_execution_market_candidates(
+    *,
+    target_market: str,
+    predicted_label: str | None,
+) -> list[str]:
+    executable_market = resolve_executable_market(
+        target_market=target_market,
+        predicted_label=predicted_label,
+    )
+
+    if executable_market.startswith("asian_handicap_"):
+        return build_asian_handicap_family_candidates(
+            source_market=executable_market,
+        )
+
+    return [executable_market]
 
 
 def _invert_asian_handicap(label: str) -> str:
