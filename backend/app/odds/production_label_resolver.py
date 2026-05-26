@@ -67,6 +67,28 @@ LABEL_TO_MARKET: dict[str, str] = {
 
     "HOME_AWAY_HOME": "home_away_home",
     "HOME_AWAY_AWAY": "home_away_away",
+    "NOT_HOME_AWAY_HOME": "home_away_away",
+    "NOT_HOME_AWAY_AWAY": "home_away_home",
+
+    "HANDICAP_RESULT_HOME_PLUS_1_0": "handicap_result_home_plus_1_0",
+    "HANDICAP_RESULT_DRAW_PLUS_1_0": "handicap_result_draw_plus_1_0",
+    "HANDICAP_RESULT_AWAY_PLUS_1_0": "handicap_result_away_plus_1_0",
+
+    "HANDICAP_RESULT_HOME_MINUS_1_0": "handicap_result_home_minus_1_0",
+    "HANDICAP_RESULT_DRAW_MINUS_1_0": "handicap_result_draw_minus_1_0",
+    "HANDICAP_RESULT_AWAY_MINUS_1_0": "handicap_result_away_minus_1_0",
+
+    "RESULT_TOTAL_HOME_OVER_1_5": "result_total_home_over_1_5_goals",
+    "RESULT_TOTAL_HOME_OVER_2_5": "result_total_home_over_2_5_goals",
+    "RESULT_TOTAL_HOME_OVER_3_5": "result_total_home_over_3_5_goals",
+
+    "RESULT_TOTAL_DRAW_OVER_1_5": "result_total_draw_over_1_5_goals",
+    "RESULT_TOTAL_DRAW_OVER_2_5": "result_total_draw_over_2_5_goals",
+    "RESULT_TOTAL_DRAW_OVER_3_5": "result_total_draw_over_3_5_goals",
+
+    "RESULT_TOTAL_AWAY_OVER_1_5": "result_total_away_over_1_5_goals",
+    "RESULT_TOTAL_AWAY_OVER_2_5": "result_total_away_over_2_5_goals",
+    "RESULT_TOTAL_AWAY_OVER_3_5": "result_total_away_over_3_5_goals",
 
     "FIRST_HALF_DOUBLE_CHANCE_1X": "first_half_double_chance_1x",
     "FIRST_HALF_DOUBLE_CHANCE_X2": "first_half_double_chance_x2",
@@ -100,6 +122,9 @@ INVERSE_MARKET_MAP: dict[str, str] = {
 
     "draw_no_bet_home": "draw_no_bet_away",
     "draw_no_bet_away": "draw_no_bet_home",
+
+    "home_away_home": "home_away_away",
+    "home_away_away": "home_away_home",
 }
 
 
@@ -121,6 +146,12 @@ def resolve_executable_market(
 
     if label.startswith("ASIAN_HANDICAP_"):
         return label.lower()
+
+    if label.startswith("NOT_RESULT_TOTAL_"):
+        return target_market
+
+    if label.startswith("NOT_HANDICAP_RESULT_"):
+        return target_market
 
     if label.startswith("NOT_"):
         positive_label = label.replace("NOT_", "", 1)

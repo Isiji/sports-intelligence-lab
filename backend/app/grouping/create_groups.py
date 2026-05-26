@@ -40,6 +40,9 @@ from app.intelligence.stake_engine import (
 from app.services.live_group_validation_service import (
     validate_group_for_execution,
 )
+from app.services.prediction_conflict_service import (
+    evaluate_prediction_conflict,
+)
 from app.odds.executable_market_registry import parse_executable_market
 from app.odds.market_quality_engine import get_enabled_markets
 from app.services.league_production_filter_service import (
@@ -732,6 +735,18 @@ def _load_live_prediction_candidates(
             p.model_name,
             p.sport,
 
+            p.execution_market,
+            p.execution_selection,
+            p.execution_family,
+            p.execution_line,
+            p.bookmaker_locality,
+            p.local_realism_score,
+            p.execution_score,
+            p.survivability_score,
+            p.execution_ready,
+            p.execution_reasons,
+            p.market_alternatives,
+
             m.league,
             m.home_team,
             m.away_team,
@@ -757,6 +772,10 @@ def _load_live_prediction_candidates(
           {odds_filter}
 
         ORDER BY
+            p.execution_ready DESC NULLS LAST,
+            p.execution_score DESC NULLS LAST,
+            p.survivability_score DESC NULLS LAST,
+            p.local_realism_score DESC NULLS LAST,
             p.value_score DESC NULLS LAST,
             p.confidence DESC,
             p.odds ASC NULLS LAST,
@@ -817,8 +836,27 @@ def _load_live_prediction_candidates(
         if status in blocked_statuses:
             continue
 
+        if require_odds and candidate.get("odds") is None:
+            continue
+
         candidate["kickoff_time"] = (
             _candidate_kickoff_time(candidate)
+        )
+
+        candidate["execution_ready"] = bool(
+            candidate.get("execution_ready")
+        )
+
+        candidate["execution_score"] = _float_value(
+            candidate.get("execution_score")
+        )
+
+        candidate["survivability_score"] = _float_value(
+            candidate.get("survivability_score")
+        )
+
+        candidate["local_realism_score"] = _float_value(
+            candidate.get("local_realism_score")
         )
 
         candidates.append(candidate)
@@ -875,31 +913,45 @@ def _best_odds_quality_score(
 
     odds = prediction.get("odds")
 
-    value_score = float(
-        prediction.get("value_score") or 0.0
+    value_score = _float_value(
+        prediction.get("value_score")
     )
 
-    confidence = float(
-        prediction.get("confidence") or 0.0
+    confidence = _float_value(
+        prediction.get("confidence")
     )
 
-    survivability_score = float(
-        prediction.get("survivability_score") or 0.0
+    survivability_score = _float_value(
+        prediction.get("survivability_score")
     )
 
-    freshness_score = float(
-        prediction.get("freshness_score") or 0.0
+    freshness_score = _float_value(
+        prediction.get("freshness_score")
     )
 
-    downgrade_risk_score = float(
-        prediction.get("downgrade_risk_score") or 0.0
+    downgrade_risk_score = _float_value(
+        prediction.get("downgrade_risk_score")
     )
+
+    execution_score = _float_value(
+        prediction.get("execution_score")
+    )
+
+    local_realism_score = _float_value(
+        prediction.get("local_realism_score")
+    )
+
+    bookmaker_locality = str(
+        prediction.get("bookmaker_locality") or ""
+    ).upper()
 
     quality_points = {
         "exact_executable_market": 130.0,
-        "exact_canonical": 90.0,
-        "exact_market_fallback": 75.0,
-        "direct": 50.0,
+        "exact_canonical": 92.0,
+        "asian_handicap_family_fallback": 78.0,
+        "execution_family_fallback": 68.0,
+        "exact_market_fallback": 62.0,
+        "direct": 55.0,
     }.get(str(quality), 10.0)
 
     odds_points = 0.0
@@ -909,27 +961,33 @@ def _best_odds_quality_score(
         selected_odds = float(odds)
 
         if 1.35 <= selected_odds <= 2.20:
-            odds_points += 16.0
+            odds_points += 18.0
 
         elif 2.20 < selected_odds <= 3.00:
-            odds_points += 8.0
+            odds_points += 9.0
 
         elif 3.00 < selected_odds <= 4.20:
-            odds_points -= 5.0
+            odds_points -= 6.0
 
         elif selected_odds > 4.20:
-            odds_points -= 35.0
+            odds_points -= 38.0
 
         elif selected_odds < 1.30:
-            odds_points -= 40.0
+            odds_points -= 42.0
 
         if selected_odds >= 4.00:
-            odds_points -= 20.0
+            odds_points -= 22.0
 
     bookmaker_points = (
-        10.0
+        12.0
         if prediction.get("odds_bookmaker")
-        else -25.0
+        else -28.0
+    )
+
+    local_bookmaker_bonus = (
+        14.0
+        if bookmaker_locality == "LOCAL"
+        else 0.0
     )
 
     inversion_points = (
@@ -941,38 +999,50 @@ def _best_odds_quality_score(
     )
 
     survivability_points = (
-        survivability_score * 22.0
+        survivability_score * 28.0
     )
 
     freshness_points = (
         freshness_score * 12.0
     )
 
+    execution_points = min(
+        execution_score * 0.45,
+        70.0,
+    )
+
+    local_realism_points = (
+        local_realism_score * 26.0
+    )
+
     downgrade_penalty = (
-        downgrade_risk_score * 28.0
+        downgrade_risk_score * 30.0
     )
 
     stale_penalty = (
-        35.0
+        38.0
         if prediction.get("stale_odds")
         else 0.0
     )
 
     execution_bonus = (
-        10.0
+        14.0
         if prediction.get("execution_ready")
-        else -18.0
+        else -22.0
     )
 
     return round(
         quality_points
         + bookmaker_points
+        + local_bookmaker_bonus
         + inversion_points
         + survivability_points
         + freshness_points
+        + execution_points
+        + local_realism_points
         + execution_bonus
-        + min(value_score * 120.0, 28.0)
-        + min(confidence * 12.0, 12.0)
+        + min(value_score * 125.0, 30.0)
+        + min(confidence * 14.0, 14.0)
         + odds_points
         - downgrade_penalty
         - stale_penalty,
@@ -1008,23 +1078,42 @@ def _best_grouping_pick_score(
         0.0,
     )
 
+    execution_score = _float_value(
+        prediction.get("execution_score"),
+        0.0,
+    )
+
+    local_realism_score = _float_value(
+        prediction.get("local_realism_score"),
+        0.0,
+    )
+
     stale_penalty = (
-        0.20 if prediction.get("stale_odds") else 0.0
+        0.22 if prediction.get("stale_odds") else 0.0
     )
 
     execution_bonus = (
-        0.08 if prediction.get("execution_ready") else -0.12
+        0.12 if prediction.get("execution_ready") else -0.18
+    )
+
+    local_bonus = (
+        0.05
+        if str(prediction.get("bookmaker_locality") or "").upper() == "LOCAL"
+        else 0.0
     )
 
     return round(
         float(prediction.get("selection_score") or 0.0)
-        + (_best_odds_quality_score(prediction) / 800.0)
-        + (production_score / 1200.0)
-        + (survivability_score * 0.18)
+        + (_best_odds_quality_score(prediction) / 750.0)
+        + (production_score / 1100.0)
+        + (survivability_score * 0.20)
+        + (execution_score / 900.0)
+        + (local_realism_score * 0.12)
         + execution_bonus
-        - (downgrade_risk_score * 0.12)
+        + local_bonus
+        - (downgrade_risk_score * 0.14)
         - stale_penalty
-        - (portfolio_risk / 600.0)
+        - (portfolio_risk / 560.0)
         - immature_penalty,
         6,
     )
@@ -1446,8 +1535,35 @@ def _enrich_candidate(
         )
     )
 
+    execution_score = _float_value(
+        prediction.get("execution_score")
+    )
+
+    local_realism_score = _float_value(
+        prediction.get("local_realism_score")
+    )
+
+    bookmaker_locality = str(
+        prediction.get("bookmaker_locality") or ""
+    ).upper()
+
     bookmaker_execution_score = (
         odds_match_quality_score / 100.0
+    )
+
+    execution_quality_boost = min(
+        execution_score / 140.0,
+        1.0,
+    )
+
+    local_realism_boost = (
+        local_realism_score * 0.16
+    )
+
+    local_bookmaker_boost = (
+        0.05
+        if bookmaker_locality == "LOCAL"
+        else 0.0
     )
 
     execution_risk_penalty = (
@@ -1458,7 +1574,6 @@ def _enrich_candidate(
         )
         * 0.12
     )
-
     if executable.execution_risk == "HIGH":
         execution_risk_penalty += 0.04
 
@@ -1483,25 +1598,27 @@ def _enrich_candidate(
         execution_risk_penalty += 0.04
 
     selection_score = (
-        confidence * 0.30
+        confidence * 0.27
         + float(
             prediction[
                 "survivability_score"
             ]
         )
-        * 0.14
-        + value_score * 0.34
-        + market_roi * 0.10
-        + league_roi * 0.08
+        * 0.15
+        + value_score * 0.31
+        + market_roi * 0.09
+        + league_roi * 0.07
         + odds_band_roi * 0.05
         + confidence_band_roi * 0.05
-        + odds_quality * 0.08
+        + odds_quality * 0.07
         + bookmaker_execution_score * 0.10
+        + execution_quality_boost * 0.09
+        + local_realism_boost
+        + local_bookmaker_boost
         - sample_penalty
         - risk_penalty
         - execution_risk_penalty
     )
-
     prediction["kickoff_time"] = (
         _candidate_kickoff_time(
             prediction
@@ -1781,6 +1898,27 @@ def _candidate_fits_group(
     if float(candidate.get("survivability_score") or 0.0) < 0.45:
         return False
 
+    conflict = evaluate_prediction_conflict(
+        candidate=candidate,
+        existing_predictions=group,
+    )
+
+    candidate["conflict_score"] = conflict.get(
+        "conflict_score",
+        0.0,
+    )
+    candidate["conflict_level"] = conflict.get(
+        "conflict_level",
+        "NONE",
+    )
+    candidate["conflict_reasons"] = conflict.get(
+        "reasons",
+        [],
+    )
+
+    if not conflict.get("allowed", True):
+        return False
+
     same_market_count = sum(
         1 for item in group if item["market"] == market
     )
@@ -1912,60 +2050,29 @@ def _summarize_portfolio_groups(
         ]
 
         confidence_values = [
-            float(item["confidence"] or 0.0)
+            float(item.get("confidence") or 0.0)
             for item in group
         ]
 
         risk_scores = [
-            float(
-                item.get(
-                    "portfolio_risk_score"
-                ) or 0.0
-            )
+            float(item.get("portfolio_risk_score") or 0.0)
             for item in group
         ]
 
         survivability_scores = [
-            float(
-                item.get(
-                    "survivability_score"
-                ) or 0.0
-            )
+            float(item.get("survivability_score") or 0.0)
             for item in group
         ]
 
         freshness_scores = [
-            float(
-                item.get(
-                    "freshness_score"
-                ) or 0.0
-            )
+            float(item.get("freshness_score") or 0.0)
             for item in group
         ]
 
-        average_risk_score = (
-            mean(risk_scores)
-            if risk_scores
-            else 0.0
-        )
-
-        max_risk_score = (
-            max(risk_scores)
-            if risk_scores
-            else 0.0
-        )
-
-        average_survivability = (
-            mean(survivability_scores)
-            if survivability_scores
-            else 0.0
-        )
-
-        average_freshness = (
-            mean(freshness_scores)
-            if freshness_scores
-            else 0.0
-        )
+        average_risk_score = mean(risk_scores) if risk_scores else 0.0
+        max_risk_score = max(risk_scores) if risk_scores else 0.0
+        average_survivability = mean(survivability_scores) if survivability_scores else 0.0
+        average_freshness = mean(freshness_scores) if freshness_scores else 0.0
 
         group_tier = resolve_group_tier(
             average_risk_score=average_risk_score,
@@ -1979,17 +2086,8 @@ def _summarize_portfolio_groups(
             else 0.0
         )
 
-        stale_count = sum(
-            1
-            for item in group
-            if item.get("stale_odds")
-        )
-
-        execution_ready_count = sum(
-            1
-            for item in group
-            if item.get("execution_ready")
-        )
+        stale_count = sum(1 for item in group if item.get("stale_odds"))
+        execution_ready_count = sum(1 for item in group if item.get("execution_ready"))
 
         if cumulative_odds > config.max_group_odds:
             group_tier = "REJECTED"
@@ -2009,9 +2107,7 @@ def _summarize_portfolio_groups(
             daily_exposure_used=daily_exposure_used,
         )
 
-        daily_exposure_used += (
-            stake_decision.stake
-        )
+        daily_exposure_used += stake_decision.stake
 
         group_matches = []
 
@@ -2019,314 +2115,151 @@ def _summarize_portfolio_groups(
 
             timing = analyze_prediction_timing(
                 kickoff_value=(
-                    item.get(
-                        "kickoff_datetime"
-                    )
-                    or item.get(
-                        "kickoff_date"
-                    )
+                    item.get("kickoff_datetime")
+                    or item.get("kickoff_date")
                 )
             )
 
             group_matches.append(
                 {
-                    "match_id": item.get(
-                        "match_id"
-                    ),
-                    "league": item.get(
-                        "league"
-                    ),
-                    "home_team": item.get(
-                        "home_team"
-                    ),
-                    "away_team": item.get(
-                        "away_team"
-                    ),
-                    "kickoff_time": (
-                        timing.kickoff_eat
-                    ),
-                    "minutes_to_kickoff": (
-                        timing.minutes_to_kickoff
-                    ),
-                    "timing_status": (
-                        timing.timing_status
-                    ),
-                    "recommended_action": (
-                        timing.recommended_action
-                    ),
-                    "timing_reason": (
-                        timing.reason
-                    ),
-                    "market": item.get(
-                        "market"
-                    ),
-                    "market_family": item.get(
-                        "market_family"
-                    ),
-                    "predicted_label": item.get(
-                        "predicted_label"
-                    ),
+                    "match_id": item.get("match_id"),
+                    "league": item.get("league"),
+                    "home_team": item.get("home_team"),
+                    "away_team": item.get("away_team"),
+                    "kickoff_time": timing.kickoff_eat,
+                    "minutes_to_kickoff": timing.minutes_to_kickoff,
+                    "timing_status": timing.timing_status,
+                    "recommended_action": timing.recommended_action,
+                    "timing_reason": timing.reason,
+
+                    "market": item.get("market"),
+                    "market_family": item.get("market_family"),
+                    "predicted_label": item.get("predicted_label"),
                     "executable_label": (
-                        item.get(
-                            "executable_label"
-                        )
-                        or _render_executable_label(
-                            item
-                        )
+                        item.get("executable_label")
+                        or _render_executable_label(item)
                     ),
-                    "is_inversion_pick": item.get(
-                        "is_inversion_pick"
-                    ),
-                    "odds": item.get(
-                        "odds"
-                    ),
-                    "confidence": item.get(
-                        "confidence"
-                    ),
-                    "value_score": item.get(
-                        "value_score"
-                    ),
-                    "bookmaker": item.get(
-                        "odds_bookmaker"
-                    ),
-                    "odds_market": item.get(
-                        "odds_market"
-                    ),
-                    "odds_selection": item.get(
-                        "odds_selection"
-                    ),
-                    "odds_match_quality": item.get(
-                        "odds_match_quality"
-                    ),
-                    "portfolio_tier": item.get(
-                        "portfolio_tier"
-                    ),
-                    "portfolio_risk_score": item.get(
-                        "portfolio_risk_score"
-                    ),
-                    "production_score": item.get(
-                        "production_score"
-                    ),
-                    "pick_grade": item.get(
-                        "pick_grade"
-                    ),
-                    "risk_level": item.get(
-                        "risk_level"
-                    ),
-                    "missing_market_intel": item.get(
-                        "missing_market_intel"
-                    ),
-                    "survivability_score": item.get(
-                        "survivability_score"
-                    ),
-                    "survivability_bucket": item.get(
-                        "survivability_bucket"
-                    ),
-                    "freshness_score": item.get(
-                        "freshness_score"
-                    ),
-                    "persistence_score": item.get(
-                        "persistence_score"
-                    ),
-                    "downgrade_risk_score": item.get(
-                        "downgrade_risk_score"
-                    ),
-                    "fallback_markets": item.get(
-                        "fallback_markets"
-                    ),
-                    "primary_fallback_market": item.get(
-                        "primary_fallback_market"
-                    ),
-                    "stale_odds": item.get(
-                        "stale_odds"
-                    ),
-                    "execution_ready": item.get(
-                        "execution_ready"
-                    ),
-                    "survivability_reasons": item.get(
-                        "survivability_reasons"
-                    ),
+                    "is_inversion_pick": item.get("is_inversion_pick"),
+
+                    "odds": item.get("odds"),
+                    "confidence": item.get("confidence"),
+                    "value_score": item.get("value_score"),
+
+                    "bookmaker": item.get("odds_bookmaker"),
+                    "odds_market": item.get("odds_market"),
+                    "odds_selection": item.get("odds_selection"),
+                    "odds_match_quality": item.get("odds_match_quality"),
+
+                    "execution_market": item.get("execution_market"),
+                    "execution_selection": item.get("execution_selection"),
+                    "execution_family": item.get("execution_family"),
+                    "execution_line": item.get("execution_line"),
+                    "bookmaker_locality": item.get("bookmaker_locality"),
+                    "local_realism_score": item.get("local_realism_score"),
+                    "execution_score": item.get("execution_score"),
+                    "execution_reasons": item.get("execution_reasons"),
+                    "market_alternatives": item.get("market_alternatives"),
+
+                    "conflict_score": item.get("conflict_score"),
+                    "conflict_level": item.get("conflict_level"),
+                    "conflict_reasons": item.get("conflict_reasons"),
+
+                    "portfolio_tier": item.get("portfolio_tier"),
+                    "portfolio_risk_score": item.get("portfolio_risk_score"),
+                    "production_score": item.get("production_score"),
+                    "pick_grade": item.get("pick_grade"),
+                    "risk_level": item.get("risk_level"),
+                    "missing_market_intel": item.get("missing_market_intel"),
+
+                    "survivability_score": item.get("survivability_score"),
+                    "survivability_bucket": item.get("survivability_bucket"),
+                    "freshness_score": item.get("freshness_score"),
+                    "persistence_score": item.get("persistence_score"),
+                    "downgrade_risk_score": item.get("downgrade_risk_score"),
+                    "fallback_markets": item.get("fallback_markets"),
+                    "primary_fallback_market": item.get("primary_fallback_market"),
+                    "stale_odds": item.get("stale_odds"),
+                    "execution_ready": item.get("execution_ready"),
+                    "survivability_reasons": item.get("survivability_reasons"),
                 }
             )
 
         summaries[group_name] = {
-            "group_type": (
-                "STRICT_ADAPTIVE_INTELLIGENCE_PORTFOLIO"
-            ),
+            "group_type": "STRICT_ADAPTIVE_INTELLIGENCE_PORTFOLIO",
             "group_tier": group_tier,
             "games": float(len(group)),
+
             "average_confidence": round(
-                mean(confidence_values),
+                mean(confidence_values) if confidence_values else 0.0,
                 4,
             ),
             "average_value_score": round(
-                mean(
-                    float(
-                        item["value_score"]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("value_score") or 0.0) for item in group),
                 4,
             ),
             "average_market_roi": round(
-                mean(
-                    float(
-                        item["market_roi"]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("market_roi") or 0.0) for item in group),
                 4,
             ),
             "average_league_roi": round(
-                mean(
-                    float(
-                        item["league_roi"]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("league_roi") or 0.0) for item in group),
                 4,
             ),
             "average_odds_band_roi": round(
-                mean(
-                    float(
-                        item["odds_band_roi"]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("odds_band_roi") or 0.0) for item in group),
                 4,
             ),
             "average_confidence_band_roi": round(
-                mean(
-                    float(
-                        item[
-                            "confidence_band_roi"
-                        ]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("confidence_band_roi") or 0.0) for item in group),
                 4,
             ),
             "average_selection_score": round(
-                mean(
-                    float(
-                        item[
-                            "selection_score"
-                        ]
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("selection_score") or 0.0) for item in group),
                 4,
             ),
-            "average_survivability_score": round(
-                average_survivability,
-                4,
-            ),
-            "average_freshness_score": round(
-                average_freshness,
-                4,
-            ),
+            "average_survivability_score": round(average_survivability, 4),
+            "average_freshness_score": round(average_freshness, 4),
             "stale_pick_count": stale_count,
-            "execution_ready_count": (
-                execution_ready_count
-            ),
+            "execution_ready_count": execution_ready_count,
             "average_odds_quality_score": round(
-                mean(
-                    float(
-                        item.get(
-                            "odds_match_quality_score"
-                        )
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("odds_match_quality_score") or 0.0) for item in group),
                 4,
             ),
             "average_sample_penalty": round(
-                mean(
-                    float(
-                        item.get(
-                            "sample_penalty"
-                        )
-                        or 0.0
-                    )
-                    for item in group
-                ),
+                mean(float(item.get("sample_penalty") or 0.0) for item in group),
                 4,
             ),
-            "average_risk_score": round(
-                average_risk_score,
-                4,
-            ),
-            "max_risk_score": round(
-                max_risk_score,
-                4,
-            ),
+            "average_risk_score": round(average_risk_score, 4),
+            "max_risk_score": round(max_risk_score, 4),
+
             "risk_flags": ", ".join(
                 sorted(
                     {
                         flag
                         for item in group
-                        for flag in item.get(
-                            "portfolio_risk_flags",
-                            [],
-                        )
+                        for flag in item.get("portfolio_risk_flags", [])
                     }
                 )
             ),
-            "cumulative_odds": round(
-                cumulative_odds,
-                4,
-            ),
-            "min_group_odds": round(
-                config.min_group_odds,
-                4,
-            ),
-            "max_group_odds": round(
-                config.max_group_odds,
-                4,
-            ),
-            "odds_coverage": round(
-                len(odds_values)
-                / len(group),
-                4,
-            ),
-            "recommended_stake": (
-                stake_decision.stake
-            ),
-            "stake_method": (
-                stake_decision.method
-            ),
-            "stake_reason": (
-                stake_decision.reason
-            ),
-            "bankroll_pct": (
-                stake_decision.bankroll_pct
-            ),
-            "raw_kelly_fraction": (
-                stake_decision.raw_kelly_fraction
-            ),
-            "applied_fraction": (
-                stake_decision.applied_fraction
-            ),
-            "estimated_group_probability": (
-                stake_decision.estimated_probability
-            ),
-            "group_matches": (
-                group_matches
-            ),
-            "expected_value": (
-                stake_decision.expected_value
-            ),
+
+            "cumulative_odds": round(cumulative_odds, 4),
+            "min_group_odds": round(config.min_group_odds, 4),
+            "max_group_odds": round(config.max_group_odds, 4),
+            "odds_coverage": round(len(odds_values) / len(group), 4),
+
+            "recommended_stake": stake_decision.stake,
+            "stake_method": stake_decision.method,
+            "stake_reason": stake_decision.reason,
+            "bankroll_pct": stake_decision.bankroll_pct,
+            "raw_kelly_fraction": stake_decision.raw_kelly_fraction,
+            "applied_fraction": stake_decision.applied_fraction,
+            "estimated_group_probability": stake_decision.estimated_probability,
+            "expected_value": stake_decision.expected_value,
+
+            "group_matches": group_matches,
         }
 
     return summaries
-
 
 def _fallback_confidence_groups(
     session: Session,
@@ -2386,23 +2319,34 @@ def _fallback_confidence_groups(
         {
             "prediction_id": prediction.id,
             "match_id": prediction.match_id,
+
             "league": None,
             "home_team": None,
             "away_team": None,
             "kickoff_time": None,
+
             "market": prediction.market,
             "predicted_label": (
                 prediction.predicted_label
             ),
+
             "sport": prediction.sport,
             "prediction": prediction,
+
             "confidence": prediction.confidence,
             "odds": prediction.odds,
             "value_score": (
                 prediction.value_score
             ),
+
             "odds_bookmaker": (
                 prediction.odds_bookmaker
+            ),
+            "odds_market": (
+                prediction.odds_market
+            ),
+            "odds_selection": (
+                prediction.odds_selection
             ),
             "odds_retrieved_at": (
                 prediction.odds_retrieved_at
@@ -2410,10 +2354,52 @@ def _fallback_confidence_groups(
             "odds_match_quality": (
                 prediction.odds_match_quality
             ),
+
+            "execution_market": (
+                prediction.execution_market
+            ),
+            "execution_selection": (
+                prediction.execution_selection
+            ),
+            "execution_family": (
+                prediction.execution_family
+            ),
+            "execution_line": (
+                prediction.execution_line
+            ),
+
+            "bookmaker_locality": (
+                prediction.bookmaker_locality
+            ),
+
+            "local_realism_score": (
+                prediction.local_realism_score
+            ),
+
+            "execution_score": (
+                prediction.execution_score
+            ),
+
+            "survivability_score": (
+                prediction.survivability_score
+            ),
+
+            "execution_ready": (
+                prediction.execution_ready
+            ),
+
+            "execution_reasons": (
+                prediction.execution_reasons
+                or []
+            ),
+
+            "market_alternatives": (
+                prediction.market_alternatives
+                or []
+            ),
         }
         for prediction in predictions
     ]
-
     league_map_rows = session.execute(
         text(
             """

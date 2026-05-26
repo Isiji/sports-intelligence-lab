@@ -134,6 +134,29 @@ MARKET_TARGETS = {
     "asian_handicap_away_plus_1_5": "target_ah_away_plus_1_5",
     "asian_handicap_home_minus_1_5": "target_ah_home_minus_1_5",
     "asian_handicap_away_minus_1_5": "target_ah_away_minus_1_5",
+
+    "home_away_home": "target_home_away_home",
+    "home_away_away": "target_home_away_away",
+
+    "handicap_result_home_plus_1_0": "target_handicap_result_home_plus_1_0",
+    "handicap_result_draw_plus_1_0": "target_handicap_result_draw_plus_1_0",
+    "handicap_result_away_plus_1_0": "target_handicap_result_away_plus_1_0",
+
+    "handicap_result_home_minus_1_0": "target_handicap_result_home_minus_1_0",
+    "handicap_result_draw_minus_1_0": "target_handicap_result_draw_minus_1_0",
+    "handicap_result_away_minus_1_0": "target_handicap_result_away_minus_1_0",
+
+    "result_total_home_over_1_5_goals": "target_result_total_home_over_1_5",
+    "result_total_home_over_2_5_goals": "target_result_total_home_over_2_5",
+    "result_total_home_over_3_5_goals": "target_result_total_home_over_3_5",
+
+    "result_total_draw_over_1_5_goals": "target_result_total_draw_over_1_5",
+    "result_total_draw_over_2_5_goals": "target_result_total_draw_over_2_5",
+    "result_total_draw_over_3_5_goals": "target_result_total_draw_over_3_5",
+
+    "result_total_away_over_1_5_goals": "target_result_total_away_over_1_5",
+    "result_total_away_over_2_5_goals": "target_result_total_away_over_2_5",
+    "result_total_away_over_3_5_goals": "target_result_total_away_over_3_5",
 }
 
 
@@ -184,6 +207,91 @@ MARKET_LABELS = {
     "asian_handicap_away_plus_1_5": ("ASIAN_HANDICAP_AWAY_PLUS_1_5", "NOT_ASIAN_HANDICAP_AWAY_PLUS_1_5"),
     "asian_handicap_home_minus_1_5": ("ASIAN_HANDICAP_HOME_MINUS_1_5", "NOT_ASIAN_HANDICAP_HOME_MINUS_1_5"),
     "asian_handicap_away_minus_1_5": ("ASIAN_HANDICAP_AWAY_MINUS_1_5", "NOT_ASIAN_HANDICAP_AWAY_MINUS_1_5"),
+
+    "home_away_home": (
+        "HOME_AWAY_HOME",
+        "NOT_HOME_AWAY_HOME",
+    ),
+
+    "home_away_away": (
+        "HOME_AWAY_AWAY",
+        "NOT_HOME_AWAY_AWAY",
+    ),
+
+    "handicap_result_home_plus_1_0": (
+        "HANDICAP_RESULT_HOME_PLUS_1_0",
+        "NOT_HANDICAP_RESULT_HOME_PLUS_1_0",
+    ),
+
+    "handicap_result_draw_plus_1_0": (
+        "HANDICAP_RESULT_DRAW_PLUS_1_0",
+        "NOT_HANDICAP_RESULT_DRAW_PLUS_1_0",
+    ),
+
+    "handicap_result_away_plus_1_0": (
+        "HANDICAP_RESULT_AWAY_PLUS_1_0",
+        "NOT_HANDICAP_RESULT_AWAY_PLUS_1_0",
+    ),
+
+    "handicap_result_home_minus_1_0": (
+        "HANDICAP_RESULT_HOME_MINUS_1_0",
+        "NOT_HANDICAP_RESULT_HOME_MINUS_1_0",
+    ),
+
+    "handicap_result_draw_minus_1_0": (
+        "HANDICAP_RESULT_DRAW_MINUS_1_0",
+        "NOT_HANDICAP_RESULT_DRAW_MINUS_1_0",
+    ),
+
+    "handicap_result_away_minus_1_0": (
+        "HANDICAP_RESULT_AWAY_MINUS_1_0",
+        "NOT_HANDICAP_RESULT_AWAY_MINUS_1_0",
+    ),
+
+    "result_total_home_over_1_5_goals": (
+        "RESULT_TOTAL_HOME_OVER_1_5",
+        "NOT_RESULT_TOTAL_HOME_OVER_1_5",
+    ),
+
+    "result_total_home_over_2_5_goals": (
+        "RESULT_TOTAL_HOME_OVER_2_5",
+        "NOT_RESULT_TOTAL_HOME_OVER_2_5",
+    ),
+
+    "result_total_home_over_3_5_goals": (
+        "RESULT_TOTAL_HOME_OVER_3_5",
+        "NOT_RESULT_TOTAL_HOME_OVER_3_5",
+    ),
+
+    "result_total_draw_over_1_5_goals": (
+        "RESULT_TOTAL_DRAW_OVER_1_5",
+        "NOT_RESULT_TOTAL_DRAW_OVER_1_5",
+    ),
+
+    "result_total_draw_over_2_5_goals": (
+        "RESULT_TOTAL_DRAW_OVER_2_5",
+        "NOT_RESULT_TOTAL_DRAW_OVER_2_5",
+    ),
+
+    "result_total_draw_over_3_5_goals": (
+        "RESULT_TOTAL_DRAW_OVER_3_5",
+        "NOT_RESULT_TOTAL_DRAW_OVER_3_5",
+    ),
+
+    "result_total_away_over_1_5_goals": (
+        "RESULT_TOTAL_AWAY_OVER_1_5",
+        "NOT_RESULT_TOTAL_AWAY_OVER_1_5",
+    ),
+
+    "result_total_away_over_2_5_goals": (
+        "RESULT_TOTAL_AWAY_OVER_2_5",
+        "NOT_RESULT_TOTAL_AWAY_OVER_2_5",
+    ),
+
+    "result_total_away_over_3_5_goals": (
+        "RESULT_TOTAL_AWAY_OVER_3_5",
+        "NOT_RESULT_TOTAL_AWAY_OVER_3_5",
+    ),
 }
 
 
@@ -629,6 +737,86 @@ def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df["target_ah_away_plus_1_5"] = ((away_goal_diff + 1.5) > 0).astype(int)
     df["target_ah_home_minus_1_5"] = ((goal_diff - 1.5) > 0).astype(int)
     df["target_ah_away_minus_1_5"] = ((away_goal_diff - 1.5) > 0).astype(int)
+
+    df["target_home_away_home"] = (
+        df["home_goals"] > df["away_goals"]
+    ).astype(int)
+
+    df["target_home_away_away"] = (
+        df["away_goals"] > df["home_goals"]
+    ).astype(int)
+
+    adjusted_plus = goal_diff + 1.0
+    adjusted_minus = goal_diff - 1.0
+
+    df["target_handicap_result_home_plus_1_0"] = (
+        adjusted_plus > 0
+    ).astype(int)
+
+    df["target_handicap_result_draw_plus_1_0"] = (
+        adjusted_plus == 0
+    ).astype(int)
+
+    df["target_handicap_result_away_plus_1_0"] = (
+        adjusted_plus < 0
+    ).astype(int)
+
+    df["target_handicap_result_home_minus_1_0"] = (
+        adjusted_minus > 0
+    ).astype(int)
+
+    df["target_handicap_result_draw_minus_1_0"] = (
+        adjusted_minus == 0
+    ).astype(int)
+
+    df["target_handicap_result_away_minus_1_0"] = (
+        adjusted_minus < 0
+    ).astype(int)
+
+    df["target_result_total_home_over_1_5"] = (
+        (df["home_goals"] > df["away_goals"])
+        & (total_goals > 1.5)
+    ).astype(int)
+
+    df["target_result_total_home_over_2_5"] = (
+        (df["home_goals"] > df["away_goals"])
+        & (total_goals > 2.5)
+    ).astype(int)
+
+    df["target_result_total_home_over_3_5"] = (
+        (df["home_goals"] > df["away_goals"])
+        & (total_goals > 3.5)
+    ).astype(int)
+
+    df["target_result_total_draw_over_1_5"] = (
+        (df["home_goals"] == df["away_goals"])
+        & (total_goals > 1.5)
+    ).astype(int)
+
+    df["target_result_total_draw_over_2_5"] = (
+        (df["home_goals"] == df["away_goals"])
+        & (total_goals > 2.5)
+    ).astype(int)
+
+    df["target_result_total_draw_over_3_5"] = (
+        (df["home_goals"] == df["away_goals"])
+        & (total_goals > 3.5)
+    ).astype(int)
+
+    df["target_result_total_away_over_1_5"] = (
+        (df["away_goals"] > df["home_goals"])
+        & (total_goals > 1.5)
+    ).astype(int)
+
+    df["target_result_total_away_over_2_5"] = (
+        (df["away_goals"] > df["home_goals"])
+        & (total_goals > 2.5)
+    ).astype(int)
+
+    df["target_result_total_away_over_3_5"] = (
+        (df["away_goals"] > df["home_goals"])
+        & (total_goals > 3.5)
+    ).astype(int)
 
     return df
 

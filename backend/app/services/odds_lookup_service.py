@@ -379,6 +379,58 @@ DIRECT_ODDS_LOOKUP_MAP: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+RESULT_TOTAL_MARKET_ALIASES: dict[str, list[tuple[str, str]]] = {
+    "result_total_home_over_1_5_goals": [
+        ("result total", "home and over 1.5"),
+        ("win and over", "home over 1.5"),
+        ("match combo", "home over 1.5"),
+    ],
+
+    "result_total_home_over_2_5_goals": [
+        ("result total", "home and over 2.5"),
+        ("win and over", "home over 2.5"),
+        ("match combo", "home over 2.5"),
+    ],
+
+    "result_total_home_over_3_5_goals": [
+        ("result total", "home and over 3.5"),
+        ("win and over", "home over 3.5"),
+        ("match combo", "home over 3.5"),
+    ],
+
+    "result_total_draw_over_1_5_goals": [
+        ("result total", "draw and over 1.5"),
+        ("match combo", "draw over 1.5"),
+    ],
+
+    "result_total_draw_over_2_5_goals": [
+        ("result total", "draw and over 2.5"),
+        ("match combo", "draw over 2.5"),
+    ],
+
+    "result_total_draw_over_3_5_goals": [
+        ("result total", "draw and over 3.5"),
+        ("match combo", "draw over 3.5"),
+    ],
+
+    "result_total_away_over_1_5_goals": [
+        ("result total", "away and over 1.5"),
+        ("win and over", "away over 1.5"),
+        ("match combo", "away over 1.5"),
+    ],
+
+    "result_total_away_over_2_5_goals": [
+        ("result total", "away and over 2.5"),
+        ("win and over", "away over 2.5"),
+        ("match combo", "away over 2.5"),
+    ],
+
+    "result_total_away_over_3_5_goals": [
+        ("result total", "away and over 3.5"),
+        ("win and over", "away over 3.5"),
+        ("match combo", "away over 3.5"),
+    ],
+}
 
 SELECTION_ALIASES: dict[str, set[str]] = {
     "home": {
@@ -845,6 +897,77 @@ def _direct_lookup(
 
     return None
 
+def _result_total_lookup(
+    rows: Iterable[MatchOdds],
+    canonical_market: str,
+    *,
+    source_market: str,
+    source_label: str | None,
+) -> OddsLookupResult | None:
+
+    aliases = RESULT_TOTAL_MARKET_ALIASES.get(
+        canonical_market,
+        []
+    )
+
+    if not aliases:
+        return None
+
+    candidates: list[OddsLookupResult] = []
+
+    for market_alias, selection_alias in aliases:
+
+        for row in rows:
+
+            if row.odds is None:
+                continue
+
+            market = _clean(
+                getattr(row, "market", "")
+            )
+
+            selection = _clean(
+                getattr(row, "selection", "")
+            )
+
+            combined = f"{market} {selection}"
+
+            if market_alias not in combined:
+                continue
+
+            selection_parts = [
+                x.strip()
+                for x in selection_alias.split()
+            ]
+
+            matched = sum(
+                1
+                for part in selection_parts
+                if part in combined
+            )
+
+            if matched < max(
+                2,
+                len(selection_parts) // 2,
+            ):
+                continue
+
+            candidates.append(
+                _row_to_result(
+                    row,
+                    "execution_family_fallback",
+                    executable_market=canonical_market,
+                    source_market=source_market,
+                    source_label=source_label,
+                )
+            )
+
+    if not candidates:
+        return None
+
+    return _best_candidate(
+        candidates
+    )
 
 def _asian_handicap_family_lookup(
     rows: Iterable[MatchOdds],
@@ -1069,10 +1192,15 @@ def _best_candidate(
             item.local_bookmaker is False,
             -float(item.execution_score or 0.0),
             -float(item.local_realism_score or 0.0),
+
+            item.match_quality not in {
+                "exact_executable_market",
+                "exact_canonical",
+            },
+
             float(item.odds or 999.0),
         ),
     )[0]
-
 
 def _alternatives_from_candidates(
     candidates: list[OddsLookupResult],
@@ -1230,6 +1358,18 @@ def find_best_odds_for_prediction(
             source_market=executable_market,
             source_label=predicted_label,
         )
+
+        result_total = _result_total_lookup(
+            rows,
+            candidate_market,
+            source_market=executable_market,
+            source_label=predicted_label,
+        )
+
+        if result_total:
+            all_candidates.append(
+                result_total
+            )
 
         if direct:
             all_candidates.append(

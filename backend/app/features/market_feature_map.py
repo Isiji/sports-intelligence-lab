@@ -76,6 +76,14 @@ GOAL_FEATURES = [
 ]
 
 
+HYBRID_RESULT_GOAL_FEATURES = list(
+    dict.fromkeys(
+        RESULT_FEATURES
+        + GOAL_FEATURES
+    )
+)
+
+
 CORNER_FEATURES = [
     "home_corner_avg",
     "away_corner_avg",
@@ -120,6 +128,9 @@ MARKET_FEATURES = {
     "double_chance_x2": RESULT_FEATURES,
     "double_chance_12": RESULT_FEATURES,
 
+    "home_away_home": RESULT_FEATURES,
+    "home_away_away": RESULT_FEATURES,
+
     "over_1_5_goals": GOAL_FEATURES,
     "under_1_5_goals": GOAL_FEATURES,
     "over_2_5_goals": GOAL_FEATURES,
@@ -137,8 +148,8 @@ MARKET_FEATURES = {
 
     "draw_no_bet_home": RESULT_FEATURES,
     "draw_no_bet_away": RESULT_FEATURES,
-    "home_win_to_nil": GOAL_FEATURES,
-    "away_win_to_nil": GOAL_FEATURES,
+    "home_win_to_nil": HYBRID_RESULT_GOAL_FEATURES,
+    "away_win_to_nil": HYBRID_RESULT_GOAL_FEATURES,
 
     "asian_handicap_home_plus_0_5": RESULT_FEATURES,
     "asian_handicap_away_plus_0_5": RESULT_FEATURES,
@@ -149,12 +160,42 @@ MARKET_FEATURES = {
     "asian_handicap_home_minus_1_5": RESULT_FEATURES,
     "asian_handicap_away_minus_1_5": RESULT_FEATURES,
 
+    "handicap_result_home_plus_1_0": RESULT_FEATURES,
+    "handicap_result_draw_plus_1_0": RESULT_FEATURES,
+    "handicap_result_away_plus_1_0": RESULT_FEATURES,
+    "handicap_result_home_minus_1_0": RESULT_FEATURES,
+    "handicap_result_draw_minus_1_0": RESULT_FEATURES,
+    "handicap_result_away_minus_1_0": RESULT_FEATURES,
+
+    "result_total_home_over_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_home_over_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_home_over_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_home_under_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_home_under_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_home_under_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+
+    "result_total_draw_over_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_draw_over_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_draw_over_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_draw_under_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_draw_under_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_draw_under_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+
+    "result_total_away_over_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_away_over_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_away_over_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_away_under_1_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_away_under_2_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+    "result_total_away_under_3_5_goals": HYBRID_RESULT_GOAL_FEATURES,
+
     "corners_over_8_5": CORNER_FEATURES,
     "shots_on_target_over_8_5": SOT_FEATURES,
 }
 
 
-def feature_columns_for_market(market: str) -> list[str]:
+def feature_columns_for_market(
+    market: str,
+) -> list[str]:
     selected = MARKET_FEATURES.get(market)
 
     if not selected:

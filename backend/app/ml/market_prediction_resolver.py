@@ -20,6 +20,12 @@ POSITIVE_SIDE_ONLY_MARKETS = {
     "shots_on_target_over_8_5",
 }
 
+RESEARCH_DERIVATIVE_MARKETS = {
+    "ht_ft",
+    "exact_score",
+    "first_half_exact_score",
+}
+
 
 @dataclass(frozen=True)
 class ResolvedPrediction:
@@ -35,6 +41,15 @@ def resolve_market_prediction(
     market: str,
     probability: float,
 ) -> ResolvedPrediction:
+    if market not in MARKET_LABELS:
+        return ResolvedPrediction(
+            predicted_label=None,
+            confidence=0.0,
+            probability=float(probability),
+            is_positive_side=False,
+            should_save=False,
+        )
+
     positive_label, negative_label = MARKET_LABELS[market]
     probability = float(probability)
 

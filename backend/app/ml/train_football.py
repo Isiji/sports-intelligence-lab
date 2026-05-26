@@ -49,14 +49,29 @@ MAX_BRIER_DEGRADATION_ABSOLUTE = 0.025
 
 STRICT_MARKETS = {
     "draw",
+
     "under_1_5_goals",
     "over_3_5_goals",
+
     "home_win_to_nil",
     "away_win_to_nil",
+
     "asian_handicap_home_minus_1_5",
     "asian_handicap_away_minus_1_5",
+
+    "handicap_result_home_minus_1_0",
+    "handicap_result_away_minus_1_0",
+
+    "result_total_home_over_3_5_goals",
+    "result_total_draw_over_3_5_goals",
+    "result_total_away_over_3_5_goals",
 }
 
+RESEARCH_ONLY_MARKETS = {
+    "exact_score",
+    "first_half_exact_score",
+    "ht_ft",
+}
 
 def model_path_for_market(market: str) -> Path:
     return ARTIFACT_DIR / f"football_{market}_ensemble.pkl"
@@ -85,8 +100,15 @@ def train_all_football_models(session: Session) -> None:
     trained = 0
     skipped = 0
     protected = 0
+    research_skipped = 0
 
     for market, target_column in MARKET_TARGETS.items():
+
+        if market in RESEARCH_ONLY_MARKETS:
+            research_skipped += 1
+            print(f"[RESEARCH_ONLY] skipping {market}")
+            continue
+
         try:
             market_df = filter_training_frame_for_market(df, market)
 
@@ -113,8 +135,8 @@ def train_all_football_models(session: Session) -> None:
         f"promoted_models={trained}\n"
         f"protected_existing_models={protected}\n"
         f"skipped_markets={skipped}\n"
+        f"research_only_skipped={research_skipped}\n"
     )
-
 
 def _train_market_model(
     session: Session,
@@ -304,30 +326,69 @@ def _train_market_model(
     }
 
 
-def _validate_training_frame(df, market: str, target_column: str) -> None:
+def _validate_training_frame(
+    df,
+    market: str,
+    target_column: str,
+) -> None:
     if df.empty:
-        raise ValueError("no usable rows after market filtering.")
+        raise ValueError(
+            "no usable rows after market filtering."
+        )
 
     if target_column not in df.columns:
-        raise ValueError("target column missing.")
+        raise ValueError(
+            "target column missing."
+        )
 
-    min_rows = 220 if market in STRICT_MARKETS else MIN_TOTAL_ROWS
+    if market.startswith("result_total"):
+        min_rows = 450
+
+    elif market.startswith("handicap_result"):
+        min_rows = 400
+
+    elif market in STRICT_MARKETS:
+        min_rows = 220
+
+    else:
+        min_rows = MIN_TOTAL_ROWS
 
     if len(df) < min_rows:
-        raise ValueError(f"not enough rows. required={min_rows}, found={len(df)}")
+        raise ValueError(
+            f"not enough rows. required={min_rows}, found={len(df)}"
+        )
 
     unique_classes = df[target_column].nunique()
 
     if unique_classes < 2:
-        raise ValueError("target has only one class.")
-
-    positive_rate = float(df[target_column].mean())
-
-    if positive_rate < MIN_CLASS_RATE or positive_rate > MAX_CLASS_RATE:
         raise ValueError(
-            f"class imbalance too extreme. positive_rate={round(positive_rate, 4)}"
+            "target has only one class."
         )
 
+    positive_rate = float(
+        df[target_column].mean()
+    )
+
+    if (
+        positive_rate < MIN_CLASS_RATE
+        or positive_rate > MAX_CLASS_RATE
+    ):
+        raise ValueError(
+            "class imbalance too extreme. "
+            f"positive_rate={round(positive_rate, 4)}"
+        )
+
+    if market.startswith("result_total"):
+        if positive_rate < 0.06:
+            raise ValueError(
+                "result_total market too sparse."
+            )
+
+    if market.startswith("handicap_result"):
+        if positive_rate < 0.05:
+            raise ValueError(
+                "handicap_result market too sparse."
+            )
 
 def _chronological_split(df):
     df = df.sort_values(["kickoff_date", "match_id"]).reset_index(drop=True)
@@ -513,64 +574,112 @@ def _model_health_check(
     target_column: str,
     old_metadata: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    new_brier = float(selected_result["brier_score"])
-    new_roc_auc = float(selected_result["roc_auc"])
-    new_f1 = float(selected_result["f1"])
 
-    if new_brier <= 0 or new_brier >= 0.45:
+    new_brier = float(
+        selected_result["brier_score"]
+    )
+
+    new_roc_auc = float(
+        selected_result["roc_auc"]
+    )
+
+    new_f1 = float(
+        selected_result["f1"]
+    )
+
+    if market.startswith("result_total"):
+        max_brier = 0.30
+
+    elif market.startswith("handicap_result"):
+        max_brier = 0.28
+
+    else:
+        max_brier = 0.45
+
+    if new_brier <= 0 or new_brier >= max_brier:
         return {
             "promote": False,
-            "reason": f"rejected: unhealthy brier_score={round(new_brier, 4)}",
+            "reason": (
+                "rejected: unhealthy "
+                f"brier_score={round(new_brier, 4)}"
+            ),
         }
 
-    if new_roc_auc < 0.50 and new_f1 < 0.10:
+    if market.startswith("result_total"):
+        min_auc = 0.56
+
+    elif market.startswith("handicap_result"):
+        min_auc = 0.54
+
+    else:
+        min_auc = 0.50
+
+    if new_roc_auc < min_auc and new_f1 < 0.10:
         return {
             "promote": False,
-            "reason": "rejected: weak discrimination and weak f1",
+            "reason": (
+                "rejected: weak discrimination "
+                "and weak f1"
+            ),
         }
 
-    train_rate = float(train_df[target_column].mean())
-    test_rate = float(test_df[target_column].mean())
+    train_rate = float(
+        train_df[target_column].mean()
+    )
+
+    test_rate = float(
+        test_df[target_column].mean()
+    )
 
     if abs(train_rate - test_rate) > 0.25:
         return {
             "promote": False,
             "reason": (
                 "rejected: train/test target drift too high "
-                f"train_rate={round(train_rate, 4)} test_rate={round(test_rate, 4)}"
+                f"train_rate={round(train_rate, 4)} "
+                f"test_rate={round(test_rate, 4)}"
             ),
         }
 
-    old_brier = _extract_old_brier(old_metadata)
+    old_brier = _extract_old_brier(
+        old_metadata
+    )
 
     if old_brier is None:
         return {
             "promote": True,
-            "reason": "promoted: no existing champion metadata",
+            "reason": (
+                "promoted: no existing "
+                "champion metadata"
+            ),
         }
 
     allowed_brier = max(
-        old_brier * MAX_BRIER_DEGRADATION_RATIO,
-        old_brier + MAX_BRIER_DEGRADATION_ABSOLUTE,
+        old_brier
+        * MAX_BRIER_DEGRADATION_RATIO,
+
+        old_brier
+        + MAX_BRIER_DEGRADATION_ABSOLUTE,
     )
 
     if new_brier <= allowed_brier:
         return {
             "promote": True,
             "reason": (
-                f"promoted: challenger acceptable "
-                f"old_brier={round(old_brier, 4)} new_brier={round(new_brier, 4)}"
+                "promoted: challenger acceptable "
+                f"old_brier={round(old_brier, 4)} "
+                f"new_brier={round(new_brier, 4)}"
             ),
         }
 
     return {
         "promote": False,
         "reason": (
-            f"rejected: challenger worse than champion "
-            f"old_brier={round(old_brier, 4)} new_brier={round(new_brier, 4)}"
+            "rejected: challenger worse than champion "
+            f"old_brier={round(old_brier, 4)} "
+            f"new_brier={round(new_brier, 4)}"
         ),
     }
-
 
 def _record_training_runs(
     session: Session,

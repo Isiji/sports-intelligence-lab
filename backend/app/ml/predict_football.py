@@ -33,10 +33,23 @@ from app.services.prediction_intelligence_service import (
 from app.services.prediction_market_timing_service import (
     analyze_prediction_timing,
 )
+from app.services.prediction_alternative_service import (
+    build_prediction_alternatives,
+)
 from app.services.production_validation_service import (
     validate_prediction_for_production,
 )
 
+RESEARCH_ONLY_FAMILIES = {
+    "EXACT_SCORE",
+    "FIRST_HALF_EXACT_SCORE",
+}
+
+CONTROLLED_DERIVATIVE_FAMILIES = {
+    "HT_FT",
+    "HANDICAP_RESULT",
+    "RESULT_TOTAL",
+}
 
 def predict_all_football_markets(
     session: Session,
@@ -76,14 +89,25 @@ def predict_all_football_markets(
             )
             continue
 
-        if parsed_market.family in {
-            "EXACT_SCORE",
-            "HT_FT",
-        }:
+        if parsed_market.family in RESEARCH_ONLY_FAMILIES:
             print(
-                f"[SKIPPED] {market}: derivative family blocked"
+                f"[SKIPPED] {market}: research-only derivative market"
             )
             continue
+
+        if (
+            parsed_market.family
+            in CONTROLLED_DERIVATIVE_FAMILIES
+        ):
+
+            if parsed_market.volatility_tier in {
+                "EXTREME",
+                "VERY_HIGH",
+            }:
+                print(
+                    f"[SKIPPED] {market}: derivative volatility too high"
+                )
+                continue
 
         model_path = model_path_for_market(
             market
@@ -200,6 +224,18 @@ def predict_all_football_markets(
             if confidence < min_confidence:
                 continue
 
+            if (
+                parsed_market.family == "RESULT_TOTAL"
+                and confidence < 0.62
+            ):
+                continue
+
+            if (
+                parsed_market.family == "HANDICAP_RESULT"
+                and confidence < 0.60
+            ):
+                continue
+
             odds_payload = _resolve_prediction_odds(
                 session=session,
                 match_id=match_id,
@@ -232,6 +268,20 @@ def predict_all_football_markets(
             )
 
             if require_odds:
+
+                if (
+                    parsed_market.family == "RESULT_TOTAL"
+                    and odds_payload["odds"] is not None
+                    and float(odds_payload["odds"]) >= 4.50
+                ):
+                    continue
+
+                if (
+                    parsed_market.family == "HANDICAP_RESULT"
+                    and odds_payload["odds"] is not None
+                    and float(odds_payload["odds"]) >= 4.00
+                ):
+                    continue
 
                 if not survivability.allowed:
                     continue
@@ -340,6 +390,7 @@ def predict_all_football_markets(
             )
 
             production_validation = validate_prediction_for_production(
+                
                 market=market,
                 predicted_label=predicted_label,
                 odds_payload=odds_payload,
@@ -349,6 +400,20 @@ def predict_all_football_markets(
             )
 
             if not production_validation.allowed:
+                continue
+
+            if (
+                parsed_market.family == "RESULT_TOTAL"
+                and value_score is not None
+                and value_score < 0.035
+            ):
+                continue
+
+            if (
+                parsed_market.family == "HANDICAP_RESULT"
+                and value_score is not None
+                and value_score < 0.03
+            ):
                 continue
 
             execution_score = _safe_float(
@@ -372,6 +437,14 @@ def predict_all_football_markets(
                 and not survivability.stale
                 and survivability_score is not None
                 and survivability_score >= 0.45
+                and (
+                    parsed_market.family
+                    not in {
+                        "RESULT_TOTAL",
+                        "HANDICAP_RESULT",
+                    }
+                    or confidence >= 0.64
+                )
                 and (
                     execution_score is None
                     or execution_score >= 55.0
@@ -425,10 +498,14 @@ def predict_all_football_markets(
                     "execution_reasons"
                 )
                 or [],
-                "market_alternatives": odds_payload.get(
-                    "market_alternatives"
-                )
-                or [],
+                "market_alternatives": build_prediction_alternatives(
+                    session=session,
+                    match_id=match_id,
+                    target_market=market,
+                    predicted_label=predicted_label,
+                    confidence=confidence,
+                    value_score=value_score,
+                ),
             }
 
             _upsert_prediction(
