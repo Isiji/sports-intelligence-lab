@@ -189,6 +189,143 @@ def _render_executable_label(item: dict[str, Any]) -> str:
 
     return predicted_label
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _recommended_kenya_pick(
+    item: dict[str, Any],
+) -> dict[str, Any] | None:
+
+    payload = _as_dict(
+        item.get("market_alternatives")
+    )
+
+    recommended = payload.get(
+        "recommended_kenya_pick"
+    )
+
+    if not isinstance(recommended, dict):
+        return None
+
+    if not recommended.get("recommended_for_kenya"):
+        return None
+
+    if not recommended.get("execution_ready"):
+        return None
+
+    if recommended.get("odds") is None:
+        return None
+
+    return recommended
+
+
+def _apply_kenya_group_execution(
+    item: dict[str, Any],
+) -> dict[str, Any]:
+
+    recommended = _recommended_kenya_pick(item)
+
+    item["model_market"] = item.get("market")
+    item["model_predicted_label"] = item.get("predicted_label")
+    item["model_execution_market"] = item.get("execution_market")
+    item["model_execution_selection"] = item.get("execution_selection")
+    item["model_odds"] = item.get("odds")
+    item["model_bookmaker"] = item.get("odds_bookmaker")
+
+    item["selected_execution_source"] = "PRIMARY_MODEL_EXECUTION"
+    item["selected_kenya_pick"] = recommended
+
+    if not recommended:
+        item["grouping_market"] = item.get("execution_market") or item.get("market")
+        item["grouping_selection"] = item.get("execution_selection") or item.get("odds_selection")
+        return item
+
+    selected_market = (
+        recommended.get("execution_market")
+        or item.get("execution_market")
+        or item.get("market")
+    )
+
+    selected_selection = (
+        recommended.get("execution_selection")
+        or recommended.get("odds_selection")
+        or item.get("execution_selection")
+        or item.get("odds_selection")
+    )
+
+    selected_odds = _float_value(
+        recommended.get("odds"),
+        _float_value(item.get("odds")),
+    )
+
+    item["selected_execution_source"] = "KENYA_RECOMMENDED_PICK"
+
+    item["market"] = selected_market
+    item["grouping_market"] = selected_market
+    item["grouping_selection"] = selected_selection
+
+    item["odds"] = selected_odds
+    item["odds_bookmaker"] = recommended.get("bookmaker") or item.get("odds_bookmaker")
+    item["odds_market"] = recommended.get("odds_market") or selected_market
+    item["odds_selection"] = recommended.get("odds_selection") or selected_selection
+    item["odds_match_quality"] = recommended.get("odds_match_quality") or item.get("odds_match_quality")
+    selected_retrieved_at = (
+        recommended.get("odds_retrieved_at")
+        or item.get("odds_retrieved_at")
+    )
+
+    if isinstance(selected_retrieved_at, str):
+
+        try:
+            selected_retrieved_at = datetime.fromisoformat(
+                selected_retrieved_at.replace("Z", "+00:00")
+            )
+
+        except Exception:
+            selected_retrieved_at = item.get(
+                "odds_retrieved_at"
+            )
+
+    item["odds_retrieved_at"] = (
+        selected_retrieved_at
+    )
+    item["execution_market"] = selected_market
+    item["execution_selection"] = selected_selection
+    item["execution_family"] = recommended.get("execution_family") or item.get("execution_family")
+    item["execution_line"] = recommended.get("execution_line")
+
+    item["bookmaker_locality"] = recommended.get("bookmaker_locality") or item.get("bookmaker_locality")
+    item["local_realism_score"] = recommended.get("local_realism_score") or item.get("local_realism_score")
+    item["execution_score"] = recommended.get("execution_score") or item.get("execution_score")
+    item["survivability_score"] = recommended.get("survivability_score") or item.get("survivability_score")
+    item["execution_ready"] = recommended.get("execution_ready", item.get("execution_ready"))
+    item["execution_reasons"] = recommended.get("reasons") or item.get("execution_reasons") or []
+
+    item["kenya_grade"] = recommended.get("kenya_grade")
+    item["kenya_available"] = recommended.get("kenya_available")
+    item["kenya_execution_score"] = recommended.get("kenya_execution_score")
+    item["kenya_value_score"] = recommended.get("kenya_value_score")
+    item["kenya_warnings"] = recommended.get("kenya_warnings") or []
+
+    confidence = _float_value(item.get("confidence"))
+
+    if selected_odds and selected_odds > 0:
+        item["implied_probability"] = round(
+            1.0 / selected_odds,
+            6,
+        )
+        item["value_score"] = round(
+            confidence - (1.0 / selected_odds),
+            6,
+        )
+
+    item["executable_label"] = (
+        f"{selected_selection} via Kenya fallback from "
+        f"{item.get('model_predicted_label')}"
+    )
+
+    return item
 
 def _resolve_group_market_family(market: str) -> str:
     return parse_executable_market(market).family
@@ -861,6 +998,8 @@ def _load_live_prediction_candidates(
 
         candidates.append(candidate)
 
+        candidate = _apply_kenya_group_execution(candidate)
+
     return candidates
 
 def _prefer_best_odds_candidates(
@@ -1130,8 +1269,13 @@ def _enrich_candidate(
     portfolio_context: PortfolioFilterContext,
 ) -> dict[str, Any] | None:
 
-    market = prediction["market"]
+    prediction = _apply_kenya_group_execution(prediction)
 
+    market = (
+        prediction.get("grouping_market")
+        or prediction.get("execution_market")
+        or prediction["market"]
+    )
     league = prediction.get("league") or "unknown"
 
     executable = parse_executable_market(
@@ -2181,6 +2325,24 @@ def _summarize_portfolio_groups(
                     "stale_odds": item.get("stale_odds"),
                     "execution_ready": item.get("execution_ready"),
                     "survivability_reasons": item.get("survivability_reasons"),
+
+                                        "model_market": item.get("model_market"),
+                    "model_predicted_label": item.get("model_predicted_label"),
+                    "model_execution_market": item.get("model_execution_market"),
+                    "model_execution_selection": item.get("model_execution_selection"),
+                    "model_odds": item.get("model_odds"),
+                    "model_bookmaker": item.get("model_bookmaker"),
+
+                    "selected_execution_source": item.get("selected_execution_source"),
+                    "selected_kenya_pick": item.get("selected_kenya_pick"),
+                    "grouping_market": item.get("grouping_market"),
+                    "grouping_selection": item.get("grouping_selection"),
+
+                    "kenya_grade": item.get("kenya_grade"),
+                    "kenya_available": item.get("kenya_available"),
+                    "kenya_execution_score": item.get("kenya_execution_score"),
+                    "kenya_value_score": item.get("kenya_value_score"),
+                    "kenya_warnings": item.get("kenya_warnings"),
                 }
             )
 

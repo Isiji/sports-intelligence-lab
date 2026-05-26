@@ -21,20 +21,23 @@ from app.odds.executable_market_registry import (
     is_production_ready_market,
     parse_executable_market,
 )
+from app.services.local_bookmaker_profile_service import (
+    evaluate_kenyan_execution,
+)
 from app.services.odds_lookup_service import (
     find_best_odds_for_prediction,
 )
 from app.services.odds_survivability_service import (
     evaluate_odds_survivability,
 )
+from app.services.prediction_alternative_service import (
+    build_prediction_alternatives,
+)
 from app.services.prediction_intelligence_service import (
     apply_prediction_intelligence,
 )
 from app.services.prediction_market_timing_service import (
     analyze_prediction_timing,
-)
-from app.services.prediction_alternative_service import (
-    build_prediction_alternatives,
 )
 from app.services.production_validation_service import (
     validate_prediction_for_production,
@@ -50,6 +53,7 @@ CONTROLLED_DERIVATIVE_FAMILIES = {
     "HANDICAP_RESULT",
     "RESULT_TOTAL",
 }
+
 
 def predict_all_football_markets(
     session: Session,
@@ -71,9 +75,7 @@ def predict_all_football_markets(
 
     for market in MARKET_TARGETS.keys():
 
-        if not is_production_ready_market(
-            market
-        ):
+        if not is_production_ready_market(market):
             print(
                 f"[SKIPPED] {market}: market not production ready"
             )
@@ -390,7 +392,6 @@ def predict_all_football_markets(
             )
 
             production_validation = validate_prediction_for_production(
-                
                 market=market,
                 predicted_label=predicted_label,
                 odds_payload=odds_payload,
@@ -451,6 +452,38 @@ def predict_all_football_markets(
                 )
             )
 
+            kenya_execution = evaluate_kenyan_execution(
+                market=(
+                    odds_payload.get("execution_market")
+                    or market
+                ),
+                bookmaker=odds_payload.get(
+                    "odds_bookmaker"
+                ),
+                odds=odds_payload.get("odds"),
+                confidence=confidence,
+                source_market=market,
+            )
+
+            alternatives = build_prediction_alternatives(
+                session=session,
+                match_id=match_id,
+                target_market=market,
+                predicted_label=predicted_label,
+                confidence=confidence,
+                value_score=value_score,
+            )
+
+            kenya_recommended = next(
+                (
+                    item
+                    for item in alternatives
+                    if item.get("recommended_for_kenya")
+                    is True
+                ),
+                None,
+            )
+
             prediction_payload = {
                 "slate": slate,
                 "match_id": match_id,
@@ -498,14 +531,89 @@ def predict_all_football_markets(
                     "execution_reasons"
                 )
                 or [],
-                "market_alternatives": build_prediction_alternatives(
-                    session=session,
-                    match_id=match_id,
-                    target_market=market,
-                    predicted_label=predicted_label,
-                    confidence=confidence,
-                    value_score=value_score,
-                ),
+
+                "market_alternatives": {
+                    "primary_kenya_profile": kenya_execution,
+                    "recommended_kenya_pick": kenya_recommended,
+                    "alternatives": alternatives,
+
+                    "frontend_summary": {
+                        "primary_prediction": market,
+                        "predicted_label": predicted_label,
+
+                        "primary_execution_market": odds_payload.get(
+                            "execution_market"
+                        ),
+                        "primary_execution_selection": odds_payload.get(
+                            "execution_selection"
+                        ),
+
+                        "primary_bookmaker": odds_payload.get(
+                            "odds_bookmaker"
+                        ),
+
+                        "primary_odds": odds_payload.get(
+                            "odds"
+                        ),
+
+                        "kenya_grade": kenya_execution.get(
+                            "kenya_grade"
+                        ),
+
+                        "kenya_available": kenya_execution.get(
+                            "kenya_available"
+                        ),
+
+                        "kenya_value_score": kenya_execution.get(
+                            "local_value_score"
+                        ),
+
+                        "recommended_market": (
+                            kenya_recommended.get(
+                                "execution_market"
+                            )
+                            if kenya_recommended
+                            else odds_payload.get(
+                                "execution_market"
+                            )
+                        ),
+
+                        "recommended_selection": (
+                            kenya_recommended.get(
+                                "execution_selection"
+                            )
+                            if kenya_recommended
+                            else odds_payload.get(
+                                "execution_selection"
+                            )
+                        ),
+
+                        "recommended_bookmaker": (
+                            kenya_recommended.get(
+                                "bookmaker"
+                            )
+                            if kenya_recommended
+                            else odds_payload.get(
+                                "odds_bookmaker"
+                            )
+                        ),
+
+                        "recommended_odds": (
+                            kenya_recommended.get(
+                                "odds"
+                            )
+                            if kenya_recommended
+                            else odds_payload.get(
+                                "odds"
+                            )
+                        ),
+
+                        "warnings": kenya_execution.get(
+                            "warnings",
+                            [],
+                        ),
+                    },
+                },
             }
 
             _upsert_prediction(
@@ -536,6 +644,7 @@ def _upsert_prediction(
         "odds": stmt.excluded.odds,
         "implied_probability": stmt.excluded.implied_probability,
         "value_score": stmt.excluded.value_score,
+
         "odds_bookmaker": stmt.excluded.odds_bookmaker,
         "odds_market": stmt.excluded.odds_market,
         "odds_selection": stmt.excluded.odds_selection,
@@ -546,12 +655,15 @@ def _upsert_prediction(
         "execution_selection": stmt.excluded.execution_selection,
         "execution_family": stmt.excluded.execution_family,
         "execution_line": stmt.excluded.execution_line,
+
         "bookmaker_locality": stmt.excluded.bookmaker_locality,
         "local_realism_score": stmt.excluded.local_realism_score,
         "execution_score": stmt.excluded.execution_score,
         "survivability_score": stmt.excluded.survivability_score,
+
         "execution_ready": stmt.excluded.execution_ready,
         "execution_reasons": stmt.excluded.execution_reasons,
+
         "market_alternatives": stmt.excluded.market_alternatives,
     }
 
@@ -649,9 +761,11 @@ def _resolve_prediction_odds(
         "execution_selection": None,
         "execution_family": None,
         "execution_line": None,
+
         "bookmaker_locality": None,
         "local_realism_score": None,
         "execution_score": None,
+
         "execution_reasons": [],
         "market_alternatives": [],
     }
@@ -667,6 +781,7 @@ def _resolve_prediction_odds(
         )
 
     except TypeError:
+
         result = find_best_odds_for_prediction(
             session=session,
             match_id=match_id,
@@ -675,9 +790,11 @@ def _resolve_prediction_odds(
         )
 
     except Exception as exc:
+
         print(
             f"[ODDS_LOOKUP_FAILED] match_id={match_id} market={market}: {exc}"
         )
+
         return default_payload
 
     if result is None:
@@ -693,24 +810,29 @@ def _resolve_prediction_odds(
 
         return {
             "odds": odds,
+
             "odds_bookmaker": (
                 result.get("bookmaker")
                 or result.get("odds_bookmaker")
             ),
+
             "odds_market": (
                 result.get("odds_market")
                 or result.get("market")
                 or result.get("raw_market")
             ),
+
             "odds_selection": (
                 result.get("odds_selection")
                 or result.get("selection")
                 or result.get("raw_selection")
             ),
+
             "odds_retrieved_at": (
                 result.get("retrieved_at")
                 or result.get("odds_retrieved_at")
             ),
+
             "odds_match_quality": (
                 result.get("match_quality")
                 or result.get("odds_match_quality")
@@ -721,29 +843,37 @@ def _resolve_prediction_odds(
                 result.get("execution_market")
                 or result.get("executable_market")
             ),
+
             "execution_selection": (
                 result.get("execution_selection")
                 or result.get("executable_selection")
             ),
+
             "execution_family": result.get(
                 "execution_family"
             ),
+
             "execution_line": _safe_float(
                 result.get("execution_line")
             ),
+
             "bookmaker_locality": result.get(
                 "bookmaker_locality"
             ),
+
             "local_realism_score": _safe_float(
                 result.get("local_realism_score")
             ),
+
             "execution_score": _safe_float(
                 result.get("execution_score")
             ),
+
             "execution_reasons": (
                 result.get("execution_reasons")
                 or []
             ),
+
             "market_alternatives": (
                 result.get("market_alternatives")
                 or []
@@ -754,46 +884,55 @@ def _resolve_prediction_odds(
         "odds": _safe_float(
             getattr(result, "odds", None)
         ),
+
         "odds_bookmaker": getattr(
             result,
             "bookmaker",
             None,
         ),
+
         "odds_market": getattr(
             result,
             "provider_market",
             None,
         ),
+
         "odds_selection": getattr(
             result,
             "provider_selection",
             None,
         ),
+
         "odds_retrieved_at": getattr(
             result,
             "retrieved_at",
             None,
         ),
+
         "odds_match_quality": getattr(
             result,
             "match_quality",
             None,
         ),
+
         "execution_market": getattr(
             result,
             "executable_market",
             None,
         ),
+
         "execution_selection": getattr(
             result,
             "executable_selection",
             None,
         ),
+
         "execution_family": getattr(
             result,
             "execution_family",
             None,
         ),
+
         "execution_line": _safe_float(
             getattr(
                 result,
@@ -801,11 +940,13 @@ def _resolve_prediction_odds(
                 None,
             )
         ),
+
         "bookmaker_locality": getattr(
             result,
             "bookmaker_locality",
             None,
         ),
+
         "local_realism_score": _safe_float(
             getattr(
                 result,
@@ -813,6 +954,7 @@ def _resolve_prediction_odds(
                 None,
             )
         ),
+
         "execution_score": _safe_float(
             getattr(
                 result,
@@ -820,6 +962,7 @@ def _resolve_prediction_odds(
                 None,
             )
         ),
+
         "execution_reasons": (
             getattr(
                 result,
@@ -828,6 +971,7 @@ def _resolve_prediction_odds(
             )
             or []
         ),
+
         "market_alternatives": (
             getattr(
                 result,

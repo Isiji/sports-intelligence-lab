@@ -12,12 +12,16 @@ from app.odds.production_label_resolver import (
     resolve_executable_market,
     resolve_execution_market_candidates,
 )
+from app.services.local_bookmaker_profile_service import (
+    evaluate_kenyan_execution,
+    preferred_kenyan_fallbacks,
+)
 from app.services.odds_lookup_service import find_best_odds
 from app.services.odds_survivability_service import evaluate_odds_survivability
 from app.services.prediction_market_timing_service import analyze_prediction_timing
 
 
-MAX_ALTERNATIVES = 10
+MAX_ALTERNATIVES = 12
 MIN_EXECUTION_SCORE = 55.0
 MIN_SURVIVABILITY_SCORE = 0.45
 MIN_LOCAL_REALISM_SCORE = 0.20
@@ -50,6 +54,14 @@ class PredictionAlternative:
     survivability_score: float
     local_realism_score: float
     alternative_score: float
+
+    kenya_available: bool
+    kenya_grade: str | None
+    kenya_execution_score: float | None
+    kenya_value_score: float | None
+    kenya_warnings: list[str]
+    kenya_reasons: list[str]
+    recommended_for_kenya: bool
 
     timing_status: str | None
     timing_action: str | None
@@ -104,6 +116,7 @@ def build_prediction_alternatives(
     alternatives: list[PredictionAlternative] = []
 
     for candidate_market in candidate_markets:
+
         result = find_best_odds(
             session=session,
             match_id=match_id,
@@ -144,6 +157,19 @@ def build_prediction_alternatives(
             0.0,
         )
 
+        execution_market = (
+            getattr(result, "executable_market", None)
+            or candidate_market
+        )
+
+        kenya_profile = evaluate_kenyan_execution(
+            market=execution_market,
+            bookmaker=bookmaker,
+            odds=odds,
+            confidence=confidence,
+            source_market=target_market,
+        )
+
         reasons: list[str] = list(
             getattr(result, "execution_reasons", None) or []
         )
@@ -169,6 +195,23 @@ def build_prediction_alternatives(
         if local_realism_score < MIN_LOCAL_REALISM_SCORE:
             reasons.append("alternative has weak local realism")
 
+        if kenya_profile["kenya_grade"] == "KENYA_UNAVAILABLE":
+            execution_ready = False
+            reasons.append("not realistically executable in Kenya")
+
+        if (
+            kenya_profile["local_value_score"] is not None
+            and kenya_profile["local_value_score"] < -0.04
+        ):
+            execution_ready = False
+            reasons.append("Kenyan odds are strongly value-negative")
+
+        elif (
+            kenya_profile["local_value_score"] is not None
+            and kenya_profile["local_value_score"] < 0
+        ):
+            reasons.append("Kenyan odds are slightly value-negative")
+
         alternative_score = _score_alternative(
             odds=odds,
             bookmaker=bookmaker,
@@ -179,12 +222,15 @@ def build_prediction_alternatives(
             local_realism_score=local_realism_score,
             match_quality=getattr(result, "match_quality", None),
             execution_ready=execution_ready,
+            kenya_execution_score=float(
+                kenya_profile["local_execution_score"] or 0.0
+            ),
+            kenya_value_score=kenya_profile["local_value_score"],
         )
 
         alternatives.append(
             PredictionAlternative(
-                execution_market=getattr(result, "executable_market", None)
-                or candidate_market,
+                execution_market=execution_market,
                 execution_selection=getattr(result, "executable_selection", None),
                 execution_family=getattr(result, "execution_family", None),
                 execution_line=getattr(result, "execution_line", None),
@@ -202,6 +248,17 @@ def build_prediction_alternatives(
                 local_realism_score=round(local_realism_score, 4),
                 alternative_score=round(alternative_score, 4),
 
+                kenya_available=bool(kenya_profile["kenya_available"]),
+                kenya_grade=kenya_profile["kenya_grade"],
+                kenya_execution_score=round(
+                    float(kenya_profile["local_execution_score"]),
+                    4,
+                ),
+                kenya_value_score=kenya_profile["local_value_score"],
+                kenya_warnings=kenya_profile["warnings"],
+                kenya_reasons=kenya_profile["reasons"],
+                recommended_for_kenya=False,
+
                 timing_status=getattr(timing, "status", None),
                 timing_action=getattr(timing, "recommended_action", None),
 
@@ -211,11 +268,14 @@ def build_prediction_alternatives(
         )
 
     alternatives = _dedupe_alternatives(alternatives)
+    alternatives = _mark_best_kenya_alternative(alternatives)
 
     alternatives = sorted(
         alternatives,
         key=lambda item: (
+            item.recommended_for_kenya is False,
             item.execution_ready is False,
+            -float(item.kenya_execution_score or 0.0),
             -item.alternative_score,
             -item.execution_score,
             -item.survivability_score,
@@ -224,24 +284,21 @@ def build_prediction_alternatives(
         ),
     )
 
-    serialized = []
+    serialized: list[dict[str, Any]] = []
 
     for item in alternatives[:max_alternatives]:
 
         payload = asdict(item)
 
-        retrieved_at = payload.get(
-            "odds_retrieved_at"
-        )
+        retrieved_at = payload.get("odds_retrieved_at")
 
         if retrieved_at is not None:
-            payload["odds_retrieved_at"] = (
-                retrieved_at.isoformat()
-            )
+            payload["odds_retrieved_at"] = retrieved_at.isoformat()
 
         serialized.append(payload)
 
     return serialized
+
 
 def _expand_candidate_markets(
     *,
@@ -260,6 +317,10 @@ def _expand_candidate_markets(
     )
 
     candidates.append(executable_market)
+
+    candidates.extend(
+        preferred_kenyan_fallbacks(executable_market)
+    )
 
     candidates.extend(
         _family_fallbacks(executable_market)
@@ -292,6 +353,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "draw_no_bet_home",
             "double_chance_1x",
             "home_win",
+            "over_1_5_goals",
         ]
 
     if market.startswith("asian_handicap_away_"):
@@ -303,6 +365,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "draw_no_bet_away",
             "double_chance_x2",
             "away_win",
+            "over_1_5_goals",
         ]
 
     if market == "home_win":
@@ -312,6 +375,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "home_away_home",
             "asian_handicap_home_0_0",
             "asian_handicap_home_plus_0_25",
+            "over_1_5_goals",
         ]
 
     if market == "away_win":
@@ -321,6 +385,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "home_away_away",
             "asian_handicap_away_0_0",
             "asian_handicap_away_plus_0_25",
+            "over_1_5_goals",
         ]
 
     if market == "draw":
@@ -336,6 +401,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "asian_handicap_home_plus_0_5",
             "asian_handicap_home_plus_0_75",
             "home_win",
+            "over_1_5_goals",
         ]
 
     if market == "double_chance_x2":
@@ -344,6 +410,7 @@ def _family_fallbacks(market: str) -> list[str]:
             "asian_handicap_away_plus_0_5",
             "asian_handicap_away_plus_0_75",
             "away_win",
+            "over_1_5_goals",
         ]
 
     if market == "double_chance_12":
@@ -385,6 +452,49 @@ def _family_fallbacks(market: str) -> list[str]:
     return []
 
 
+def _mark_best_kenya_alternative(
+    alternatives: list[PredictionAlternative],
+) -> list[PredictionAlternative]:
+
+    kenya_ready = [
+        item
+        for item in alternatives
+        if item.execution_ready
+        and item.kenya_available
+        and item.kenya_grade in {
+            "KENYA_STRONG",
+            "KENYA_ACCEPTABLE",
+        }
+        and (
+            item.kenya_value_score is None
+            or item.kenya_value_score >= -0.02
+        )
+    ]
+
+    if not kenya_ready:
+        return alternatives
+
+    best = sorted(
+        kenya_ready,
+        key=lambda item: (
+            -float(item.kenya_execution_score or 0.0),
+            -float(item.alternative_score or 0.0),
+            -float(item.survivability_score or 0.0),
+            -float(item.execution_score or 0.0),
+            float(item.odds or 999.0),
+        ),
+    )[0]
+
+    for item in alternatives:
+        item.recommended_for_kenya = (
+            item.execution_market == best.execution_market
+            and item.execution_selection == best.execution_selection
+            and item.bookmaker == best.bookmaker
+        )
+
+    return alternatives
+
+
 def _score_alternative(
     *,
     odds: float | None,
@@ -396,6 +506,8 @@ def _score_alternative(
     local_realism_score: float,
     match_quality: str | None,
     execution_ready: bool,
+    kenya_execution_score: float,
+    kenya_value_score: float | None,
 ) -> float:
 
     score = 0.0
@@ -404,9 +516,18 @@ def _score_alternative(
     score += survivability_score * 35.0
     score += local_realism_score * 28.0
     score += confidence * 20.0
+    score += kenya_execution_score * 0.45
 
     if value_score is not None:
         score += value_score * 45.0
+
+    if kenya_value_score is not None:
+        if kenya_value_score >= 0.05:
+            score += 12.0
+        elif kenya_value_score >= 0.00:
+            score += 5.0
+        else:
+            score -= min(abs(kenya_value_score) * 80.0, 20.0)
 
     if bookmaker in LOCAL_BOOKMAKER_PRIORITY:
         score *= LOCAL_BOOKMAKER_PRIORITY[bookmaker]
