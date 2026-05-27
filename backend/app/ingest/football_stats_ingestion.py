@@ -11,7 +11,7 @@ from app.db.models import Match, TeamMatchStat
 from app.ingest.api_football_client import ApiFootballClient
 
 
-MAX_STATS_ATTEMPTS = 1
+MAX_STATS_ATTEMPTS = 10
 
 
 STAT_NAME_MAP = {
@@ -90,7 +90,9 @@ def ingest_fixture_statistics(
     if not existing_stats:
         match.stats_attempted_at = datetime.utcnow()
         match.stats_attempt_count = int(match.stats_attempt_count or 0) + 1
-        match.stats_unavailable = True
+        match.stats_unavailable = (
+            int(match.stats_attempt_count or 0) >= MAX_STATS_ATTEMPTS
+        )
         match.last_synced_at = datetime.utcnow()
         session.commit()
 
@@ -98,12 +100,12 @@ def ingest_fixture_statistics(
             "match_id": match.id,
             "provider_fixture_id": match.provider_fixture_id,
             "skipped": True,
-            "reason": "no TeamMatchStat rows found for this match",
+            "reason": "no TeamMatchStat placeholder rows found for this match",
             "api_team_blocks": 0,
             "teams_updated": 0,
             "blocks_with_real_stats": 0,
             "has_stats": False,
-            "stats_unavailable": True,
+            "stats_unavailable": bool(match.stats_unavailable),
             "stats_attempt_count": int(match.stats_attempt_count or 0),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -125,8 +127,10 @@ def ingest_fixture_statistics(
         raise ValueError("Invalid statistics response.")
 
     if len(rows) == 0:
+        attempts = int(match.stats_attempt_count or 0)
+
         match.has_stats = False
-        match.stats_unavailable = True
+        match.stats_unavailable = attempts >= MAX_STATS_ATTEMPTS
         match.last_synced_at = datetime.utcnow()
         session.commit()
 
@@ -134,12 +138,16 @@ def ingest_fixture_statistics(
             "match_id": match.id,
             "provider_fixture_id": match.provider_fixture_id,
             "skipped": False,
-            "reason": "api returned empty statistics response; marked stats_unavailable",
+            "reason": (
+                "api returned empty statistics response; will retry later"
+                if not match.stats_unavailable
+                else "api returned empty statistics response too many times; marked stats_unavailable"
+            ),
             "api_team_blocks": 0,
             "teams_updated": 0,
             "blocks_with_real_stats": 0,
             "has_stats": False,
-            "stats_unavailable": True,
+            "stats_unavailable": bool(match.stats_unavailable),
             "stats_attempt_count": int(match.stats_attempt_count or 0),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -192,13 +200,23 @@ def ingest_fixture_statistics(
         match.stats_unavailable = False
         reason = "real stats saved for both teams"
     else:
+        attempts = int(match.stats_attempt_count or 0)
+
         match.has_stats = False
-        match.stats_unavailable = True
+        match.stats_unavailable = attempts >= MAX_STATS_ATTEMPTS
 
         if unmatched_api_teams:
-            reason = "api teams could not be matched to local teams; marked stats_unavailable"
+            reason = (
+                "api teams could not be matched to local teams; will retry later"
+                if not match.stats_unavailable
+                else "api teams could not be matched after too many attempts; marked stats_unavailable"
+            )
         else:
-            reason = "api response existed but no usable real stats were saved; marked stats_unavailable"
+            reason = (
+                "api response existed but no usable real stats were saved; will retry later"
+                if not match.stats_unavailable
+                else "api response existed but no usable real stats after too many attempts; marked stats_unavailable"
+            )
 
     match.last_synced_at = datetime.utcnow()
     session.commit()
@@ -242,7 +260,6 @@ def ingest_missing_statistics(
         conditions.extend(
             [
                 Match.has_stats.is_(False),
-                Match.stats_unavailable.is_(False),
                 Match.stats_attempt_count < MAX_STATS_ATTEMPTS,
             ]
         )
@@ -253,6 +270,7 @@ def ingest_missing_statistics(
             .where(*conditions)
             .order_by(
                 Match.has_odds.desc(),
+                Match.stats_attempt_count.asc(),
                 Match.kickoff_date.desc(),
             )
             .limit(limit)
@@ -335,11 +353,8 @@ def _stats_ingestion_eligibility(
     if match.has_stats and not force:
         return {"eligible": False, "reason": "match already has real stats"}
 
-    if getattr(match, "stats_unavailable", False) and not force:
-        return {"eligible": False, "reason": "stats previously unavailable"}
-
     if int(getattr(match, "stats_attempt_count", 0) or 0) >= MAX_STATS_ATTEMPTS and not force:
-        return {"eligible": False, "reason": "stats already attempted once"}
+        return {"eligible": False, "reason": "stats reached max retry attempts"}
 
     return {"eligible": True, "reason": "eligible"}
 

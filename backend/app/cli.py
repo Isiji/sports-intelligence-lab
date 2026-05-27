@@ -55,6 +55,7 @@ from app.odds.synonym_intelligence import (
 )
 from app.services.overnight_pipeline_service import OvernightPipelineService
 from app.db.session import get_cli_session
+from app.services.match_flag_rebuild_service import rebuild_match_flags
 
 from app.analysis.league_strength_report import build_league_strength_report
 
@@ -1128,7 +1129,19 @@ def production_review_command(
         for group in groups:
             print(group)
             
-            
+@app.command("rebuild-match-flags")
+def rebuild_match_flags_command():
+    session = get_cli_session()
+
+    try:
+        result = rebuild_match_flags(session=session)
+
+        print("\n=== MATCH FLAGS REBUILT ===")
+        print(result)
+
+    finally:
+        session.close()
+
 @app.command("data-coverage-report")
 def data_coverage_report():
     session = get_cli_session()

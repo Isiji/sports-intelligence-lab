@@ -63,6 +63,10 @@ psql -U postgres -d sports_intelligence_lab
 
 python -m app.cli ingest-adaptive-stats --limit 1000 --season 2026
 
+python -m app.cli rebuild-match-flags
+
+python -m app.cli ingest-missing-stats --limit 5000 --season 2026 --force; python -m app.cli rebuild-match-flags; python -m app.cli data-coverage-report
+
 python -m app.cli ingest-ecosystem-odds --limit 1000
 
 python -m app.cli ingest-fixtures-date --date-value 2026-05-21 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-22 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-23 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-24 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-25 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-26 ; python -m app.cli ingest-fixtures-date --date-value 2026-05-27
