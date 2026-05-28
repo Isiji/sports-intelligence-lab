@@ -453,6 +453,50 @@ def load_upcoming_frame(
 
     return upcoming_df.fillna(0.0).reset_index(drop=True)
 
+def load_single_match_frame(
+    session: Session,
+    match_id: int,
+    history_limit: int = 500,
+) -> pd.DataFrame:
+    df = _single_match_query(
+        session=session,
+        match_id=match_id,
+        history_limit=history_limit,
+    )
+
+    if df.empty:
+        return df
+
+    target_df = df[df["match_id"] == match_id].copy()
+
+    if target_df.empty:
+        return target_df
+
+    historical_df = df[
+        df["home_goals"].notna()
+        & df["away_goals"].notna()
+        & (df["match_id"] != match_id)
+    ].copy()
+
+    target_df = build_upcoming_match_features(
+        session=session,
+        upcoming_df=target_df,
+        historical_df=historical_df,
+    )
+
+    target_df = _apply_persistent_elo_for_upcoming(
+        session=session,
+        df=target_df,
+    )
+
+    for col in feature_columns():
+        if col not in target_df.columns:
+            target_df[col] = 0.0
+
+    target_df = _coerce_feature_columns(target_df)
+
+    return target_df.fillna(0.0).reset_index(drop=True)
+
 
 def filter_training_frame_for_market(df: pd.DataFrame, market: str) -> pd.DataFrame:
     df = df.copy()
@@ -664,6 +708,126 @@ def _base_query(session: Session) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
+def _single_match_query(
+    session: Session,
+    match_id: int,
+    history_limit: int = 500,
+) -> pd.DataFrame:
+    query = text(
+        """
+        WITH target AS (
+            SELECT *
+            FROM matches
+            WHERE id = :match_id
+            LIMIT 1
+        ),
+
+        relevant_history AS (
+            SELECT m.*
+            FROM matches m
+            CROSS JOIN target t
+            WHERE
+                m.id != t.id
+                AND m.home_goals IS NOT NULL
+                AND m.away_goals IS NOT NULL
+                AND COALESCE(m.kickoff_datetime, m.kickoff_date) <
+                    COALESCE(t.kickoff_datetime, t.kickoff_date)
+                AND (
+                    m.home_team = t.home_team
+                    OR m.away_team = t.home_team
+                    OR m.home_team = t.away_team
+                    OR m.away_team = t.away_team
+                    OR m.league = t.league
+                )
+            ORDER BY COALESCE(m.kickoff_datetime, m.kickoff_date) DESC, m.id DESC
+            LIMIT :history_limit
+        ),
+
+        selected_matches AS (
+            SELECT * FROM target
+            UNION ALL
+            SELECT * FROM relevant_history
+        )
+
+        SELECT
+            m.id AS match_id,
+            m.kickoff_date,
+            m.kickoff_datetime,
+            m.league,
+            m.home_team,
+            m.away_team,
+            m.home_team_id,
+            m.away_team_id,
+            m.home_goals,
+            m.away_goals,
+            m.has_stats,
+            m.has_odds,
+            m.odds_unavailable,
+
+            COALESCE(m.is_international, false) AS is_international,
+            COALESCE(m.is_neutral_venue, false) AS is_neutral_venue,
+            COALESCE(m.tournament_type, 'league') AS tournament_type,
+            COALESCE(m.tournament_stage, 'regular') AS tournament_stage,
+            COALESCE(m.competition_priority, 0) AS competition_priority,
+            COALESCE(m.tournament_pressure_score, 0) AS tournament_pressure_score,
+
+            COALESCE(hs.shots_on_target, 0) AS home_sot,
+            COALESCE(hs.corners, 0) AS home_corners,
+            COALESCE(hs.possession, 0) AS home_possession,
+            COALESCE(hs.fouls, 0) AS home_fouls,
+            COALESCE(hs.cards, 0) AS home_cards,
+            COALESCE(hs.keeper_saves, 0) AS home_keeper_saves,
+
+            COALESCE(as1.shots_on_target, 0) AS away_sot,
+            COALESCE(as1.corners, 0) AS away_corners,
+            COALESCE(as1.possession, 0) AS away_possession,
+            COALESCE(as1.fouls, 0) AS away_fouls,
+            COALESCE(as1.cards, 0) AS away_cards,
+            COALESCE(as1.keeper_saves, 0) AS away_keeper_saves
+
+        FROM selected_matches m
+
+        LEFT JOIN team_match_stats hs
+            ON hs.match_id = m.id
+           AND hs.is_home = 1
+
+        LEFT JOIN team_match_stats as1
+            ON as1.match_id = m.id
+           AND as1.is_home = 0
+
+        ORDER BY
+            COALESCE(m.kickoff_datetime, m.kickoff_date) ASC,
+            m.id ASC
+        """
+    )
+
+    df = pd.read_sql(
+        query,
+        session.bind,
+        params={
+            "match_id": match_id,
+            "history_limit": history_limit,
+        },
+    )
+
+    if df.empty:
+        return df
+
+    df["kickoff_date"] = pd.to_datetime(df["kickoff_date"], errors="coerce")
+
+    if "kickoff_datetime" in df.columns:
+        df["kickoff_datetime"] = pd.to_datetime(
+            df["kickoff_datetime"],
+            errors="coerce",
+        )
+
+    for col in feature_columns():
+        if col not in df.columns:
+            df[col] = 0.0
+
+    df = _coerce_feature_columns(df)
+
+    return df.reset_index(drop=True)
 
 def _add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
