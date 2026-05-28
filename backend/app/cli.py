@@ -17,7 +17,10 @@ from app.ingest.football_ingestion import (
     ingest_fixtures_for_date,
     ingest_fixtures_for_league_season,
 )
-# backend/app/cli.py
+
+from sqlalchemy import distinct
+from app.db.models import Prediction
+from app.services.execution_settlement_service import settle_execution_predictions
 
 from app.services.ecosystem_stats_orchestrator import EcosystemStatsOrchestrator
 from app.services.stats_coverage_service import (
@@ -35,6 +38,12 @@ from app.services.prediction_market_timing_service import (
 from app.services.odds_survivability_service import (
     evaluate_odds_survivability,
 )
+from sqlalchemy import distinct, select
+from app.db.models import Match, Prediction
+from app.services.execution_settlement_service import settle_execution_predictions
+from sqlalchemy import func, select
+from app.db.models import Match, Prediction
+
 from app.services.adaptive_stats_orchestrator import (
     AdaptiveStatsOrchestrator,
 )
@@ -53,6 +62,8 @@ from app.odds.synonym_intelligence import (
     rebuild_odds_synonym_intelligence,
     synonym_summary,
 )
+from app.services.execution_settlement_service import settle_execution_predictions
+
 from app.services.overnight_pipeline_service import OvernightPipelineService
 from app.db.session import get_cli_session
 from app.services.match_flag_rebuild_service import rebuild_match_flags
@@ -1615,7 +1626,32 @@ def debug_odds_match(
         print(result)
     finally:
         session.close()
-        
+
+@app.command("settle-execution-predictions")
+def settle_execution_predictions_command(
+    slate: str = typer.Option(..., "--slate"),
+    stake: float = typer.Option(100.0, "--stake"),
+    only_execution_ready: bool = typer.Option(
+        True,
+        "--only-execution-ready/--include-not-ready",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        result = settle_execution_predictions(
+            session=session,
+            slate=slate,
+            stake=stake,
+            only_execution_ready=only_execution_ready,
+        )
+
+        print("\n=== EXECUTION SETTLEMENT ===")
+        print(result)
+
+    finally:
+        session.close()
+
 @app.command("ingest-historical-odds-season")
 def ingest_historical_odds_season(
     season: int = typer.Option(...),
@@ -2282,6 +2318,62 @@ def ingest_stats_league(
     finally:
         session.close()
 
+# backend/app/cli.py
+
+@app.command("settle-finished-execution-predictions")
+def settle_finished_execution_predictions_command(
+    stake: float = typer.Option(100.0, "--stake"),
+    only_execution_ready: bool = typer.Option(
+        False,
+        "--only-execution-ready/--include-not-ready",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        slates = list(
+            session.scalars(
+                select(distinct(Prediction.slate))
+                .join(Match, Match.id == Prediction.match_id)
+                .where(Prediction.settled_at.is_(None))
+                .where(Match.home_goals.isnot(None))
+                .where(Match.away_goals.isnot(None))
+                .where(
+                    (Match.is_finished.is_(True))
+                    | (Match.status.in_(["FT", "AET", "PEN", "finished", "Finished"]))
+                )
+                .order_by(Prediction.slate.asc())
+            )
+        )
+
+        results = []
+
+        for slate in slates:
+            result = settle_execution_predictions(
+                session=session,
+                slate=slate,
+                stake=stake,
+                only_execution_ready=only_execution_ready,
+            )
+            results.append(result)
+
+        print("\n=== SETTLED FINISHED EXECUTION PREDICTIONS ===")
+        print(
+            {
+                "slates_checked": len(slates),
+                "settled": sum(int(r.get("settled", 0)) for r in results),
+                "skipped": sum(int(r.get("skipped", 0)) for r in results),
+                "profit_loss": round(sum(float(r.get("profit_loss", 0)) for r in results), 2),
+            }
+        )
+
+        print("\n=== BY SLATE ===")
+        for row in results:
+            print(row)
+
+    finally:
+        session.close()
+
 @app.command("ingest-odds-league")
 def ingest_odds_league(
     league: str = typer.Argument(...),
@@ -2773,6 +2865,119 @@ def ingest_odds_priority_command(
     finally:
         session.close()
 
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("settle-all-execution-predictions")
+def settle_all_execution_predictions_command(
+    stake: float = typer.Option(100.0, "--stake"),
+    update_finished_first: bool = typer.Option(
+        True,
+        "--update-finished-first/--skip-update-finished",
+    ),
+    update_limit: int = typer.Option(1000, "--update-limit"),
+    only_execution_ready: bool = typer.Option(
+        True,
+        "--only-execution-ready/--include-not-ready",
+    ),
+):
+    session = get_cli_session()
+
+    try:
+        finished_update = None
+
+        if update_finished_first:
+            finished_update = update_finished_matches(
+                session=session,
+                limit=update_limit,
+            )
+
+        slates = list(
+            session.scalars(
+                select(distinct(Prediction.slate))
+                .where(Prediction.settled_at.is_(None))
+                .order_by(Prediction.slate.asc())
+            )
+        )
+
+        results = []
+
+        for slate in slates:
+            result = settle_execution_predictions(
+                session=session,
+                slate=slate,
+                stake=stake,
+                only_execution_ready=only_execution_ready,
+            )
+            results.append(result)
+
+        total_settled = sum(int(r.get("settled", 0)) for r in results)
+        total_skipped = sum(int(r.get("skipped", 0)) for r in results)
+        total_profit = sum(float(r.get("profit_loss", 0.0)) for r in results)
+
+        print("\n=== SETTLE ALL EXECUTION PREDICTIONS ===")
+        print(
+            {
+                "finished_update": finished_update,
+                "slates_checked": len(slates),
+                "total_settled": total_settled,
+                "total_skipped": total_skipped,
+                "total_profit_loss": round(total_profit, 4),
+                "stake": stake,
+            }
+        )
+
+        print("\n=== BY SLATE ===")
+        for row in results:
+            print(row)
+
+    finally:
+        session.close()
+
+# backend/app/cli.py
+# ADD COMMAND
+
+@app.command("update-predicted-finished-matches")
+def update_predicted_finished_matches_command(
+    limit: int = typer.Option(500, "--limit"),
+):
+    session = get_cli_session()
+
+    try:
+        rows = session.execute(
+            select(Match.id)
+            .join(Prediction, Prediction.match_id == Match.id)
+            .where(Prediction.settled_at.is_(None))
+            .where(Match.is_finished.is_(False))
+            .where(Match.is_cancelled.is_(False))
+            .where(Match.is_postponed.is_(False))
+            .where(Match.kickoff_datetime < func.now())
+            .distinct()
+            .limit(limit)
+        ).all()
+
+        checked = 0
+        results = []
+
+        for row in rows:
+            result = update_finished_matches(
+                session=session,
+                limit=1,
+            )
+            checked += 1
+            results.append(result)
+
+        print("\n=== UPDATE PREDICTED FINISHED MATCHES ===")
+        print(
+            {
+                "candidate_predicted_matches": len(rows),
+                "checked": checked,
+                "sample_results": results[:10],
+            }
+        )
+
+    finally:
+        session.close()
 
 @app.command("ingest-odds-rotation")
 def ingest_odds_rotation_command(
