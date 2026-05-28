@@ -20,6 +20,9 @@ from app.schemas.predictions import (
     PredictionResponse,
     PredictionRunResponse,
 )
+from app.services.jackpot_1x2_service import (
+    analyze_match_1x2,
+)
 
 from app.services.prediction_explorer_service import (
     ExplorerFilters,
@@ -404,3 +407,22 @@ def top_local_predictions(
         session=session,
         filters=filters,
     )
+
+@router.post(
+    "/match/{match_id}/analyze-1x2"
+)
+def analyze_match_jackpot(
+    match_id: int,
+    session: Session = Depends(get_session),
+):
+    try:
+        return analyze_match_1x2(
+            session=session,
+            match_id=match_id,
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        )

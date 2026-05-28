@@ -22,6 +22,7 @@ class PredictionApiService {
     final h = value.hour.toString().padLeft(2, '0');
     final min = value.minute.toString().padLeft(2, '0');
     final s = value.second.toString().padLeft(2, '0');
+
     return '$y-$m-${d}T$h:$min:$s';
   }
 
@@ -54,14 +55,22 @@ class PredictionApiService {
       query['date_to'] = _formatDateTime(dateTo);
     }
 
-    final uri = Uri.parse('${ApiConfig.baseUrl}/predictions/search-matches')
-        .replace(queryParameters: query);
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/search-matches',
+    ).replace(
+      queryParameters: query,
+    );
 
     return _getMatchSummaries(uri);
   }
 
-  Future<MatchIntelligence> getMatchIntelligence(int matchId) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/predictions/match/$matchId');
+  Future<MatchIntelligence> getMatchIntelligence(
+    int matchId,
+  ) async {
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/match/$matchId',
+    );
+
     return _getMatchIntelligence(uri);
   }
 
@@ -80,120 +89,259 @@ class PredictionApiService {
     return _postMatchIntelligence(uri);
   }
 
-  Future<MatchIntelligence> _getMatchIntelligence(Uri uri) async {
+  Future<MatchIntelligence> analyzeMatch1X2(
+    int matchId,
+  ) async {
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/match/$matchId/analyze-1x2',
+    );
+
+    return _postMatchIntelligence(uri);
+  }
+
+  Future<MatchIntelligence> _getMatchIntelligence(
+    Uri uri,
+  ) async {
     try {
-      _logRequest('GET', uri);
+      _logRequest(
+        'GET',
+        uri,
+      );
 
-      final response = await http.get(uri).timeout(_timeout);
+      final response = await http
+          .get(uri)
+          .timeout(_timeout);
 
-      _logResponse(uri, response);
+      _logResponse(
+        uri,
+        response,
+      );
 
       if (response.statusCode != 200) {
-        throw Exception(_failureMessage(uri, response));
+        throw Exception(
+          _failureMessage(
+            uri,
+            response,
+          ),
+        );
       }
 
-      final decoded = jsonDecode(response.body);
+      final decoded = jsonDecode(
+        response.body,
+      );
 
       if (decoded is! Map<String, dynamic>) {
-        throw Exception('Invalid match intelligence response: ${response.body}');
+        throw Exception(
+          'Invalid match intelligence response: ${response.body}',
+        );
       }
 
-      return MatchIntelligence.fromJson(decoded);
+      return MatchIntelligence.fromJson(
+        decoded,
+      );
     } catch (e, stackTrace) {
-      _logError(uri, e, stackTrace);
-      throw Exception('API error\nURL: $uri\nError: $e');
+      _logError(
+        uri,
+        e,
+        stackTrace,
+      );
+
+      throw Exception(
+        'API error\nURL: $uri\nError: $e',
+      );
     }
   }
 
-  Future<MatchIntelligence> _postMatchIntelligence(Uri uri) async {
+  Future<MatchIntelligence> _postMatchIntelligence(
+    Uri uri,
+  ) async {
     try {
-      _logRequest('POST', uri);
+      _logRequest(
+        'POST',
+        uri,
+      );
 
-      final response = await http.post(uri).timeout(_timeout);
+      final response = await http
+          .post(uri)
+          .timeout(_timeout);
 
-      _logResponse(uri, response);
+      _logResponse(
+        uri,
+        response,
+      );
 
-      if (response.statusCode != 200 && response.statusCode != 201) {
-        throw Exception(_failureMessage(uri, response));
+      if (response.statusCode != 200 &&
+          response.statusCode != 201) {
+        throw Exception(
+          _failureMessage(
+            uri,
+            response,
+          ),
+        );
       }
 
-      final decoded = jsonDecode(response.body);
+      final decoded = jsonDecode(
+        response.body,
+      );
 
       if (decoded is! Map<String, dynamic>) {
-        throw Exception('Invalid analyze response: ${response.body}');
+        throw Exception(
+          'Invalid analyze response: ${response.body}',
+        );
       }
 
-      return MatchIntelligence.fromJson(decoded);
+      return MatchIntelligence.fromJson(
+        decoded,
+      );
     } catch (e, stackTrace) {
-      _logError(uri, e, stackTrace);
-      throw Exception('API error\nURL: $uri\nError: $e');
+      _logError(
+        uri,
+        e,
+        stackTrace,
+      );
+
+      throw Exception(
+        'API error\nURL: $uri\nError: $e',
+      );
     }
   }
 
-  Future<List<MatchSummary>> _getMatchSummaries(Uri uri) async {
+  Future<List<MatchSummary>> _getMatchSummaries(
+    Uri uri,
+  ) async {
     try {
-      _logRequest('GET', uri);
+      _logRequest(
+        'GET',
+        uri,
+      );
 
-      final response = await http.get(uri).timeout(_timeout);
+      final response = await http
+          .get(uri)
+          .timeout(_timeout);
 
-      _logResponse(uri, response);
+      _logResponse(
+        uri,
+        response,
+      );
 
       if (response.statusCode != 200) {
-        throw Exception(_failureMessage(uri, response));
+        throw Exception(
+          _failureMessage(
+            uri,
+            response,
+          ),
+        );
       }
 
-      final decoded = jsonDecode(response.body);
+      final decoded = jsonDecode(
+        response.body,
+      );
 
       final List<dynamic> items;
 
       if (decoded is List) {
         items = decoded;
-      } else if (decoded is Map<String, dynamic>) {
-        items = decoded['matches'] ?? decoded['items'] ?? decoded['data'] ?? [];
+      } else if (decoded
+          is Map<String, dynamic>) {
+        items = decoded['matches'] ??
+            decoded['items'] ??
+            decoded['data'] ??
+            [];
       } else {
         items = [];
       }
 
       return items
           .whereType<Map<String, dynamic>>()
-          .map(MatchSummary.fromJson)
+          .map(
+            MatchSummary.fromJson,
+          )
           .toList();
     } on TimeoutException catch (e) {
-      debugPrint('API timeout: $uri $e');
-      throw Exception('API timeout\nURL: $uri\nError: $e');
+      debugPrint(
+        'API timeout: $uri $e',
+      );
+
+      throw Exception(
+        'API timeout\nURL: $uri\nError: $e',
+      );
     } catch (e, stackTrace) {
-      _logError(uri, e, stackTrace);
-      throw Exception('API error\nURL: $uri\nError: $e');
+      _logError(
+        uri,
+        e,
+        stackTrace,
+      );
+
+      throw Exception(
+        'API error\nURL: $uri\nError: $e',
+      );
     }
   }
 
-  String _failureMessage(Uri uri, http.Response response) {
+  String _failureMessage(
+    Uri uri,
+    http.Response response,
+  ) {
     return 'API failed\n'
         'URL: $uri\n'
         'Status: ${response.statusCode}\n'
         'Body: ${response.body}';
   }
 
-  void _logRequest(String method, Uri uri) {
+  void _logRequest(
+    String method,
+    Uri uri,
+  ) {
     debugPrint('');
-    debugPrint('================ API REQUEST ================');
-    debugPrint('$method $uri');
+    debugPrint(
+      '================ API REQUEST ================',
+    );
+    debugPrint(
+      '$method $uri',
+    );
   }
 
-  void _logResponse(Uri uri, http.Response response) {
-    debugPrint('================ API RESPONSE ===============');
-    debugPrint('URL: $uri');
-    debugPrint('STATUS: ${response.statusCode}');
-    debugPrint('BODY: ${response.body}');
-    debugPrint('============================================');
+  void _logResponse(
+    Uri uri,
+    http.Response response,
+  ) {
+    debugPrint(
+      '================ API RESPONSE ===============',
+    );
+    debugPrint(
+      'URL: $uri',
+    );
+    debugPrint(
+      'STATUS: ${response.statusCode}',
+    );
+    debugPrint(
+      'BODY: ${response.body}',
+    );
+    debugPrint(
+      '============================================',
+    );
   }
 
-  void _logError(Uri uri, Object e, StackTrace stackTrace) {
+  void _logError(
+    Uri uri,
+    Object e,
+    StackTrace stackTrace,
+  ) {
     debugPrint('');
-    debugPrint('================ API ERROR ==================');
-    debugPrint('URL: $uri');
-    debugPrint('ERROR: $e');
-    debugPrint('STACKTRACE: $stackTrace');
-    debugPrint('============================================');
+    debugPrint(
+      '================ API ERROR ==================',
+    );
+    debugPrint(
+      'URL: $uri',
+    );
+    debugPrint(
+      'ERROR: $e',
+    );
+    debugPrint(
+      'STACKTRACE: $stackTrace',
+    );
+    debugPrint(
+      '============================================',
+    );
   }
 }
