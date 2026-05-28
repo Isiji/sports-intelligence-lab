@@ -64,9 +64,7 @@ class PredictionApiService {
     return _getMatchSummaries(uri);
   }
 
-  Future<MatchIntelligence> getMatchIntelligence(
-    int matchId,
-  ) async {
+  Future<MatchIntelligence> getMatchIntelligence(int matchId) async {
     final uri = Uri.parse(
       '${ApiConfig.baseUrl}/predictions/match/$matchId',
     );
@@ -89,9 +87,9 @@ class PredictionApiService {
     return _postMatchIntelligence(uri);
   }
 
-  Future<MatchIntelligence> analyzeMatch1X2(
-    int matchId,
-  ) async {
+  Future<MatchIntelligence> analyzeMatch1x2({
+    required int matchId,
+  }) async {
     final uri = Uri.parse(
       '${ApiConfig.baseUrl}/predictions/match/$matchId/analyze-1x2',
     );
@@ -99,36 +97,23 @@ class PredictionApiService {
     return _postMatchIntelligence(uri);
   }
 
-  Future<MatchIntelligence> _getMatchIntelligence(
-    Uri uri,
-  ) async {
+  Future<MatchIntelligence> analyzeMatch1X2(int matchId) async {
+    return analyzeMatch1x2(matchId: matchId);
+  }
+
+  Future<MatchIntelligence> _getMatchIntelligence(Uri uri) async {
     try {
-      _logRequest(
-        'GET',
-        uri,
-      );
+      _logRequest('GET', uri);
 
-      final response = await http
-          .get(uri)
-          .timeout(_timeout);
+      final response = await http.get(uri).timeout(_timeout);
 
-      _logResponse(
-        uri,
-        response,
-      );
+      _logResponse(uri, response);
 
       if (response.statusCode != 200) {
-        throw Exception(
-          _failureMessage(
-            uri,
-            response,
-          ),
-        );
+        throw Exception(_failureMessage(uri, response));
       }
 
-      final decoded = jsonDecode(
-        response.body,
-      );
+      final decoded = jsonDecode(response.body);
 
       if (decoded is! Map<String, dynamic>) {
         throw Exception(
@@ -136,15 +121,15 @@ class PredictionApiService {
         );
       }
 
-      return MatchIntelligence.fromJson(
-        decoded,
+      return MatchIntelligence.fromJson(decoded);
+    } on TimeoutException catch (e) {
+      debugPrint('API timeout: $uri $e');
+
+      throw Exception(
+        'API timeout\nURL: $uri\nError: $e',
       );
     } catch (e, stackTrace) {
-      _logError(
-        uri,
-        e,
-        stackTrace,
-      );
+      _logError(uri, e, stackTrace);
 
       throw Exception(
         'API error\nURL: $uri\nError: $e',
@@ -152,37 +137,19 @@ class PredictionApiService {
     }
   }
 
-  Future<MatchIntelligence> _postMatchIntelligence(
-    Uri uri,
-  ) async {
+  Future<MatchIntelligence> _postMatchIntelligence(Uri uri) async {
     try {
-      _logRequest(
-        'POST',
-        uri,
-      );
+      _logRequest('POST', uri);
 
-      final response = await http
-          .post(uri)
-          .timeout(_timeout);
+      final response = await http.post(uri).timeout(_timeout);
 
-      _logResponse(
-        uri,
-        response,
-      );
+      _logResponse(uri, response);
 
-      if (response.statusCode != 200 &&
-          response.statusCode != 201) {
-        throw Exception(
-          _failureMessage(
-            uri,
-            response,
-          ),
-        );
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception(_failureMessage(uri, response));
       }
 
-      final decoded = jsonDecode(
-        response.body,
-      );
+      final decoded = jsonDecode(response.body);
 
       if (decoded is! Map<String, dynamic>) {
         throw Exception(
@@ -190,15 +157,15 @@ class PredictionApiService {
         );
       }
 
-      return MatchIntelligence.fromJson(
-        decoded,
+      return MatchIntelligence.fromJson(decoded);
+    } on TimeoutException catch (e) {
+      debugPrint('API timeout: $uri $e');
+
+      throw Exception(
+        'API timeout\nURL: $uri\nError: $e',
       );
     } catch (e, stackTrace) {
-      _logError(
-        uri,
-        e,
-        stackTrace,
-      );
+      _logError(uri, e, stackTrace);
 
       throw Exception(
         'API error\nURL: $uri\nError: $e',
@@ -206,43 +173,25 @@ class PredictionApiService {
     }
   }
 
-  Future<List<MatchSummary>> _getMatchSummaries(
-    Uri uri,
-  ) async {
+  Future<List<MatchSummary>> _getMatchSummaries(Uri uri) async {
     try {
-      _logRequest(
-        'GET',
-        uri,
-      );
+      _logRequest('GET', uri);
 
-      final response = await http
-          .get(uri)
-          .timeout(_timeout);
+      final response = await http.get(uri).timeout(_timeout);
 
-      _logResponse(
-        uri,
-        response,
-      );
+      _logResponse(uri, response);
 
       if (response.statusCode != 200) {
-        throw Exception(
-          _failureMessage(
-            uri,
-            response,
-          ),
-        );
+        throw Exception(_failureMessage(uri, response));
       }
 
-      final decoded = jsonDecode(
-        response.body,
-      );
+      final decoded = jsonDecode(response.body);
 
       final List<dynamic> items;
 
       if (decoded is List) {
         items = decoded;
-      } else if (decoded
-          is Map<String, dynamic>) {
+      } else if (decoded is Map<String, dynamic>) {
         items = decoded['matches'] ??
             decoded['items'] ??
             decoded['data'] ??
@@ -253,24 +202,16 @@ class PredictionApiService {
 
       return items
           .whereType<Map<String, dynamic>>()
-          .map(
-            MatchSummary.fromJson,
-          )
+          .map(MatchSummary.fromJson)
           .toList();
     } on TimeoutException catch (e) {
-      debugPrint(
-        'API timeout: $uri $e',
-      );
+      debugPrint('API timeout: $uri $e');
 
       throw Exception(
         'API timeout\nURL: $uri\nError: $e',
       );
     } catch (e, stackTrace) {
-      _logError(
-        uri,
-        e,
-        stackTrace,
-      );
+      _logError(uri, e, stackTrace);
 
       throw Exception(
         'API error\nURL: $uri\nError: $e',
@@ -293,33 +234,19 @@ class PredictionApiService {
     Uri uri,
   ) {
     debugPrint('');
-    debugPrint(
-      '================ API REQUEST ================',
-    );
-    debugPrint(
-      '$method $uri',
-    );
+    debugPrint('================ API REQUEST ================');
+    debugPrint('$method $uri');
   }
 
   void _logResponse(
     Uri uri,
     http.Response response,
   ) {
-    debugPrint(
-      '================ API RESPONSE ===============',
-    );
-    debugPrint(
-      'URL: $uri',
-    );
-    debugPrint(
-      'STATUS: ${response.statusCode}',
-    );
-    debugPrint(
-      'BODY: ${response.body}',
-    );
-    debugPrint(
-      '============================================',
-    );
+    debugPrint('================ API RESPONSE ===============');
+    debugPrint('URL: $uri');
+    debugPrint('STATUS: ${response.statusCode}');
+    debugPrint('BODY: ${response.body}');
+    debugPrint('============================================');
   }
 
   void _logError(
@@ -328,20 +255,10 @@ class PredictionApiService {
     StackTrace stackTrace,
   ) {
     debugPrint('');
-    debugPrint(
-      '================ API ERROR ==================',
-    );
-    debugPrint(
-      'URL: $uri',
-    );
-    debugPrint(
-      'ERROR: $e',
-    );
-    debugPrint(
-      'STACKTRACE: $stackTrace',
-    );
-    debugPrint(
-      '============================================',
-    );
+    debugPrint('================ API ERROR ==================');
+    debugPrint('URL: $uri');
+    debugPrint('ERROR: $e');
+    debugPrint('STACKTRACE: $stackTrace');
+    debugPrint('============================================');
   }
 }
