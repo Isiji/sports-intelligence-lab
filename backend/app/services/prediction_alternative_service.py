@@ -35,6 +35,39 @@ LOCAL_BOOKMAKER_PRIORITY = {
 }
 
 
+SELECTION_MAP = {
+    "home_win": "HOME_WIN",
+    "draw": "DRAW",
+    "away_win": "AWAY_WIN",
+
+    "home_away_home": "HOME_WIN",
+    "home_away_away": "AWAY_WIN",
+
+    "double_chance_1x": "DOUBLE_CHANCE_1X",
+    "double_chance_x2": "DOUBLE_CHANCE_X2",
+    "double_chance_12": "DOUBLE_CHANCE_12",
+
+    "draw_no_bet_home": "DRAW_NO_BET_HOME",
+    "draw_no_bet_away": "DRAW_NO_BET_AWAY",
+
+    "over_1_5_goals": "OVER_1_5_GOALS",
+    "over_2_5_goals": "OVER_2_5_GOALS",
+    "over_3_5_goals": "OVER_3_5_GOALS",
+    "under_1_5_goals": "UNDER_1_5_GOALS",
+    "under_2_5_goals": "UNDER_2_5_GOALS",
+    "under_3_5_goals": "UNDER_3_5_GOALS",
+
+    "btts_yes": "BTTS_YES",
+    "btts_no": "BTTS_NO",
+
+    "home_over_0_5_goals": "HOME_OVER_0_5_GOALS",
+    "away_over_0_5_goals": "AWAY_OVER_0_5_GOALS",
+
+    "home_clean_sheet": "HOME_CLEAN_SHEET",
+    "away_clean_sheet": "AWAY_CLEAN_SHEET",
+}
+
+
 @dataclass
 class PredictionAlternative:
     execution_market: str | None
@@ -117,13 +150,24 @@ def build_prediction_alternatives(
 
     for candidate_market in candidate_markets:
 
+        resolved_selection = _resolve_candidate_selection(candidate_market)
+
         result = find_best_odds(
             session=session,
             match_id=match_id,
             market=candidate_market,
-            selection=None,
+            selection=resolved_selection,
             canonical_market=candidate_market,
         )
+
+        if result is None and resolved_selection is not None:
+            result = find_best_odds(
+                session=session,
+                match_id=match_id,
+                market=candidate_market,
+                selection=None,
+                canonical_market=candidate_market,
+            )
 
         if result is None:
             continue
@@ -160,6 +204,12 @@ def build_prediction_alternatives(
         execution_market = (
             getattr(result, "executable_market", None)
             or candidate_market
+        )
+
+        execution_selection = (
+            getattr(result, "executable_selection", None)
+            or resolved_selection
+            or getattr(result, "provider_selection", None)
         )
 
         kenya_profile = evaluate_kenyan_execution(
@@ -231,7 +281,7 @@ def build_prediction_alternatives(
         alternatives.append(
             PredictionAlternative(
                 execution_market=execution_market,
-                execution_selection=getattr(result, "executable_selection", None),
+                execution_selection=execution_selection,
                 execution_family=getattr(result, "execution_family", None),
                 execution_line=getattr(result, "execution_line", None),
 
@@ -239,7 +289,10 @@ def build_prediction_alternatives(
                 bookmaker_locality=getattr(result, "bookmaker_locality", None),
                 odds=odds,
                 odds_market=getattr(result, "provider_market", None),
-                odds_selection=getattr(result, "provider_selection", None),
+                odds_selection=(
+                    getattr(result, "provider_selection", None)
+                    or execution_selection
+                ),
                 odds_match_quality=getattr(result, "match_quality", None),
                 odds_retrieved_at=getattr(result, "retrieved_at", None),
 
@@ -298,6 +351,34 @@ def build_prediction_alternatives(
         serialized.append(payload)
 
     return serialized
+
+
+def _resolve_candidate_selection(
+    candidate_market: str | None,
+) -> str | None:
+
+    if not candidate_market:
+        return None
+
+    if candidate_market in SELECTION_MAP:
+        return SELECTION_MAP[candidate_market]
+
+    if candidate_market.startswith("asian_handicap_"):
+        return candidate_market.upper()
+
+    if candidate_market.startswith("handicap_result_"):
+        return candidate_market.upper()
+
+    if candidate_market.startswith("result_total_"):
+        return candidate_market.upper()
+
+    if candidate_market.startswith("corners_"):
+        return candidate_market.upper()
+
+    if candidate_market.startswith("shots_on_target_"):
+        return candidate_market.upper()
+
+    return candidate_market.upper()
 
 
 def _expand_candidate_markets(
