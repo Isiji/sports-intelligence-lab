@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/match_summary.dart';
 import '../services/prediction_api_service.dart';
 import '../widgets/match_card.dart';
+import 'match_intelligence_screen.dart';
 
 class PredictionExplorerScreen extends StatefulWidget {
   const PredictionExplorerScreen({super.key});
@@ -68,7 +69,6 @@ class _PredictionExplorerScreenState extends State<PredictionExplorerScreen> {
   Future<void> _loadSelectedDate() async {
     if (_isLoading) return;
 
-    
     final start = DateTime(
       _selectedDate.year,
       _selectedDate.month,
@@ -90,7 +90,7 @@ class _PredictionExplorerScreenState extends State<PredictionExplorerScreen> {
         league: _leagueController.text,
         dateFrom: start,
         dateTo: end,
-        limit: 200,
+        limit: 100,
       );
 
       if (_predictedOnly) {
@@ -125,21 +125,14 @@ class _PredictionExplorerScreenState extends State<PredictionExplorerScreen> {
   }
 
   void _openMatch(MatchSummary match) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Next: open Match Intelligence for match ${match.matchId}',
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MatchIntelligenceScreen(
+          matchId: match.matchId,
         ),
       ),
     );
-
-    // Next file we will build:
-    // Navigator.push(
-    //   context,
-    //   MaterialPageRoute(
-    //     builder: (_) => MatchIntelligenceScreen(matchId: match.matchId),
-    //   ),
-    // );
   }
 
   @override

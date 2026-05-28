@@ -7,12 +7,13 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
+import '../models/match_intelligence.dart';
 import '../models/match_summary.dart';
 
 class PredictionApiService {
   const PredictionApiService();
 
-  static const Duration _timeout = Duration(seconds: 20);
+  static const Duration _timeout = Duration(seconds: 30);
 
   String _formatDateTime(DateTime value) {
     final y = value.year.toString().padLeft(4, '0');
@@ -21,7 +22,6 @@ class PredictionApiService {
     final h = value.hour.toString().padLeft(2, '0');
     final min = value.minute.toString().padLeft(2, '0');
     final s = value.second.toString().padLeft(2, '0');
-
     return '$y-$m-${d}T$h:$min:$s';
   }
 
@@ -60,27 +60,86 @@ class PredictionApiService {
     return _getMatchSummaries(uri);
   }
 
-  Future<List<MatchSummary>> _getMatchSummaries(Uri uri) async {
+  Future<MatchIntelligence> getMatchIntelligence(int matchId) async {
+    final uri = Uri.parse('${ApiConfig.baseUrl}/predictions/match/$matchId');
+    return _getMatchIntelligence(uri);
+  }
+
+  Future<MatchIntelligence> analyzeMatch({
+    required int matchId,
+    required String market,
+  }) async {
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/match/$matchId/analyze',
+    ).replace(
+      queryParameters: {
+        'market': market,
+      },
+    );
+
+    return _postMatchIntelligence(uri);
+  }
+
+  Future<MatchIntelligence> _getMatchIntelligence(Uri uri) async {
     try {
-      debugPrint('');
-      debugPrint('================ API REQUEST ================');
-      debugPrint('GET $uri');
+      _logRequest('GET', uri);
 
       final response = await http.get(uri).timeout(_timeout);
 
-      debugPrint('================ API RESPONSE ===============');
-      debugPrint('URL: $uri');
-      debugPrint('STATUS: ${response.statusCode}');
-      debugPrint('BODY: ${response.body}');
-      debugPrint('============================================');
+      _logResponse(uri, response);
 
       if (response.statusCode != 200) {
-        throw Exception(
-          'API failed\n'
-          'URL: $uri\n'
-          'Status: ${response.statusCode}\n'
-          'Body: ${response.body}',
-        );
+        throw Exception(_failureMessage(uri, response));
+      }
+
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid match intelligence response: ${response.body}');
+      }
+
+      return MatchIntelligence.fromJson(decoded);
+    } catch (e, stackTrace) {
+      _logError(uri, e, stackTrace);
+      throw Exception('API error\nURL: $uri\nError: $e');
+    }
+  }
+
+  Future<MatchIntelligence> _postMatchIntelligence(Uri uri) async {
+    try {
+      _logRequest('POST', uri);
+
+      final response = await http.post(uri).timeout(_timeout);
+
+      _logResponse(uri, response);
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception(_failureMessage(uri, response));
+      }
+
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid analyze response: ${response.body}');
+      }
+
+      return MatchIntelligence.fromJson(decoded);
+    } catch (e, stackTrace) {
+      _logError(uri, e, stackTrace);
+      throw Exception('API error\nURL: $uri\nError: $e');
+    }
+  }
+
+  Future<List<MatchSummary>> _getMatchSummaries(Uri uri) async {
+    try {
+      _logRequest('GET', uri);
+
+      final response = await http.get(uri).timeout(_timeout);
+
+      _logResponse(uri, response);
+
+      if (response.statusCode != 200) {
+        throw Exception(_failureMessage(uri, response));
       }
 
       final decoded = jsonDecode(response.body);
@@ -100,30 +159,41 @@ class PredictionApiService {
           .map(MatchSummary.fromJson)
           .toList();
     } on TimeoutException catch (e) {
-      debugPrint('');
-      debugPrint('================ API TIMEOUT ================');
-      debugPrint('URL: $uri');
-      debugPrint('ERROR: $e');
-      debugPrint('============================================');
-
-      throw Exception(
-        'API timeout\n'
-        'URL: $uri\n'
-        'Error: $e',
-      );
+      debugPrint('API timeout: $uri $e');
+      throw Exception('API timeout\nURL: $uri\nError: $e');
     } catch (e, stackTrace) {
-      debugPrint('');
-      debugPrint('================ API ERROR ==================');
-      debugPrint('URL: $uri');
-      debugPrint('ERROR: $e');
-      debugPrint('STACKTRACE: $stackTrace');
-      debugPrint('============================================');
-
-      throw Exception(
-        'API error\n'
-        'URL: $uri\n'
-        'Error: $e',
-      );
+      _logError(uri, e, stackTrace);
+      throw Exception('API error\nURL: $uri\nError: $e');
     }
+  }
+
+  String _failureMessage(Uri uri, http.Response response) {
+    return 'API failed\n'
+        'URL: $uri\n'
+        'Status: ${response.statusCode}\n'
+        'Body: ${response.body}';
+  }
+
+  void _logRequest(String method, Uri uri) {
+    debugPrint('');
+    debugPrint('================ API REQUEST ================');
+    debugPrint('$method $uri');
+  }
+
+  void _logResponse(Uri uri, http.Response response) {
+    debugPrint('================ API RESPONSE ===============');
+    debugPrint('URL: $uri');
+    debugPrint('STATUS: ${response.statusCode}');
+    debugPrint('BODY: ${response.body}');
+    debugPrint('============================================');
+  }
+
+  void _logError(Uri uri, Object e, StackTrace stackTrace) {
+    debugPrint('');
+    debugPrint('================ API ERROR ==================');
+    debugPrint('URL: $uri');
+    debugPrint('ERROR: $e');
+    debugPrint('STACKTRACE: $stackTrace');
+    debugPrint('============================================');
   }
 }
