@@ -171,6 +171,9 @@ from app.ingest.football_odds_ingestion import (
     ingest_odds_rich_leagues,
     ingest_odds_all_leagues_rotation,
 )
+from app.services.execution_market_intelligence_service import (
+    rebuild_execution_market_intelligence,
+)
 from app.analysis.data_coverage_report import build_data_coverage_report
 from app.backtest.portfolio_profiles import PROFILE_CONFIGS
 # backend/app/cli.py imports to add
@@ -2370,6 +2373,26 @@ def settle_finished_execution_predictions_command(
         print("\n=== BY SLATE ===")
         for row in results:
             print(row)
+
+    finally:
+        session.close()
+
+@app.command("rebuild-execution-market-intelligence")
+def rebuild_execution_market_intelligence_command(
+    sport: str = typer.Option("football", "--sport"),
+    min_settled: int = typer.Option(1, "--min-settled"),
+):
+    session = get_cli_session()
+
+    try:
+        result = rebuild_execution_market_intelligence(
+            session=session,
+            sport=sport,
+            min_settled=min_settled,
+        )
+
+        print("\n=== EXECUTION MARKET INTELLIGENCE REBUILT ===")
+        print(result)
 
     finally:
         session.close()

@@ -186,6 +186,9 @@ def _build_market_alternatives(
     return alternatives
 
 
+# backend/app/services/production_review_service.py
+# REPLACE ONLY get_production_review()
+
 def get_production_review(
     session: Session,
     slate: str | None = None,
@@ -194,6 +197,14 @@ def get_production_review(
     require_odds: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
+
+    from app.services.execution_market_intelligence_service import (
+        get_execution_market_gate,
+    )
+
+    from app.db.models import (
+        ExecutionMarketIntelligenceSnapshot,
+    )
 
     selected_slate = (
         slate
@@ -332,6 +343,8 @@ def get_production_review(
 
     enriched_ranked_picks = []
 
+    execution_verdict_counts: dict[str, int] = {}
+
     for row in ranked_picks:
 
         item = dict(row)
@@ -345,6 +358,55 @@ def get_production_review(
                     "kickoff_date"
                 )
             )
+        )
+
+        execution_market = (
+            item.get("execution_market")
+            or item.get("market")
+        )
+
+        execution_gate = (
+            get_execution_market_gate(
+                session=session,
+                execution_market=execution_market,
+                sport="football",
+            )
+        )
+
+        execution_snapshot = session.execute(
+            text(
+                """
+                SELECT
+                    execution_market,
+                    settled_predictions,
+                    wins,
+                    losses,
+                    hit_rate,
+                    avg_odds,
+                    roi,
+                    survivability_score,
+                    verdict,
+                    prediction_allowed,
+                    grouping_allowed,
+                    reason
+                FROM execution_market_intelligence_snapshots
+                WHERE execution_market = :execution_market
+                LIMIT 1
+                """
+            ),
+            {
+                "execution_market": execution_market,
+            },
+        ).mappings().first()
+
+        verdict = execution_gate.verdict
+
+        execution_verdict_counts[verdict] = (
+            execution_verdict_counts.get(
+                verdict,
+                0,
+            )
+            + 1
         )
 
         survivability = (
@@ -411,6 +473,93 @@ def get_production_review(
             )
             else "GLOBAL"
         )
+
+        item["execution_market_verdict"] = (
+            execution_gate.verdict
+        )
+
+        item["execution_market_reason"] = (
+            execution_gate.reason
+        )
+
+        item["execution_market_prediction_allowed"] = (
+            execution_gate.prediction_allowed
+        )
+
+        item["execution_market_grouping_allowed"] = (
+            execution_gate.grouping_allowed
+        )
+
+        item["execution_market_survivability"] = (
+            execution_gate.survivability_score
+        )
+
+        item["execution_market_confidence_multiplier"] = (
+            execution_gate.confidence_multiplier
+        )
+
+        if execution_snapshot:
+
+            item["execution_market_roi"] = (
+                float(
+                    execution_snapshot.get("roi")
+                    or 0.0
+                )
+            )
+
+            item["execution_market_hit_rate"] = (
+                float(
+                    execution_snapshot.get(
+                        "hit_rate"
+                    )
+                    or 0.0
+                )
+            )
+
+            item["execution_market_avg_odds"] = (
+                float(
+                    execution_snapshot.get(
+                        "avg_odds"
+                    )
+                    or 0.0
+                )
+            )
+
+            item["execution_market_sample_size"] = (
+                int(
+                    execution_snapshot.get(
+                        "settled_predictions"
+                    )
+                    or 0
+                )
+            )
+
+            item["execution_market_wins"] = (
+                int(
+                    execution_snapshot.get(
+                        "wins"
+                    )
+                    or 0
+                )
+            )
+
+            item["execution_market_losses"] = (
+                int(
+                    execution_snapshot.get(
+                        "losses"
+                    )
+                    or 0
+                )
+            )
+
+        else:
+
+            item["execution_market_roi"] = 0.0
+            item["execution_market_hit_rate"] = 0.0
+            item["execution_market_avg_odds"] = 0.0
+            item["execution_market_sample_size"] = 0
+            item["execution_market_wins"] = 0
+            item["execution_market_losses"] = 0
 
         if (
             item.get(
@@ -521,6 +670,7 @@ def get_production_review(
             and not survivability.stale
             and timing.recommended_action
             != "AVOID"
+            and execution_gate.grouping_allowed
         )
 
         enriched_ranked_picks.append(
@@ -575,6 +725,37 @@ def get_production_review(
             if item.get(
                 "stale_odds"
             )
+        ),
+
+        "execution_market_breakdown": (
+            execution_verdict_counts
+        ),
+
+        "core_production_picks": sum(
+            1
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "execution_market_verdict"
+            ) == "CORE_PRODUCTION"
+        ),
+
+        "watchlist_picks": sum(
+            1
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "execution_market_verdict"
+            ) == "WATCHLIST"
+        ),
+
+        "blocked_picks": sum(
+            1
+            for item
+            in scored_ranked_picks
+            if item.get(
+                "execution_market_verdict"
+            ) == "BLOCKED"
         ),
     }
 

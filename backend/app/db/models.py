@@ -614,6 +614,45 @@ class HistoricalBacktestBet(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+
+# =========================================================
+# EXECUTION MARKET INTELLIGENCE
+# =========================================================
+
+class ExecutionMarketIntelligenceSnapshot(Base):
+    __tablename__ = "execution_market_intelligence_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    sport: Mapped[str] = mapped_column(String(30), default="football", index=True)
+    execution_market: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+
+    settled_predictions: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_odds: Mapped[float] = mapped_column(Float, default=0.0)
+    profit_loss: Mapped[float] = mapped_column(Float, default=0.0)
+    roi: Mapped[float] = mapped_column(Float, default=0.0)
+
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    survivability_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    verdict: Mapped[str] = mapped_column(String(40), default="WATCHLIST", index=True)
+    prediction_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    grouping_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    confidence_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )
+    
 # =========================================================
 # ADVANCED INTELLIGENCE SNAPSHOTS
 # =========================================================

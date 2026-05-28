@@ -43,6 +43,9 @@ from app.services.live_group_validation_service import (
 from app.services.prediction_conflict_service import (
     evaluate_prediction_conflict,
 )
+from app.services.execution_market_intelligence_service import (
+    get_execution_market_gate,
+)
 from app.odds.executable_market_registry import parse_executable_market
 from app.odds.market_quality_engine import get_enabled_markets
 from app.services.league_production_filter_service import (
@@ -744,6 +747,9 @@ def _build_profitability_aware_groups(
     return groups
 
 
+# backend/app/grouping/create_groups.py
+# REPLACE THIS FUNCTION
+
 def _strict_adaptive_candidate_allowed(
     *,
     pick: dict[str, Any],
@@ -751,7 +757,13 @@ def _strict_adaptive_candidate_allowed(
     config: PortfolioGroupConfig,
 ) -> tuple[bool, str]:
 
-    market = str(pick.get("market") or "")
+    market = str(
+        pick.get("grouping_market")
+        or pick.get("execution_market")
+        or pick.get("market")
+        or ""
+    )
+
     confidence = _float_value(pick.get("confidence"))
     value_score = _float_value(pick.get("value_score"))
     production_score = _float_value(pick.get("production_score"))
@@ -773,6 +785,14 @@ def _strict_adaptive_candidate_allowed(
     stale_odds = bool(pick.get("stale_odds"))
     execution_ready = bool(pick.get("execution_ready"))
     survivability_bucket = str(pick.get("survivability_bucket") or "")
+
+    execution_verdict = str(
+        pick.get("execution_intelligence_verdict")
+        or ""
+    )
+
+    if execution_verdict in {"BLOCKED", "WATCHLIST"}:
+        return False, f"execution_market_{execution_verdict.lower()}"
 
     if risk_level == "AVOID":
         return False, "risk_level_avoid"
@@ -833,6 +853,9 @@ def _strict_adaptive_candidate_allowed(
             return False, "missing_market_intel_value"
 
     return True, "approved"
+
+# backend/app/grouping/create_groups.py
+# REPLACE THIS FUNCTION
 
 def _load_live_prediction_candidates(
     session: Session,
@@ -955,6 +978,8 @@ def _load_live_prediction_candidates(
         "ABD",
     }
 
+    execution_gate_rejections: dict[str, int] = {}
+
     for candidate in raw_candidates:
 
         if candidate.get("is_finished"):
@@ -975,6 +1000,34 @@ def _load_live_prediction_candidates(
 
         if require_odds and candidate.get("odds") is None:
             continue
+
+        candidate = _apply_kenya_group_execution(candidate)
+
+        execution_gate = get_execution_market_gate(
+            session=session,
+            execution_market=(
+                candidate.get("grouping_market")
+                or candidate.get("execution_market")
+                or candidate.get("market")
+            ),
+            sport=candidate.get("sport") or "football",
+        )
+
+        candidate["execution_intelligence_verdict"] = execution_gate.verdict
+        candidate["execution_intelligence_reason"] = execution_gate.reason
+        candidate["execution_intelligence_score"] = execution_gate.survivability_score
+        candidate["execution_confidence_multiplier"] = execution_gate.confidence_multiplier
+
+        if not execution_gate.grouping_allowed:
+            reason = f"execution_market_{execution_gate.verdict.lower()}"
+            execution_gate_rejections[reason] = execution_gate_rejections.get(reason, 0) + 1
+            continue
+
+        candidate["confidence"] = round(
+            _float_value(candidate.get("confidence"))
+            * float(execution_gate.confidence_multiplier or 1.0),
+            6,
+        )
 
         candidate["kickoff_time"] = (
             _candidate_kickoff_time(candidate)
@@ -998,7 +1051,10 @@ def _load_live_prediction_candidates(
 
         candidates.append(candidate)
 
-        candidate = _apply_kenya_group_execution(candidate)
+    _diag(
+        "execution_market_gate_rejections",
+        execution_gate_rejections,
+    )
 
     return candidates
 
@@ -2020,18 +2076,34 @@ def _group_odds_within_limits(
 
     return True
 
+# backend/app/grouping/create_groups.py
+# REPLACE THIS FUNCTION
+
 def _candidate_fits_group(
     candidate: dict[str, Any],
     group: list[dict[str, Any]],
     config: PortfolioGroupConfig,
 ) -> bool:
 
-    market = candidate["market"]
+    market = (
+        candidate.get("grouping_market")
+        or candidate.get("execution_market")
+        or candidate["market"]
+    )
+
     league = candidate.get("league") or "unknown"
     market_family = (
         candidate.get("market_family")
         or _resolve_group_market_family(market)
     )
+
+    execution_verdict = str(
+        candidate.get("execution_intelligence_verdict")
+        or ""
+    )
+
+    if execution_verdict in {"BLOCKED", "WATCHLIST"}:
+        return False
 
     if candidate.get("stale_odds"):
         return False

@@ -5,7 +5,9 @@ from __future__ import annotations
 import pickle
 from pathlib import Path
 from typing import Any
-
+from app.services.execution_market_intelligence_service import (
+    get_execution_market_gate,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -55,6 +57,9 @@ CONTROLLED_DERIVATIVE_FAMILIES = {
 }
 
 
+# backend/app/ml/predict_football.py
+# REPLACE ONLY predict_all_football_markets()
+
 def predict_all_football_markets(
     session: Session,
     slate: str = "demo",
@@ -76,71 +81,40 @@ def predict_all_football_markets(
     for market in MARKET_TARGETS.keys():
 
         if not is_production_ready_market(market):
-            print(
-                f"[SKIPPED] {market}: market not production ready"
-            )
+            print(f"[SKIPPED] {market}: market not production ready")
             continue
 
-        parsed_market = parse_executable_market(
-            market
-        )
+        parsed_market = parse_executable_market(market)
 
         if parsed_market.volatility_tier == "EXTREME":
-            print(
-                f"[SKIPPED] {market}: extreme volatility market"
-            )
+            print(f"[SKIPPED] {market}: extreme volatility market")
             continue
 
         if parsed_market.family in RESEARCH_ONLY_FAMILIES:
-            print(
-                f"[SKIPPED] {market}: research-only derivative market"
-            )
+            print(f"[SKIPPED] {market}: research-only derivative market")
             continue
 
-        if (
-            parsed_market.family
-            in CONTROLLED_DERIVATIVE_FAMILIES
-        ):
-
-            if parsed_market.volatility_tier in {
-                "EXTREME",
-                "VERY_HIGH",
-            }:
-                print(
-                    f"[SKIPPED] {market}: derivative volatility too high"
-                )
+        if parsed_market.family in CONTROLLED_DERIVATIVE_FAMILIES:
+            if parsed_market.volatility_tier in {"EXTREME", "VERY_HIGH"}:
+                print(f"[SKIPPED] {market}: derivative volatility too high")
                 continue
 
-        model_path = model_path_for_market(
-            market
-        )
+        model_path = model_path_for_market(market)
 
         if not model_path.exists():
-            print(
-                f"[SKIPPED] {market}: model artifact missing at {model_path}"
-            )
+            print(f"[SKIPPED] {market}: model artifact missing at {model_path}")
             continue
 
         try:
-            bundle = _load_model_bundle(
-                model_path
-            )
-
+            bundle = _load_model_bundle(model_path)
         except Exception as exc:
-            print(
-                f"[SKIPPED] {market}: failed to load model bundle: {exc}"
-            )
+            print(f"[SKIPPED] {market}: failed to load model bundle: {exc}")
             continue
 
-        feature_columns = bundle.get(
-            "feature_columns",
-            [],
-        )
+        feature_columns = bundle.get("feature_columns", [])
 
         if not feature_columns:
-            print(
-                f"[SKIPPED] {market}: bundle has no feature_columns"
-            )
+            print(f"[SKIPPED] {market}: bundle has no feature_columns")
             continue
 
         missing_features = [
@@ -150,32 +124,23 @@ def predict_all_football_markets(
         ]
 
         if missing_features:
-            print(
-                f"[SKIPPED] {market}: missing features: {missing_features[:8]}"
-            )
+            print(f"[SKIPPED] {market}: missing features: {missing_features[:8]}")
             continue
 
-        x = upcoming_df[
-            feature_columns
-        ].fillna(0.0)
+        x = upcoming_df[feature_columns].fillna(0.0)
 
         try:
             probabilities = _predict_probabilities(
                 bundle=bundle,
                 x=x,
             )
-
         except Exception as exc:
-            print(
-                f"[SKIPPED] {market}: prediction failed: {exc}"
-            )
+            print(f"[SKIPPED] {market}: prediction failed: {exc}")
             continue
 
         for row_index, row in upcoming_df.iterrows():
 
-            match_id = int(
-                row["match_id"]
-            )
+            match_id = int(row["match_id"])
 
             timing = analyze_prediction_timing(
                 kickoff_value=(
@@ -200,9 +165,7 @@ def predict_all_football_markets(
             ):
                 continue
 
-            probability = float(
-                probabilities[row_index]
-            )
+            probability = float(probabilities[row_index])
 
             resolved_prediction = resolve_market_prediction(
                 market=market,
@@ -215,27 +178,16 @@ def predict_all_football_markets(
             ):
                 continue
 
-            predicted_label = (
-                resolved_prediction.predicted_label
-            )
-
-            confidence = float(
-                resolved_prediction.confidence
-            )
+            predicted_label = resolved_prediction.predicted_label
+            confidence = float(resolved_prediction.confidence)
 
             if confidence < min_confidence:
                 continue
 
-            if (
-                parsed_market.family == "RESULT_TOTAL"
-                and confidence < 0.62
-            ):
+            if parsed_market.family == "RESULT_TOTAL" and confidence < 0.62:
                 continue
 
-            if (
-                parsed_market.family == "HANDICAP_RESULT"
-                and confidence < 0.60
-            ):
+            if parsed_market.family == "HANDICAP_RESULT" and confidence < 0.60:
                 continue
 
             odds_payload = _resolve_prediction_odds(
@@ -247,26 +199,49 @@ def predict_all_football_markets(
                 away_team=str(row["away_team"]),
             )
 
-            if (
-                require_odds
-                and odds_payload["odds"] is None
-            ):
+            if require_odds and odds_payload["odds"] is None:
+                continue
+
+            execution_market = (
+                odds_payload.get("execution_market")
+                or market
+            )
+
+            execution_market_gate = get_execution_market_gate(
+                session=session,
+                execution_market=execution_market,
+                sport="football",
+            )
+
+            if not execution_market_gate.prediction_allowed:
+                print(
+                    "[EXECUTION MARKET BLOCKED]",
+                    {
+                        "market": market,
+                        "execution_market": execution_market,
+                        "verdict": execution_market_gate.verdict,
+                        "reason": execution_market_gate.reason,
+                    },
+                )
+                continue
+
+            confidence = round(
+                confidence
+                * float(
+                    execution_market_gate.confidence_multiplier
+                    or 1.0
+                ),
+                6,
+            )
+
+            if confidence < min_confidence:
                 continue
 
             survivability = evaluate_odds_survivability(
-                market=(
-                    odds_payload.get("execution_market")
-                    or market
-                ),
-                bookmaker=odds_payload.get(
-                    "odds_bookmaker"
-                ),
-                odds_retrieved_at=odds_payload.get(
-                    "odds_retrieved_at"
-                ),
-                minutes_to_kickoff=(
-                    timing.minutes_to_kickoff
-                ),
+                market=execution_market,
+                bookmaker=odds_payload.get("odds_bookmaker"),
+                odds_retrieved_at=odds_payload.get("odds_retrieved_at"),
+                minutes_to_kickoff=timing.minutes_to_kickoff,
             )
 
             if require_odds:
@@ -291,10 +266,7 @@ def predict_all_football_markets(
                 if survivability.stale:
                     continue
 
-                if (
-                    survivability.survivability_score
-                    < 0.45
-                ):
+                if survivability.survivability_score < 0.45:
                     continue
 
             if (
@@ -325,23 +297,14 @@ def predict_all_football_markets(
                 odds=odds_payload["odds"],
                 confidence=confidence,
                 value_score=value_score,
-                market=(
-                    odds_payload.get("execution_market")
-                    or market
-                ),
+                market=execution_market,
                 production_mode=True,
             )
 
-            if (
-                require_odds
-                and not economics.allowed
-            ):
+            if require_odds and not economics.allowed:
                 continue
 
-            match_object = session.get(
-                Match,
-                match_id,
-            )
+            match_object = session.get(Match, match_id)
 
             if not match_object:
                 continue
@@ -391,6 +354,32 @@ def predict_all_football_markets(
                 intelligence["adjusted_confidence"]
             )
 
+            confidence = round(
+                confidence
+                * float(
+                    execution_market_gate.confidence_multiplier
+                    or 1.0
+                ),
+                6,
+            )
+
+            if confidence < min_confidence:
+                continue
+
+            if (
+                odds_payload["odds"] is not None
+                and odds_payload["odds"] > 0
+            ):
+                implied_probability = round(
+                    1 / odds_payload["odds"],
+                    6,
+                )
+
+                value_score = round(
+                    confidence - implied_probability,
+                    6,
+                )
+
             production_validation = validate_prediction_for_production(
                 market=market,
                 predicted_label=predicted_label,
@@ -438,6 +427,7 @@ def predict_all_football_markets(
                 and not survivability.stale
                 and survivability_score is not None
                 and survivability_score >= 0.45
+                and execution_market_gate.grouping_allowed
                 and (
                     parsed_market.family
                     not in {
@@ -453,13 +443,8 @@ def predict_all_football_markets(
             )
 
             kenya_execution = evaluate_kenyan_execution(
-                market=(
-                    odds_payload.get("execution_market")
-                    or market
-                ),
-                bookmaker=odds_payload.get(
-                    "odds_bookmaker"
-                ),
+                market=execution_market,
+                bookmaker=odds_payload.get("odds_bookmaker"),
                 odds=odds_payload.get("odds"),
                 confidence=confidence,
                 source_market=market,
@@ -478,10 +463,27 @@ def predict_all_football_markets(
                 (
                     item
                     for item in alternatives
-                    if item.get("recommended_for_kenya")
-                    is True
+                    if item.get("recommended_for_kenya") is True
                 ),
                 None,
+            )
+
+            execution_reasons = list(
+                odds_payload.get("execution_reasons")
+                or []
+            )
+
+            execution_reasons.append(
+                {
+                    "source": "execution_market_intelligence",
+                    "execution_market": execution_market,
+                    "verdict": execution_market_gate.verdict,
+                    "prediction_allowed": execution_market_gate.prediction_allowed,
+                    "grouping_allowed": execution_market_gate.grouping_allowed,
+                    "confidence_multiplier": execution_market_gate.confidence_multiplier,
+                    "survivability_score": execution_market_gate.survivability_score,
+                    "reason": execution_market_gate.reason,
+                }
             )
 
             prediction_payload = {
@@ -494,10 +496,7 @@ def predict_all_football_markets(
                 ),
                 "market": market,
                 "predicted_label": predicted_label,
-                "confidence": round(
-                    confidence,
-                    6,
-                ),
+                "confidence": round(confidence, 6),
                 "odds": odds_payload["odds"],
                 "implied_probability": implied_probability,
                 "value_score": value_score,
@@ -508,110 +507,64 @@ def predict_all_football_markets(
                 "odds_retrieved_at": odds_payload["odds_retrieved_at"],
                 "odds_match_quality": odds_payload["odds_match_quality"],
 
-                "execution_market": odds_payload.get(
-                    "execution_market"
-                ),
-                "execution_selection": odds_payload.get(
-                    "execution_selection"
-                ),
-                "execution_family": odds_payload.get(
-                    "execution_family"
-                ),
-                "execution_line": odds_payload.get(
-                    "execution_line"
-                ),
-                "bookmaker_locality": odds_payload.get(
-                    "bookmaker_locality"
-                ),
+                "execution_market": odds_payload.get("execution_market"),
+                "execution_selection": odds_payload.get("execution_selection"),
+                "execution_family": odds_payload.get("execution_family"),
+                "execution_line": odds_payload.get("execution_line"),
+                "bookmaker_locality": odds_payload.get("bookmaker_locality"),
                 "local_realism_score": local_realism_score,
                 "execution_score": execution_score,
                 "survivability_score": survivability_score,
                 "execution_ready": execution_ready,
-                "execution_reasons": odds_payload.get(
-                    "execution_reasons"
-                )
-                or [],
+                "execution_reasons": execution_reasons,
 
                 "market_alternatives": {
                     "primary_kenya_profile": kenya_execution,
                     "recommended_kenya_pick": kenya_recommended,
                     "alternatives": alternatives,
-
+                    "execution_market_intelligence": {
+                        "execution_market": execution_market,
+                        "verdict": execution_market_gate.verdict,
+                        "prediction_allowed": execution_market_gate.prediction_allowed,
+                        "grouping_allowed": execution_market_gate.grouping_allowed,
+                        "confidence_multiplier": execution_market_gate.confidence_multiplier,
+                        "survivability_score": execution_market_gate.survivability_score,
+                        "reason": execution_market_gate.reason,
+                    },
                     "frontend_summary": {
                         "primary_prediction": market,
                         "predicted_label": predicted_label,
-
-                        "primary_execution_market": odds_payload.get(
-                            "execution_market"
-                        ),
-                        "primary_execution_selection": odds_payload.get(
-                            "execution_selection"
-                        ),
-
-                        "primary_bookmaker": odds_payload.get(
-                            "odds_bookmaker"
-                        ),
-
-                        "primary_odds": odds_payload.get(
-                            "odds"
-                        ),
-
-                        "kenya_grade": kenya_execution.get(
-                            "kenya_grade"
-                        ),
-
-                        "kenya_available": kenya_execution.get(
-                            "kenya_available"
-                        ),
-
-                        "kenya_value_score": kenya_execution.get(
-                            "local_value_score"
-                        ),
-
+                        "primary_execution_market": odds_payload.get("execution_market"),
+                        "primary_execution_selection": odds_payload.get("execution_selection"),
+                        "primary_bookmaker": odds_payload.get("odds_bookmaker"),
+                        "primary_odds": odds_payload.get("odds"),
+                        "execution_market_verdict": execution_market_gate.verdict,
+                        "execution_market_reason": execution_market_gate.reason,
+                        "execution_market_grouping_allowed": execution_market_gate.grouping_allowed,
+                        "kenya_grade": kenya_execution.get("kenya_grade"),
+                        "kenya_available": kenya_execution.get("kenya_available"),
+                        "kenya_value_score": kenya_execution.get("local_value_score"),
                         "recommended_market": (
-                            kenya_recommended.get(
-                                "execution_market"
-                            )
+                            kenya_recommended.get("execution_market")
                             if kenya_recommended
-                            else odds_payload.get(
-                                "execution_market"
-                            )
+                            else odds_payload.get("execution_market")
                         ),
-
                         "recommended_selection": (
-                            kenya_recommended.get(
-                                "execution_selection"
-                            )
+                            kenya_recommended.get("execution_selection")
                             if kenya_recommended
-                            else odds_payload.get(
-                                "execution_selection"
-                            )
+                            else odds_payload.get("execution_selection")
                         ),
-
                         "recommended_bookmaker": (
-                            kenya_recommended.get(
-                                "bookmaker"
-                            )
+                            kenya_recommended.get("bookmaker")
                             if kenya_recommended
-                            else odds_payload.get(
-                                "odds_bookmaker"
-                            )
+                            else odds_payload.get("odds_bookmaker")
                         ),
-
                         "recommended_odds": (
-                            kenya_recommended.get(
-                                "odds"
-                            )
+                            kenya_recommended.get("odds")
                             if kenya_recommended
-                            else odds_payload.get(
-                                "odds"
-                            )
+                            else odds_payload.get("odds")
                         ),
-
-                        "warnings": kenya_execution.get(
-                            "warnings",
-                            [],
-                        ),
+                        "warnings": kenya_execution.get("warnings", []),
                     },
                 },
             }
@@ -626,7 +579,6 @@ def predict_all_football_markets(
     session.commit()
 
     return saved
-
 
 def _upsert_prediction(
     session: Session,
