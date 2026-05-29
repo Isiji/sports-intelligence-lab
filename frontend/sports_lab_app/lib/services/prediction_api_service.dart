@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../models/match_intelligence.dart';
 import '../models/match_summary.dart';
+import '../models/prediction_dashboard_item.dart';
 
 class PredictionApiService {
   const PredictionApiService();
@@ -57,11 +58,63 @@ class PredictionApiService {
 
     final uri = Uri.parse(
       '${ApiConfig.baseUrl}/predictions/search-matches',
-    ).replace(
-      queryParameters: query,
-    );
+    ).replace(queryParameters: query);
 
     return _getMatchSummaries(uri);
+  }
+
+  Future<List<PredictionDashboardItem>> searchPredictionsDashboard({
+    String? team,
+    String? league,
+    String? market,
+    String? slate,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    double minConfidence = 0.0,
+    bool executionReadyOnly = false,
+    bool kenyanOnly = false,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final safeLimit = limit.clamp(1, 500);
+
+    final query = <String, String>{
+      'limit': safeLimit.toString(),
+      'offset': offset.toString(),
+      'min_confidence': minConfidence.toStringAsFixed(2),
+      'execution_ready_only': executionReadyOnly.toString(),
+      'local_only': kenyanOnly.toString(),
+    };
+
+    if (team != null && team.trim().isNotEmpty) {
+      query['team'] = team.trim();
+    }
+
+    if (league != null && league.trim().isNotEmpty) {
+      query['league'] = league.trim();
+    }
+
+    if (market != null && market.trim().isNotEmpty) {
+      query['market'] = market.trim();
+    }
+
+    if (slate != null && slate.trim().isNotEmpty) {
+      query['slate'] = slate.trim();
+    }
+
+    if (dateFrom != null) {
+      query['date_from'] = _formatDateTime(dateFrom);
+    }
+
+    if (dateTo != null) {
+      query['date_to'] = _formatDateTime(dateTo);
+    }
+
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/explorer',
+    ).replace(queryParameters: query);
+
+    return _getPredictionDashboardItems(uri);
   }
 
   Future<MatchIntelligence> getMatchIntelligence(int matchId) async {
@@ -130,16 +183,10 @@ class PredictionApiService {
       return MarketAlternativesResponse.fromJson(decoded);
     } on TimeoutException catch (e) {
       debugPrint('API timeout: $uri $e');
-
-      throw Exception(
-        'API timeout\nURL: $uri\nError: $e',
-      );
+      throw Exception('API timeout\nURL: $uri\nError: $e');
     } catch (e, stackTrace) {
       _logError(uri, e, stackTrace);
-
-      throw Exception(
-        'API error\nURL: $uri\nError: $e',
-      );
+      throw Exception('API error\nURL: $uri\nError: $e');
     }
   }
 
@@ -166,16 +213,10 @@ class PredictionApiService {
       return MatchIntelligence.fromJson(decoded);
     } on TimeoutException catch (e) {
       debugPrint('API timeout: $uri $e');
-
-      throw Exception(
-        'API timeout\nURL: $uri\nError: $e',
-      );
+      throw Exception('API timeout\nURL: $uri\nError: $e');
     } catch (e, stackTrace) {
       _logError(uri, e, stackTrace);
-
-      throw Exception(
-        'API error\nURL: $uri\nError: $e',
-      );
+      throw Exception('API error\nURL: $uri\nError: $e');
     }
   }
 
@@ -194,24 +235,16 @@ class PredictionApiService {
       final decoded = jsonDecode(response.body);
 
       if (decoded is! Map<String, dynamic>) {
-        throw Exception(
-          'Invalid analyze response: ${response.body}',
-        );
+        throw Exception('Invalid analyze response: ${response.body}');
       }
 
       return MatchIntelligence.fromJson(decoded);
     } on TimeoutException catch (e) {
       debugPrint('API timeout: $uri $e');
-
-      throw Exception(
-        'API timeout\nURL: $uri\nError: $e',
-      );
+      throw Exception('API timeout\nURL: $uri\nError: $e');
     } catch (e, stackTrace) {
       _logError(uri, e, stackTrace);
-
-      throw Exception(
-        'API error\nURL: $uri\nError: $e',
-      );
+      throw Exception('API error\nURL: $uri\nError: $e');
     }
   }
 
@@ -234,10 +267,7 @@ class PredictionApiService {
       if (decoded is List) {
         items = decoded;
       } else if (decoded is Map<String, dynamic>) {
-        items = decoded['matches'] ??
-            decoded['items'] ??
-            decoded['data'] ??
-            [];
+        items = decoded['matches'] ?? decoded['items'] ?? decoded['data'] ?? [];
       } else {
         items = [];
       }
@@ -248,42 +278,70 @@ class PredictionApiService {
           .toList();
     } on TimeoutException catch (e) {
       debugPrint('API timeout: $uri $e');
-
-      throw Exception(
-        'API timeout\nURL: $uri\nError: $e',
-      );
+      throw Exception('API timeout\nURL: $uri\nError: $e');
     } catch (e, stackTrace) {
       _logError(uri, e, stackTrace);
-
-      throw Exception(
-        'API error\nURL: $uri\nError: $e',
-      );
+      throw Exception('API error\nURL: $uri\nError: $e');
     }
   }
 
-  String _failureMessage(
+  Future<List<PredictionDashboardItem>> _getPredictionDashboardItems(
     Uri uri,
-    http.Response response,
-  ) {
+  ) async {
+    try {
+      _logRequest('GET', uri);
+
+      final response = await http.get(uri).timeout(_timeout);
+
+      _logResponse(uri, response);
+
+      if (response.statusCode != 200) {
+        throw Exception(_failureMessage(uri, response));
+      }
+
+      final decoded = jsonDecode(response.body);
+
+      final List<dynamic> items;
+
+      if (decoded is List) {
+        items = decoded;
+      } else if (decoded is Map<String, dynamic>) {
+        items = decoded['items'] ??
+            decoded['predictions'] ??
+            decoded['data'] ??
+            decoded['results'] ??
+            [];
+      } else {
+        items = [];
+      }
+
+      return items
+          .whereType<Map<String, dynamic>>()
+          .map(PredictionDashboardItem.fromJson)
+          .toList();
+    } on TimeoutException catch (e) {
+      debugPrint('API timeout: $uri $e');
+      throw Exception('API timeout\nURL: $uri\nError: $e');
+    } catch (e, stackTrace) {
+      _logError(uri, e, stackTrace);
+      throw Exception('API error\nURL: $uri\nError: $e');
+    }
+  }
+
+  String _failureMessage(Uri uri, http.Response response) {
     return 'API failed\n'
         'URL: $uri\n'
         'Status: ${response.statusCode}\n'
         'Body: ${response.body}';
   }
 
-  void _logRequest(
-    String method,
-    Uri uri,
-  ) {
+  void _logRequest(String method, Uri uri) {
     debugPrint('');
     debugPrint('================ API REQUEST ================');
     debugPrint('$method $uri');
   }
 
-  void _logResponse(
-    Uri uri,
-    http.Response response,
-  ) {
+  void _logResponse(Uri uri, http.Response response) {
     debugPrint('================ API RESPONSE ===============');
     debugPrint('URL: $uri');
     debugPrint('STATUS: ${response.statusCode}');
@@ -291,11 +349,7 @@ class PredictionApiService {
     debugPrint('============================================');
   }
 
-  void _logError(
-    Uri uri,
-    Object e,
-    StackTrace stackTrace,
-  ) {
+  void _logError(Uri uri, Object e, StackTrace stackTrace) {
     debugPrint('');
     debugPrint('================ API ERROR ==================');
     debugPrint('URL: $uri');

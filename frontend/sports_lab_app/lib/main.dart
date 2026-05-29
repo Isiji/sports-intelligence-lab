@@ -6,6 +6,7 @@ import 'screens/home_dashboard_screen.dart';
 import 'screens/jackpot_builder_screen.dart';
 import 'screens/placeholder_feature_screen.dart';
 import 'screens/prediction_explorer_screen.dart';
+import 'screens/predictions_dashboard_screen.dart';
 import 'screens/slip_builder_screen.dart';
 
 void main() {
@@ -27,23 +28,13 @@ class SportsLabApp extends StatelessWidget {
       initialRoute: '/',
       routes: {
         '/': (_) => const HomeDashboardScreen(),
-
         '/prediction-explorer': (_) => const PredictionExplorerScreen(),
-
-        // Match Intelligence needs a matchId, so this opens the selector first.
         '/match-intelligence': (_) => const PredictionExplorerScreen(),
-
         '/slip-builder': (_) => const SlipBuilderScreen(),
-
         '/jackpot-builder': (_) => const JackpotBuilderScreen(),
-
         '/market-alternatives': (_) => const PredictionExplorerScreen(),
 
-        '/predictions-dashboard': (_) => const PlaceholderFeatureScreen(
-              title: 'Predictions Dashboard',
-              subtitle: 'Next screen: all predictions by date, slate, league and market.',
-              icon: Icons.dashboard_customize_outlined,
-            ),
+        '/predictions-dashboard': (_) => const PredictionsDashboardScreen(),
 
         '/groups-dashboard': (_) => const PlaceholderFeatureScreen(
               title: 'Groups Dashboard',
@@ -57,16 +48,12 @@ class SportsLabApp extends StatelessWidget {
               icon: Icons.account_tree_outlined,
             ),
 
-        '/execution-ready-picks': (_) => const PlaceholderFeatureScreen(
-              title: 'Execution-Ready Picks',
-              subtitle: 'Picks passing execution checks.',
-              icon: Icons.verified_outlined,
+        '/execution-ready-picks': (_) => const PredictionsDashboardScreen(
+              initialExecutionReadyOnly: true,
             ),
 
-        '/local-kenyan-picks': (_) => const PlaceholderFeatureScreen(
-              title: 'Local / Kenyan Picks',
-              subtitle: 'Kenyan bookmaker-ready picks.',
-              icon: Icons.location_on_outlined,
+        '/local-kenyan-picks': (_) => const PredictionsDashboardScreen(
+              initialKenyanOnly: true,
             ),
 
         '/production-review': (_) => const PlaceholderFeatureScreen(
@@ -95,7 +82,7 @@ class SportsLabApp extends StatelessWidget {
 
         '/command-center': (_) => const PlaceholderFeatureScreen(
               title: 'Command Center / Admin Runner',
-              subtitle: 'Run backend workflows.',
+              subtitle: 'Run backend CLI workflows.',
               icon: Icons.terminal_outlined,
             ),
 
