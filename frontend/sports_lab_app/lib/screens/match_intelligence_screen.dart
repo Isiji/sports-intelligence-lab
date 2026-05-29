@@ -661,7 +661,7 @@ class _AnalyzePanel extends StatelessWidget {
             const SizedBox(height: 12),
             if (!jackpotMode) ...[
               DropdownButtonFormField<String>(
-                value: selectedMarket,
+                initialValue: selectedMarket,
                 items: markets
                     .map(
                       (market) => DropdownMenuItem<String>(
