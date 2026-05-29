@@ -9,6 +9,7 @@ from app.grouping.create_groups import group_predictions
 from app.schemas.groups import (
     GroupCreateResponse,
     GroupItemResponse,
+    GroupSlateResponse,
 )
 from app.utils.slate import resolve_slate
 
@@ -17,6 +18,41 @@ router = APIRouter(
     prefix="/groups",
     tags=["Groups"],
 )
+
+
+@router.get(
+    "/slates",
+    response_model=list[GroupSlateResponse],
+)
+def list_group_slates(
+    limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(get_session),
+):
+    query = text(
+        """
+        SELECT
+            pgi.slate,
+            COUNT(DISTINCT pgi.group_name) AS group_count,
+            COUNT(*) AS pick_count,
+            MAX(p.created_at) AS latest_prediction_at
+        FROM prediction_group_items pgi
+        JOIN predictions p
+            ON p.id = pgi.prediction_id
+        GROUP BY pgi.slate
+        ORDER BY latest_prediction_at DESC NULLS LAST, pgi.slate DESC
+        LIMIT :limit
+        """
+    )
+
+    rows = session.execute(
+        query,
+        {"limit": limit},
+    ).mappings().all()
+
+    return [
+        GroupSlateResponse(**row)
+        for row in rows
+    ]
 
 
 @router.post(
@@ -54,12 +90,10 @@ def create_prediction_groups(
     response_model=list[GroupItemResponse],
 )
 def list_prediction_groups(
-    slate: str | None = Query(None),
-    limit: int = Query(300, ge=1, le=1000),
+    slate: str = Query(...),
+    limit: int = Query(500, ge=1, le=1000),
     session: Session = Depends(get_session),
 ):
-    selected_slate = resolve_slate(slate)
-
     query = text(
         """
         SELECT
@@ -116,7 +150,7 @@ def list_prediction_groups(
     rows = session.execute(
         query,
         {
-            "slate": selected_slate,
+            "slate": slate,
             "limit": limit,
         },
     ).mappings().all()

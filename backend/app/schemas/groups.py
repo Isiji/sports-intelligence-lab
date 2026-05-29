@@ -10,6 +10,12 @@ class GroupCreateResponse(BaseModel):
     group_summaries: dict[str, dict[str, Any]]
 
 
+class GroupSlateResponse(BaseModel):
+    slate: str
+    group_count: int
+    pick_count: int
+
+
 class GroupItemResponse(BaseModel):
     group_name: str
     prediction_id: int
