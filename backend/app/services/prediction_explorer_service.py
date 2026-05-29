@@ -523,3 +523,102 @@ def analyze_match_on_demand(
             "reason": execution_gate.reason,
         },
     }
+
+from app.features.football_features import MARKET_TARGETS
+
+
+CORE_EXPLORER_MARKETS = [
+    "home_win",
+    "draw",
+    "away_win",
+    "btts_yes",
+    "btts_no",
+    "over_1_5_goals",
+    "over_2_5_goals",
+    "under_2_5_goals",
+    "double_chance_1x",
+    "double_chance_x2",
+    "double_chance_12",
+]
+
+
+def get_market_alternatives(
+    session: Session,
+    match_id: int,
+) -> dict[str, Any]:
+
+    match = session.get(Match, match_id)
+
+    if not match:
+        raise ValueError("Match not found.")
+
+    alternatives = []
+
+    for market in CORE_EXPLORER_MARKETS:
+
+        try:
+            result = analyze_match_on_demand(
+                session=session,
+                match_id=match_id,
+                market=market,
+            )
+
+            prediction = result.get("prediction")
+
+            if not prediction:
+                continue
+
+            alternatives.append(
+                {
+                    "market": market,
+                    "predicted_label": prediction.get(
+                        "predicted_label"
+                    ),
+                    "confidence": prediction.get(
+                        "confidence"
+                    ),
+                    "odds": prediction.get(
+                        "odds"
+                    ),
+                    "execution_market": prediction.get(
+                        "execution_market"
+                    ),
+                    "execution_selection": prediction.get(
+                        "execution_selection"
+                    ),
+                    "execution_score": prediction.get(
+                        "execution_score"
+                    ),
+                    "execution_ready": prediction.get(
+                        "execution_ready"
+                    ),
+                    "survivability_score": prediction.get(
+                        "survivability_score"
+                    ),
+                    "bookmaker": prediction.get(
+                        "bookmaker"
+                    ),
+                    "bookmaker_locality": prediction.get(
+                        "bookmaker_locality"
+                    ),
+                    "local_realism_score": prediction.get(
+                        "local_realism_score"
+                    ),
+                }
+            )
+
+        except Exception:
+            continue
+
+    alternatives.sort(
+        key=lambda x: (
+            x.get("confidence") or 0.0
+        ),
+        reverse=True,
+    )
+
+    return {
+        "match": _match_payload(match),
+        "count": len(alternatives),
+        "markets": alternatives,
+    }

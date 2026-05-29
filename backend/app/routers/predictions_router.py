@@ -10,7 +10,14 @@ from app.db.models import Prediction
 from app.db.session import get_session
 
 from app.features.football_features import MARKET_TARGETS
-
+from app.services.prediction_explorer_service import (
+    ExplorerFilters,
+    search_predictions,
+    get_match_intelligence,
+    analyze_match_on_demand,
+    search_matches,
+    get_market_alternatives,
+)
 from app.ml.predict_football import (
     predict_all_football_markets,
     predict_football_market,
@@ -417,6 +424,23 @@ def analyze_match_jackpot(
 ):
     try:
         return analyze_match_1x2(
+            session=session,
+            match_id=match_id,
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        )
+    
+@router.post("/match/{match_id}/market-alternatives")
+def market_alternatives(
+    match_id: int,
+    session: Session = Depends(get_session),
+):
+    try:
+        return get_market_alternatives(
             session=session,
             match_id=match_id,
         )

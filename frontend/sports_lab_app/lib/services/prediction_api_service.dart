@@ -13,7 +13,7 @@ import '../models/match_summary.dart';
 class PredictionApiService {
   const PredictionApiService();
 
-  static const Duration _timeout = Duration(seconds: 30);
+  static const Duration _timeout = Duration(seconds: 90);
 
   String _formatDateTime(DateTime value) {
     final y = value.year.toString().padLeft(4, '0');
@@ -99,6 +99,48 @@ class PredictionApiService {
 
   Future<MatchIntelligence> analyzeMatch1X2(int matchId) async {
     return analyzeMatch1x2(matchId: matchId);
+  }
+
+  Future<MarketAlternativesResponse> getMarketAlternatives({
+    required int matchId,
+  }) async {
+    final uri = Uri.parse(
+      '${ApiConfig.baseUrl}/predictions/match/$matchId/market-alternatives',
+    );
+
+    try {
+      _logRequest('POST', uri);
+
+      final response = await http.post(uri).timeout(_timeout);
+
+      _logResponse(uri, response);
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception(_failureMessage(uri, response));
+      }
+
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception(
+          'Invalid market alternatives response: ${response.body}',
+        );
+      }
+
+      return MarketAlternativesResponse.fromJson(decoded);
+    } on TimeoutException catch (e) {
+      debugPrint('API timeout: $uri $e');
+
+      throw Exception(
+        'API timeout\nURL: $uri\nError: $e',
+      );
+    } catch (e, stackTrace) {
+      _logError(uri, e, stackTrace);
+
+      throw Exception(
+        'API error\nURL: $uri\nError: $e',
+      );
+    }
   }
 
   Future<MatchIntelligence> _getMatchIntelligence(Uri uri) async {

@@ -5,6 +5,7 @@ import '../widgets/execution_intelligence_panel.dart';
 
 import '../models/match_intelligence.dart';
 import '../services/prediction_api_service.dart';
+import '../widgets/market_alternatives_panel.dart';
 
 class MatchIntelligenceScreen extends StatefulWidget {
   final int matchId;
@@ -26,6 +27,10 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
   bool _isAnalyzing = false;
   bool _jackpotMode = false;
 
+  bool _isLoadingAlternatives = false;
+  String? _alternativesError;
+  MarketAlternativesResponse? _alternatives;
+
   String? _error;
   String _selectedMarket = 'home_win';
 
@@ -37,7 +42,10 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
     'away_win',
     'over_1_5_goals',
     'over_2_5_goals',
+    'over_3_5_goals',
+    'under_1_5_goals',
     'under_2_5_goals',
+    'under_3_5_goals',
     'btts_yes',
     'btts_no',
     'double_chance_1x',
@@ -49,6 +57,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
   void initState() {
     super.initState();
     _loadMatch();
+    _loadMarketAlternatives();
   }
 
   Future<void> _loadMatch() async {
@@ -78,6 +87,44 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadMarketAlternatives() async {
+    setState(() {
+      _isLoadingAlternatives = true;
+      _alternativesError = null;
+    });
+
+    try {
+      final data = await _api.getMarketAlternatives(
+        matchId: widget.matchId,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _alternatives = data;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _alternativesError = e.toString();
+      });
+    } finally {
+      if (!mounted) return;
+
+      setState(() {
+        _isLoadingAlternatives = false;
+      });
+    }
+  }
+
+  Future<void> _refreshAll() async {
+    await Future.wait([
+      _loadMatch(),
+      _loadMarketAlternatives(),
+    ]);
   }
 
   Future<void> _analyze() async {
@@ -130,6 +177,25 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
     }
   }
 
+  Future<void> _analyzeSpecificMarket(String market) async {
+    setState(() {
+      _selectedMarket = market;
+      _jackpotMode = false;
+    });
+
+    await _analyze();
+  }
+
+  void _addAlternativeToSlip(MarketAlternative item) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${_marketLabel(item.market)} added to slip builder queue',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = _data;
@@ -145,7 +211,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
         foregroundColor: Colors.white,
       ),
       body: RefreshIndicator(
-        onRefresh: _loadMatch,
+        onRefresh: _refreshAll,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -175,6 +241,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 },
                 onMarketChanged: (value) {
                   if (value == null) return;
+
                   setState(() {
                     _selectedMarket = value;
                   });
@@ -218,6 +285,24 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 ExecutionIntelligencePanel(pick: analysis),
                 const SizedBox(height: 16),
               ],
+
+              _SectionTitle(
+                title: 'Market Alternatives Explorer',
+                subtitle:
+                    'Compare all major markets, execution readiness and Kenyan suitability.',
+              ),
+              const SizedBox(height: 10),
+
+              MarketAlternativesPanel(
+                isLoading: _isLoadingAlternatives,
+                error: _alternativesError,
+                markets: _alternatives?.markets ?? [],
+                onRefresh: _loadMarketAlternatives,
+                onAnalyzeMarket: _analyzeSpecificMarket,
+                onAddToSlip: _addAlternativeToSlip,
+              ),
+
+              const SizedBox(height: 16),
 
               _SectionTitle(
                 title: 'Saved Predictions',

@@ -7,12 +7,8 @@ class MatchIntelligence {
     required this.raw,
   });
 
-  factory MatchIntelligence.fromJson(
-    Map<String, dynamic> json,
-  ) {
-    return MatchIntelligence(
-      raw: json,
-    );
+  factory MatchIntelligence.fromJson(Map<String, dynamic> json) {
+    return MatchIntelligence(raw: json);
   }
 
   int? get matchId => _intValue([
@@ -46,74 +42,6 @@ class MatchIntelligence {
         _match['kickoff_date'],
       ]);
 
-  bool get isJackpotAnalysis =>
-      raw['source_type'] == 'jackpot_1x2';
-
-  double? get homeWinProbability =>
-      _doubleValue([
-        raw['home_win_probability'],
-      ]);
-
-  double? get drawProbability =>
-      _doubleValue([
-        raw['draw_probability'],
-      ]);
-
-  double? get awayWinProbability =>
-      _doubleValue([
-        raw['away_win_probability'],
-      ]);
-
-  String get recommendedPick =>
-      _stringValue([
-        raw['recommended_pick'],
-      ]);
-
-  String get recommendedLabel =>
-      _stringValue([
-        raw['recommended_label'],
-      ]);
-
-  String get confidenceBand =>
-      _stringValue([
-        raw['confidence_band'],
-      ]);
-
-  String get riskLevel =>
-      _stringValue([
-        raw['risk_level'],
-      ]);
-
-  String get verdict =>
-      _stringValue([
-        raw['verdict'],
-      ]);
-
-  String get recommendedSafePick =>
-      _stringValue([
-        raw['recommended_safe_pick'],
-      ]);
-
-  Map<String, dynamic> get bestDoubleChance {
-    final value = raw['best_double_chance'];
-
-    if (value is Map<String, dynamic>) {
-      return value;
-    }
-
-    return {};
-  }
-
-  List<String> get reasoning {
-    final value = raw['reasoning'];
-
-    if (value is List) {
-      return value.map((e) => e.toString()).toList();
-    }
-
-    return [];
-  }
-
   List<PredictionPick> get savedPredictions {
     final source = raw['predictions'] ??
         raw['saved_predictions'] ??
@@ -123,9 +51,7 @@ class MatchIntelligence {
     if (source is List) {
       return source
           .whereType<Map<String, dynamic>>()
-          .map(
-            PredictionPick.fromJson,
-          )
+          .map(PredictionPick.fromJson)
           .toList();
     }
 
@@ -139,13 +65,25 @@ class MatchIntelligence {
         raw['latest_prediction'];
 
     if (source is Map<String, dynamic>) {
-      return PredictionPick.fromJson(
-        source,
-      );
+      return PredictionPick.fromJson(source);
     }
 
     if (savedPredictions.isNotEmpty) {
       return savedPredictions.first;
+    }
+
+    return null;
+  }
+
+  MarketAlternativesResponse? get marketAlternativesResponse {
+    if (raw['markets'] is List) {
+      return MarketAlternativesResponse.fromJson(raw);
+    }
+
+    final source = raw['market_alternatives'];
+
+    if (source is Map<String, dynamic>) {
+      return MarketAlternativesResponse.fromJson(source);
     }
 
     return null;
@@ -160,49 +98,6 @@ class MatchIntelligence {
 
     return {};
   }
-
-  static String _stringValue(
-    List<dynamic> values,
-  ) {
-    for (final value in values) {
-      if (value != null &&
-          value.toString().trim().isNotEmpty) {
-        return value.toString();
-      }
-    }
-
-    return '—';
-  }
-
-  static int? _intValue(
-    List<dynamic> values,
-  ) {
-    for (final value in values) {
-      if (value is int) return value;
-
-      if (value is String) {
-        return int.tryParse(value);
-      }
-    }
-
-    return null;
-  }
-
-  static double? _doubleValue(
-    List<dynamic> values,
-  ) {
-    for (final value in values) {
-      if (value is num) {
-        return value.toDouble();
-      }
-
-      if (value is String) {
-        return double.tryParse(value);
-      }
-    }
-
-    return null;
-  }
 }
 
 class PredictionPick {
@@ -212,12 +107,8 @@ class PredictionPick {
     required this.raw,
   });
 
-  factory PredictionPick.fromJson(
-    Map<String, dynamic> json,
-  ) {
-    return PredictionPick(
-      raw: json,
-    );
+  factory PredictionPick.fromJson(Map<String, dynamic> json) {
+    return PredictionPick(raw: json);
   }
 
   String get market => _stringValue([
@@ -325,36 +216,185 @@ class PredictionPick {
       return value;
     }
 
+    if (value is Map && value['alternatives'] is List) {
+      return value['alternatives'] as List;
+    }
+
     return const [];
   }
+}
 
-  static String _stringValue(
-    List<dynamic> values,
-  ) {
-    for (final value in values) {
-      if (value != null &&
-          value.toString().trim().isNotEmpty &&
-          value.toString().trim().toLowerCase() != 'null') {
-        return value.toString();
-      }
-    }
+class MarketAlternativesResponse {
+  final Map<String, dynamic> raw;
+  final List<MarketAlternative> markets;
 
-    return '—';
+  MarketAlternativesResponse({
+    required this.raw,
+    required this.markets,
+  });
+
+  factory MarketAlternativesResponse.fromJson(Map<String, dynamic> json) {
+    final source = json['markets'];
+
+    return MarketAlternativesResponse(
+      raw: json,
+      markets: source is List
+          ? source
+              .whereType<Map<String, dynamic>>()
+              .map(MarketAlternative.fromJson)
+              .toList()
+          : [],
+    );
   }
 
-  static double? _doubleValue(
-    List<dynamic> values,
-  ) {
-    for (final value in values) {
-      if (value is num) {
-        return value.toDouble();
-      }
+  int get count => markets.length;
 
-      if (value is String) {
-        return double.tryParse(value);
-      }
+  Map<String, dynamic> get match {
+    final value = raw['match'];
+
+    if (value is Map<String, dynamic>) {
+      return value;
     }
 
-    return null;
+    return {};
   }
+}
+
+class MarketAlternative {
+  final Map<String, dynamic> raw;
+
+  MarketAlternative({
+    required this.raw,
+  });
+
+  factory MarketAlternative.fromJson(Map<String, dynamic> json) {
+    return MarketAlternative(raw: json);
+  }
+
+  String get market => _stringValue([
+        raw['market'],
+      ]);
+
+  String get predictedLabel => _stringValue([
+        raw['predicted_label'],
+        raw['selection'],
+        raw['execution_selection'],
+      ]);
+
+  String get executionMarket => _stringValue([
+        raw['execution_market'],
+        raw['market'],
+      ]);
+
+  String get executionSelection => _stringValue([
+        raw['execution_selection'],
+        raw['predicted_label'],
+      ]);
+
+  double? get confidence => _doubleValue([
+        raw['confidence'],
+        raw['probability'],
+      ]);
+
+  double? get odds => _doubleValue([
+        raw['odds'],
+        raw['best_odds'],
+        raw['execution_odds'],
+      ]);
+
+  double? get executionScore => _doubleValue([
+        raw['execution_score'],
+      ]);
+
+  bool get executionReady {
+    final value = raw['execution_ready'];
+
+    if (value is bool) return value;
+
+    final text = value?.toString().toLowerCase().trim();
+
+    return text == 'true' || text == '1' || text == 'yes' || text == 'ready';
+  }
+
+  double? get survivabilityScore => _doubleValue([
+        raw['survivability_score'],
+      ]);
+
+  String get bookmaker => _stringValue([
+        raw['bookmaker'],
+        raw['odds_bookmaker'],
+      ]);
+
+  String get bookmakerLocality => _stringValue([
+        raw['bookmaker_locality'],
+      ]);
+
+  double? get localRealismScore => _doubleValue([
+        raw['local_realism_score'],
+      ]);
+
+  String get kenyaGrade {
+    final score = localRealismScore;
+
+    if (bookmakerLocality.toUpperCase() == 'LOCAL' && score != null && score >= 0.75) {
+      return 'A';
+    }
+
+    if (score == null) return 'Unknown';
+    if (score >= 0.75) return 'A';
+    if (score >= 0.60) return 'B';
+    if (score >= 0.45) return 'C';
+    if (score >= 0.30) return 'D';
+
+    return 'Weak';
+  }
+
+  bool get isKenyaSuitable {
+    final score = localRealismScore ?? 0.0;
+
+    return bookmakerLocality.toUpperCase() == 'LOCAL' || score >= 0.60;
+  }
+}
+
+String _stringValue(List<dynamic> values) {
+  for (final value in values) {
+    if (value == null) continue;
+
+    final text = value.toString().trim();
+
+    if (text.isNotEmpty && text.toLowerCase() != 'null') {
+      return text;
+    }
+  }
+
+  return '—';
+}
+
+int? _intValue(List<dynamic> values) {
+  for (final value in values) {
+    if (value is int) return value;
+
+    if (value is String) {
+      return int.tryParse(value);
+    }
+  }
+
+  return null;
+}
+
+double? _doubleValue(List<dynamic> values) {
+  for (final value in values) {
+    if (value == null) continue;
+
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    final parsed = double.tryParse(value.toString());
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
