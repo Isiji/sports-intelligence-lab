@@ -233,72 +233,108 @@ class PredictionPick {
         raw['execution_selection'],
       ]);
 
-  String get executionMarket =>
-      _stringValue([
+  String get executionMarket => _stringValue([
         raw['execution_market'],
         raw['market'],
       ]);
 
-  String get executionSelection =>
-      _stringValue([
+  String get executionSelection => _stringValue([
         raw['execution_selection'],
         raw['selection'],
         raw['predicted_label'],
       ]);
 
-  String get bookmaker =>
-      _stringValue([
+  String get executionReady => _stringValue([
+        raw['execution_ready'],
+        raw['is_execution_ready'],
+        raw['ready_for_execution'],
+      ]);
+
+  double? get executionScore => _doubleValue([
+        raw['execution_score'],
+        raw['bookmaker_execution_score'],
+      ]);
+
+  double? get survivabilityScore => _doubleValue([
+        raw['survivability_score'],
+        raw['market_survivability_score'],
+      ]);
+
+  String get bookmaker => _stringValue([
         raw['odds_bookmaker'],
         raw['bookmaker'],
         raw['provider'],
       ]);
 
-  String get reasoning =>
-      _stringValue([
+  String get bookmakerLocality => _stringValue([
+        raw['bookmaker_locality'],
+        raw['locality'],
+        raw['odds_locality'],
+      ]);
+
+  String get kenyanAvailability => _stringValue([
+        raw['kenyan_availability'],
+        raw['local_availability'],
+        raw['bookmaker_availability'],
+      ]);
+
+  String get reasoning => _stringValue([
         raw['reasoning'],
         raw['explanation'],
         raw['reason'],
         raw['analysis_reason'],
       ]);
 
-  String get timingRisk =>
-      _stringValue([
+  String get timingRisk => _stringValue([
         raw['timing_risk'],
         raw['market_timing_risk'],
       ]);
 
-  String get localRealism =>
-      _stringValue([
+  String get localRealism => _stringValue([
         raw['local_realism'],
         raw['local_realism_score'],
         raw['kenyan_realism_score'],
       ]);
 
-  double? get confidence =>
-      _doubleValue([
+  double? get localRealismScore => _doubleValue([
+        raw['local_realism_score'],
+        raw['kenyan_realism_score'],
+        raw['local_realism'],
+      ]);
+
+  double? get confidence => _doubleValue([
         raw['confidence'],
         raw['probability'],
       ]);
 
-  double? get odds =>
-      _doubleValue([
+  double? get odds => _doubleValue([
         raw['odds'],
         raw['best_odds'],
         raw['execution_odds'],
       ]);
 
-  double? get valueScore =>
-      _doubleValue([
+  double? get valueScore => _doubleValue([
         raw['value_score'],
         raw['edge'],
       ]);
+
+  List<dynamic> get marketAlternatives {
+    final value = raw['market_alternatives'] ?? raw['alternatives'];
+
+    if (value is List) {
+      return value;
+    }
+
+    return const [];
+  }
 
   static String _stringValue(
     List<dynamic> values,
   ) {
     for (final value in values) {
       if (value != null &&
-          value.toString().trim().isNotEmpty) {
+          value.toString().trim().isNotEmpty &&
+          value.toString().trim().toLowerCase() != 'null') {
         return value.toString();
       }
     }

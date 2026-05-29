@@ -1,6 +1,7 @@
 // lib/screens/match_intelligence_screen.dart
 
 import 'package:flutter/material.dart';
+import '../widgets/execution_intelligence_panel.dart';
 
 import '../models/match_intelligence.dart';
 import '../services/prediction_api_service.dart';
@@ -135,6 +136,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
     final savedPredictions = data?.savedPredictions ?? [];
     final analysis = data?.analysis;
     final jackpot = data == null ? null : Jackpot1x2Result.fromRawOrNull(data.raw);
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
@@ -148,6 +150,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
           padding: const EdgeInsets.all(16),
           children: [
             if (_isLoading) const LinearProgressIndicator(),
+
             if (_error != null) ...[
               const SizedBox(height: 12),
               _ErrorBox(
@@ -155,9 +158,11 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 onRetry: _loadMatch,
               ),
             ],
+
             if (data != null) ...[
               _MatchHeader(data: data),
               const SizedBox(height: 14),
+
               _AnalyzePanel(
                 markets: _markets,
                 selectedMarket: _selectedMarket,
@@ -176,7 +181,9 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 },
                 onAnalyze: _analyze,
               ),
+
               const SizedBox(height: 16),
+
               if (jackpot != null) ...[
                 _SectionTitle(
                   title: 'Jackpot 1X2 Intelligence',
@@ -187,6 +194,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 _JackpotResultCard(result: jackpot),
                 const SizedBox(height: 16),
               ],
+
               if (analysis != null && jackpot == null) ...[
                 _SectionTitle(
                   title: 'Latest Intelligence',
@@ -199,6 +207,18 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                 ),
                 const SizedBox(height: 16),
               ],
+
+              if (analysis != null) ...[
+                _SectionTitle(
+                  title: 'Execution Intelligence',
+                  subtitle:
+                      'Bookmaker, Kenyan availability, timing risk and execution readiness.',
+                ),
+                const SizedBox(height: 10),
+                ExecutionIntelligencePanel(pick: analysis),
+                const SizedBox(height: 16),
+              ],
+
               _SectionTitle(
                 title: 'Saved Predictions',
                 subtitle: savedPredictions.isEmpty
@@ -206,6 +226,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                     : 'Predictions already created by your backend.',
               ),
               const SizedBox(height: 10),
+
               if (savedPredictions.isEmpty)
                 const _EmptyPredictions()
               else
@@ -213,6 +234,7 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
                   (pick) => _PredictionCard(pick: pick),
                 ),
             ],
+
             if (!_isLoading && data == null && _error == null)
               const _EmptyPredictions(),
           ],
