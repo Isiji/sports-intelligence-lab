@@ -15,6 +15,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final AdminApiService _service = AdminApiService();
 
   late Future<List<AdminCommandItem>> _future;
+
+  AdminSeasonInfo? _seasonInfo;
+  int? _selectedSeason;
+  bool _savingSeason = false;
+
   String? _runningKey;
   Map<String, dynamic>? _lastResult;
   String? _error;
@@ -23,6 +28,57 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   void initState() {
     super.initState();
     _future = _service.fetchCommands();
+    _loadSeason();
+  }
+
+  Future<void> _loadSeason() async {
+    try {
+      final info = await _service.fetchSeason();
+
+      if (!mounted) return;
+
+      setState(() {
+        _seasonInfo = info;
+        _selectedSeason = info.activeSeason;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _saveSeason() async {
+    final season = _selectedSeason;
+
+    if (season == null) return;
+
+    setState(() {
+      _savingSeason = true;
+      _error = null;
+    });
+
+    try {
+      final info = await _service.saveSeason(season);
+
+      if (!mounted) return;
+
+      setState(() {
+        _seasonInfo = info;
+        _selectedSeason = info.activeSeason;
+        _future = _service.fetchCommands();
+        _savingSeason = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = error.toString();
+        _savingSeason = false;
+      });
+    }
   }
 
   Future<void> _run(AdminCommandItem item) async {
@@ -57,6 +113,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       _lastResult = null;
       _error = null;
     });
+
+    _loadSeason();
   }
 
   @override
@@ -76,19 +134,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       body: FutureBuilder<List<AdminCommandItem>>(
         future: _future,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(),
-            );
-          }
-
-          if (snapshot.hasError) {
-            return _ErrorView(
-              message: snapshot.error.toString(),
-              onRetry: _refresh,
-            );
-          }
-
           final commands = snapshot.data ?? [];
 
           return ListView(
@@ -102,18 +147,56 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'These buttons only run whitelisted backend CLI workflows. No random terminal commands are allowed.',
+                'Choose the active season, then run approved backend CLI workflows.',
                 style: theme.textTheme.bodyMedium,
               ),
               const SizedBox(height: 16),
-              for (final item in commands) ...[
-                _CommandCard(
-                  item: item,
-                  isRunning: _runningKey == item.key,
-                  disabled: _runningKey != null,
-                  onRun: () => _run(item),
-                ),
-                const SizedBox(height: 12),
+              _SeasonCard(
+                seasonInfo: _seasonInfo,
+                selectedSeason: _selectedSeason,
+                saving: _savingSeason,
+                disabled: _runningKey != null,
+                onChanged: (value) {
+                  setState(() {
+                    _selectedSeason = value;
+                  });
+                },
+                onSave: _saveSeason,
+              ),
+              const SizedBox(height: 16),
+              if (snapshot.connectionState == ConnectionState.waiting)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (snapshot.hasError)
+                _ErrorView(
+                  message: snapshot.error.toString(),
+                  onRetry: _refresh,
+                )
+              else ...[
+                for (final entry in _groupCommands(commands).entries) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10, bottom: 8),
+                    child: Text(
+                      entry.key,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  for (final item in entry.value) ...[
+                    _CommandCard(
+                      item: item,
+                      isRunning: _runningKey == item.key,
+                      disabled: _runningKey != null,
+                      onRun: () => _run(item),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ],
               ],
               if (_error != null) ...[
                 const SizedBox(height: 16),
@@ -138,11 +221,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  Map<String, List<AdminCommandItem>> _groupCommands(
+    List<AdminCommandItem> commands,
+  ) {
+    final grouped = <String, List<AdminCommandItem>>{};
+
+    for (final command in commands) {
+      grouped.putIfAbsent(command.category, () => []);
+      grouped[command.category]!.add(command);
+    }
+
+    return grouped;
+  }
+
   String _formatResult(Map<String, dynamic> result) {
     final buffer = StringBuffer();
 
     buffer.writeln('OK: ${result['ok']}');
     buffer.writeln('Command: ${result['label'] ?? result['key']}');
+    buffer.writeln('Category: ${result['category'] ?? 'General'}');
     buffer.writeln('Duration: ${result['duration_seconds']} seconds');
 
     final results = (result['results'] as List?) ?? [];
@@ -160,6 +257,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
       final stdout = (step['stdout'] ?? '').toString().trim();
       final stderr = (step['stderr'] ?? '').toString().trim();
+      final error = (step['error'] ?? '').toString().trim();
 
       if (stdout.isNotEmpty) {
         buffer.writeln('');
@@ -172,9 +270,120 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         buffer.writeln('STDERR:');
         buffer.writeln(stderr);
       }
+
+      if (error.isNotEmpty) {
+        buffer.writeln('');
+        buffer.writeln('ERROR:');
+        buffer.writeln(error);
+      }
     }
 
     return buffer.toString();
+  }
+}
+
+class _SeasonCard extends StatelessWidget {
+  final AdminSeasonInfo? seasonInfo;
+  final int? selectedSeason;
+  final bool saving;
+  final bool disabled;
+  final ValueChanged<int?> onChanged;
+  final VoidCallback onSave;
+
+  const _SeasonCard({
+    required this.seasonInfo,
+    required this.selectedSeason,
+    required this.saving,
+    required this.disabled,
+    required this.onChanged,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final seasons = seasonInfo?.availableSeasons ?? const <int>[2026];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 520;
+
+            final dropdown = DropdownButtonFormField<int>(
+              value: selectedSeason,
+              decoration: const InputDecoration(
+                labelText: 'Active Season',
+                border: OutlineInputBorder(),
+              ),
+              items: seasons
+                  .map(
+                    (season) => DropdownMenuItem<int>(
+                      value: season,
+                      child: Text(season.toString()),
+                    ),
+                  )
+                  .toList(),
+              onChanged: disabled ? null : onChanged,
+            );
+
+            final saveButton = FilledButton.icon(
+              onPressed: saving || disabled ? null : onSave,
+              icon: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: const Text('Save Season'),
+            );
+
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.event),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Season Control',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  dropdown,
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: saveButton,
+                  ),
+                ],
+              );
+            }
+
+            return Row(
+              children: [
+                const Icon(Icons.event),
+                const SizedBox(width: 12),
+                const Text(
+                  'Season Control',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(width: 16),
+                Expanded(child: dropdown),
+                const SizedBox(width: 12),
+                saveButton,
+              ],
+            );
+          },
+        ),
+      ),
+    );
   }
 }
 
@@ -213,9 +422,7 @@ class _CommandCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Chip(
-                  label: Text(item.apiSafeLevel.toUpperCase()),
-                ),
+                Chip(label: Text(item.apiSafeLevel.toUpperCase())),
               ],
             ),
             const SizedBox(height: 8),
