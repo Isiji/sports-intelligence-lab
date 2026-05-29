@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'screens/groups_dashboard_screen.dart';
 import 'screens/home_dashboard_screen.dart';
 import 'screens/jackpot_builder_screen.dart';
 import 'screens/placeholder_feature_screen.dart';
@@ -36,17 +37,9 @@ class SportsLabApp extends StatelessWidget {
 
         '/predictions-dashboard': (_) => const PredictionsDashboardScreen(),
 
-        '/groups-dashboard': (_) => const PlaceholderFeatureScreen(
-              title: 'Groups Dashboard',
-              subtitle: 'Next screen: generated groups, group quality and grouped picks.',
-              icon: Icons.groups_outlined,
-            ),
+        '/groups-dashboard': (_) => const GroupsDashboardScreen(),
 
-        '/group-details': (_) => const PlaceholderFeatureScreen(
-              title: 'Group Details',
-              subtitle: 'Next screen: inspect one group with picks, risk and odds.',
-              icon: Icons.account_tree_outlined,
-            ),
+        '/group-details': (_) => const GroupsDashboardScreen(),
 
         '/execution-ready-picks': (_) => const PredictionsDashboardScreen(
               initialExecutionReadyOnly: true,
