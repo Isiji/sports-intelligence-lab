@@ -2,6 +2,9 @@
 
 import 'package:flutter/material.dart';
 import '../widgets/execution_intelligence_panel.dart';
+import '../models/slip_pick.dart';
+import '../services/slip_builder_service.dart';
+import 'slip_builder_screen.dart';
 
 import '../models/match_intelligence.dart';
 import '../services/prediction_api_service.dart';
@@ -22,6 +25,7 @@ class MatchIntelligenceScreen extends StatefulWidget {
 
 class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
   final PredictionApiService _api = const PredictionApiService();
+  final SlipBuilderService _slipService = SlipBuilderService.instance;
 
   bool _isLoading = true;
   bool _isAnalyzing = false;
@@ -56,8 +60,20 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
   @override
   void initState() {
     super.initState();
+    _slipService.addListener(_onSlipChanged);
     _loadMatch();
     _loadMarketAlternatives();
+  }
+
+  @override
+  void dispose() {
+    _slipService.removeListener(_onSlipChanged);
+    super.dispose();
+  }
+
+  void _onSlipChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _loadMatch() async {
@@ -187,11 +203,42 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
   }
 
   void _addAlternativeToSlip(MarketAlternative item) {
+    final match = _data;
+
+    if (match == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Match data not loaded yet.'),
+        ),
+      );
+      return;
+    }
+
+    final pick = SlipPick.fromMarketAlternative(
+      match: match,
+      item: item,
+      mode: _jackpotMode ? 'jackpot' : 'normal',
+    );
+
+    _slipService.add(pick);
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '${_marketLabel(item.market)} added to slip builder queue',
+          '${_marketLabel(item.market)} added to slip',
         ),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: _openSlipBuilder,
+        ),
+      ),
+    );
+  }
+
+  void _openSlipBuilder() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const SlipBuilderScreen(),
       ),
     );
   }
@@ -209,6 +256,41 @@ class _MatchIntelligenceScreenState extends State<MatchIntelligenceScreen> {
         title: const Text('Match Intelligence'),
         backgroundColor: const Color(0xFF0F172A),
         foregroundColor: Colors.white,
+        actions: [
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                tooltip: 'Open Slip Builder',
+                onPressed: _openSlipBuilder,
+                icon: const Icon(Icons.receipt_long_outlined),
+              ),
+              if (_slipService.count > 0)
+                Positioned(
+                  right: 7,
+                  top: 7,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22C55E),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      _slipService.count.toString(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refreshAll,
