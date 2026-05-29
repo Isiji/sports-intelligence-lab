@@ -445,8 +445,7 @@ class _SlipPickCard extends StatelessWidget {
             const SizedBox(height: 10),
             const _WarningBox(
               text:
-                  'This pick is not a pure jackpot 1X2 market. Use Home/Draw/Away or Double Chance for jackpot slips.',
-            ),
+                  'This pick is not a jackpot pick. Jackpot slips only allow Home Win (1), Draw (X), or Away Win (2).'            ),
           ],
         ],
       ),
@@ -662,10 +661,7 @@ bool _isJackpotFriendlyMarket(String market) {
 
   return lower == 'home_win' ||
       lower == 'draw' ||
-      lower == 'away_win' ||
-      lower == 'double_chance_1x' ||
-      lower == 'double_chance_x2' ||
-      lower == 'double_chance_12';
+      lower == 'away_win';
 }
 
 String _percentText(double? value) {
@@ -719,6 +715,10 @@ String _marketLabel(String value) {
     'under_1_5': 'Under 1.5',
     'under_2_5': 'Under 2.5',
     'under_3_5': 'Under 3.5',
+    'jackpot_1x2': 'Jackpot 1X2',
+    '1': 'Home Win (1)',
+    'X': 'Draw (X)',
+    '2': 'Away Win (2)',
   };
 
   final lower = clean.toLowerCase();

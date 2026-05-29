@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'screens/production_review_dashboard_screen.dart';
 import 'screens/groups_dashboard_screen.dart';
 import 'screens/home_dashboard_screen.dart';
 import 'screens/jackpot_builder_screen.dart';
@@ -43,12 +44,7 @@ class SportsLabApp extends StatelessWidget {
         '/local-kenyan-picks': (_) => const PredictionsDashboardScreen(
               initialKenyanOnly: true,
             ),
-        '/production-review': (_) => const PlaceholderFeatureScreen(
-              title: 'Production Review',
-              subtitle: 'Review slate quality.',
-              icon: Icons.fact_check_outlined,
-            ),
-        '/backtests': (_) => const PlaceholderFeatureScreen(
+        '/production-review': (_) => const ProductionReviewDashboardScreen(),        '/backtests': (_) => const PlaceholderFeatureScreen(
               title: 'Backtests',
               subtitle: 'Historical performance and ROI.',
               icon: Icons.history_outlined,

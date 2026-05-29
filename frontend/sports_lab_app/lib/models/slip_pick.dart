@@ -8,15 +8,20 @@ class SlipPick {
   final String homeTeam;
   final String awayTeam;
   final String kickoff;
+
   final String market;
   final String selection;
+
   final double? confidence;
   final double? odds;
+
   final double? executionScore;
   final double? survivabilityScore;
   final double? localRealismScore;
+
   final String bookmaker;
   final String bookmakerLocality;
+
   final String mode;
 
   SlipPick({
@@ -59,6 +64,58 @@ class SlipPick {
       bookmakerLocality: item.bookmakerLocality,
       mode: mode,
     );
+  }
+
+  factory SlipPick.fromJackpotAnalysis({
+    required MatchIntelligence match,
+    required Jackpot1x2Result result,
+  }) {
+    return SlipPick(
+      matchId: match.matchId,
+      league: match.league,
+      homeTeam: match.homeTeam,
+      awayTeam: match.awayTeam,
+      kickoff: match.kickoff,
+
+      market: 'jackpot_1x2',
+      selection: result.jackpotSelection,
+
+      confidence: result.confidence,
+      odds: null,
+
+      executionScore: null,
+      survivabilityScore: null,
+      localRealismScore: null,
+
+      bookmaker: 'Jackpot Model',
+      bookmakerLocality: 'MODEL',
+
+      mode: 'jackpot',
+    );
+  }
+
+  bool get isJackpotPick {
+    return mode == 'jackpot' || market == 'jackpot_1x2';
+  }
+
+  bool get isHomePick {
+    return selection == '1';
+  }
+
+  bool get isDrawPick {
+    return selection.toUpperCase() == 'X';
+  }
+
+  bool get isAwayPick {
+    return selection == '2';
+  }
+
+  String get jackpotLabel {
+    if (selection == '1') return 'Home Win';
+    if (selection.toUpperCase() == 'X') return 'Draw';
+    if (selection == '2') return 'Away Win';
+
+    return selection;
   }
 
   double get effectiveOdds => odds ?? 1.0;
