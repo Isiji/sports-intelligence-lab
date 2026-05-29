@@ -21,7 +21,7 @@ class HomeDashboardScreen extends StatelessWidget {
             title: 'Match Intelligence Search',
             subtitle: 'Find a match and open full intelligence.',
             icon: Icons.manage_search_outlined,
-            route: '/match-intelligence-search',
+            route: '/match-intelligence',
           ),
           _DashboardItem(
             title: 'Market Alternatives Explorer',

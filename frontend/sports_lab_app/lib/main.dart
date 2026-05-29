@@ -3,15 +3,15 @@
 import 'package:flutter/material.dart';
 
 import 'screens/home_dashboard_screen.dart';
-import 'screens/match_intelligence_search_screen.dart';
+import 'screens/jackpot_builder_screen.dart';
 import 'screens/placeholder_feature_screen.dart';
 import 'screens/prediction_explorer_screen.dart';
 import 'screens/slip_builder_screen.dart';
 
-
 void main() {
   runApp(const SportsLabApp());
 }
+
 class SportsLabApp extends StatelessWidget {
   const SportsLabApp({super.key});
 
@@ -27,27 +27,34 @@ class SportsLabApp extends StatelessWidget {
       initialRoute: '/',
       routes: {
         '/': (_) => const HomeDashboardScreen(),
+
         '/prediction-explorer': (_) => const PredictionExplorerScreen(),
-        '/match-intelligence-search': (_) =>
-            const MatchIntelligenceSearchScreen(),
+
+        // Match Intelligence needs a matchId, so this opens the selector first.
+        '/match-intelligence': (_) => const PredictionExplorerScreen(),
+
         '/slip-builder': (_) => const SlipBuilderScreen(),
 
-        '/jackpot-builder': (_) => const PlaceholderFeatureScreen(
-              title: 'Jackpot / 1X2 Builder',
-              subtitle: 'Build jackpot-safe 1X2 slips and analysis.',
-              icon: Icons.confirmation_number_outlined,
-            ),
+        '/jackpot-builder': (_) => const JackpotBuilderScreen(),
 
-        '/market-alternatives': (_) => const PlaceholderFeatureScreen(
-              title: 'Market Alternatives Explorer',
-              subtitle: 'Compare market alternatives.',
-              icon: Icons.compare_arrows_outlined,
-            ),
+        '/market-alternatives': (_) => const PredictionExplorerScreen(),
 
         '/predictions-dashboard': (_) => const PlaceholderFeatureScreen(
               title: 'Predictions Dashboard',
-              subtitle: 'View all predictions.',
+              subtitle: 'Next screen: all predictions by date, slate, league and market.',
               icon: Icons.dashboard_customize_outlined,
+            ),
+
+        '/groups-dashboard': (_) => const PlaceholderFeatureScreen(
+              title: 'Groups Dashboard',
+              subtitle: 'Next screen: generated groups, group quality and grouped picks.',
+              icon: Icons.groups_outlined,
+            ),
+
+        '/group-details': (_) => const PlaceholderFeatureScreen(
+              title: 'Group Details',
+              subtitle: 'Next screen: inspect one group with picks, risk and odds.',
+              icon: Icons.account_tree_outlined,
             ),
 
         '/execution-ready-picks': (_) => const PlaceholderFeatureScreen(
@@ -60,18 +67,6 @@ class SportsLabApp extends StatelessWidget {
               title: 'Local / Kenyan Picks',
               subtitle: 'Kenyan bookmaker-ready picks.',
               icon: Icons.location_on_outlined,
-            ),
-
-        '/groups-dashboard': (_) => const PlaceholderFeatureScreen(
-              title: 'Groups Dashboard',
-              subtitle: 'Generated groups and slips.',
-              icon: Icons.groups_outlined,
-            ),
-
-        '/group-details': (_) => const PlaceholderFeatureScreen(
-              title: 'Group Details',
-              subtitle: 'Inspect group picks and risk.',
-              icon: Icons.account_tree_outlined,
             ),
 
         '/production-review': (_) => const PlaceholderFeatureScreen(
