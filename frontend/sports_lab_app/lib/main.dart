@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'screens/admin_dashboard_screen.dart';
 import 'screens/production_review_dashboard_screen.dart';
 import 'screens/groups_dashboard_screen.dart';
 import 'screens/home_dashboard_screen.dart';
@@ -44,7 +45,10 @@ class SportsLabApp extends StatelessWidget {
         '/local-kenyan-picks': (_) => const PredictionsDashboardScreen(
               initialKenyanOnly: true,
             ),
-        '/production-review': (_) => const ProductionReviewDashboardScreen(),        '/backtests': (_) => const PlaceholderFeatureScreen(
+        '/production-review': (_) => const ProductionReviewDashboardScreen(),
+        '/command-center': (_) => const AdminDashboardScreen(),
+        '/admin': (_) => const AdminDashboardScreen(),
+        '/backtests': (_) => const PlaceholderFeatureScreen(
               title: 'Backtests',
               subtitle: 'Historical performance and ROI.',
               icon: Icons.history_outlined,
@@ -58,11 +62,6 @@ class SportsLabApp extends StatelessWidget {
               title: 'League / Odds Coverage',
               subtitle: 'Coverage and bookmaker depth.',
               icon: Icons.analytics_outlined,
-            ),
-        '/command-center': (_) => const PlaceholderFeatureScreen(
-              title: 'Command Center / Admin Runner',
-              subtitle: 'Run backend CLI workflows.',
-              icon: Icons.terminal_outlined,
             ),
         '/data-ingestion': (_) => const PlaceholderFeatureScreen(
               title: 'Data Ingestion',
