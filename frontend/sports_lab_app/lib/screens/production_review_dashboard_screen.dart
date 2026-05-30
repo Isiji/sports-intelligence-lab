@@ -185,7 +185,7 @@ class _ProductionReviewDashboardScreenState
         child: Column(
           children: [
             DropdownButtonFormField<String>(
-              value: _selectedSlate,
+              initialValue: _selectedSlate,
               isExpanded: true,
               decoration: InputDecoration(
                 labelText: _loadingSlates ? 'Loading slates...' : 'Slate',

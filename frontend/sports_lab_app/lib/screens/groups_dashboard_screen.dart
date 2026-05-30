@@ -331,7 +331,7 @@ class _SlateSelector extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: DropdownButtonFormField<String>(
-          value: selectedSlate,
+          initialValue: selectedSlate,
           items: slates
               .map(
                 (item) => DropdownMenuItem<String>(

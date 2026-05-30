@@ -22,6 +22,8 @@ from app.routers.predictions_router import router as predictions_router
 from app.routers.production import router as production_router
 from app.routers.research_routes import router as research_router
 from app.routers.value_edges_router import router as value_edges_router
+from app.routers.automation_router import router as automation_router
+from app.services.automation_scheduler_service import start_automation_scheduler
 
 
 app = FastAPI(
@@ -67,7 +69,7 @@ app.include_router(research_router)
 app.include_router(intelligence_router)
 app.include_router(production_router)
 app.include_router(admin_router)
-
+app.include_router(automation_router)
 
 @app.get("/")
 def root() -> dict:
@@ -84,3 +86,7 @@ def health() -> dict:
         "status": "healthy",
         "service": settings.app_name,
     }
+
+@app.on_event("startup")
+def startup_event() -> None:
+    start_automation_scheduler()

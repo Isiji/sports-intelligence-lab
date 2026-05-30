@@ -1486,3 +1486,53 @@ class LeagueMarketCoverageSnapshot(Base):
         onupdate=datetime.utcnow,
         index=True,
     )
+
+class AutomationJob(Base):
+    __tablename__ = "automation_jobs"
+
+    id = Column(Integer, primary_key=True)
+
+    job_key = Column(String(120), unique=True, index=True)
+
+    enabled = Column(Boolean, default=True)
+
+    cron_expression = Column(String(120))
+
+    next_run_at = Column(DateTime)
+
+    last_run_at = Column(DateTime)
+
+    last_status = Column(String(40))
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+
+class AutomationJobRun(Base):
+    __tablename__ = "automation_job_runs"
+
+    id = Column(Integer, primary_key=True)
+
+    job_key = Column(
+        String(120),
+        index=True,
+    )
+
+    started_at = Column(DateTime)
+
+    finished_at = Column(DateTime)
+
+    status = Column(
+        String(40),
+        default="running",
+    )
+
+    duration_seconds = Column(Float)
+
+    command_count = Column(Integer)
+
+    output = Column(Text)
+
+    error = Column(Text)

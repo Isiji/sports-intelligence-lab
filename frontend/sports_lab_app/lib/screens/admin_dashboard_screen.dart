@@ -726,7 +726,7 @@ class _SeasonCard extends StatelessWidget {
             final compact = constraints.maxWidth < 620;
 
             final dropdown = DropdownButtonFormField<int>(
-              value: selectedSeason,
+              initialValue: selectedSeason,
               decoration: const InputDecoration(
                 labelText: 'Active Season',
                 border: OutlineInputBorder(),
