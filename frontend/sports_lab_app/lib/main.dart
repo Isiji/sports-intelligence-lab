@@ -10,6 +10,7 @@ import 'screens/jackpot_builder_screen.dart';
 import 'screens/placeholder_feature_screen.dart';
 import 'screens/prediction_explorer_screen.dart';
 import 'screens/predictions_dashboard_screen.dart';
+import 'screens/automation_center_screen.dart';
 import 'screens/slip_builder_screen.dart';
 
 void main() {
@@ -38,6 +39,7 @@ class SportsLabApp extends StatelessWidget {
         '/market-alternatives': (_) => const PredictionExplorerScreen(),
         '/predictions-dashboard': (_) => const PredictionsDashboardScreen(),
         '/groups-dashboard': (_) => const GroupsDashboardScreen(),
+        '/automation-center': (_) => const AutomationCenterScreen(),
         '/group-details': (_) => const GroupsDashboardScreen(),
         '/execution-ready-picks': (_) => const PredictionsDashboardScreen(
               initialExecutionReadyOnly: true,

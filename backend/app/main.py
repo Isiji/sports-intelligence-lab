@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-
+from app.db.session import SessionLocal
+from app.services.automation_job_service import AutomationJobService
 from app.routers.admin_router import router as admin_router
 from app.routers.analysis_router import router as analysis_router
 from app.routers.backtests_router import router as backtests_router
@@ -71,6 +72,7 @@ app.include_router(production_router)
 app.include_router(admin_router)
 app.include_router(automation_router)
 
+
 @app.get("/")
 def root() -> dict:
     return {
@@ -87,6 +89,15 @@ def health() -> dict:
         "service": settings.app_name,
     }
 
+
 @app.on_event("startup")
 def startup_event() -> None:
+    db = SessionLocal()
+
+    try:
+        AutomationJobService.recover_interrupted_runs(db)
+        AutomationJobService.ensure_default_jobs(db)
+    finally:
+        db.close()
+
     start_automation_scheduler()

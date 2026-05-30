@@ -42,10 +42,12 @@ def _run_to_dict(run) -> dict:
         "status": run.status,
         "duration_seconds": run.duration_seconds,
         "command_count": run.command_count,
+        "progress_percent": run.progress_percent,
+        "current_step": run.current_step,
+        "command_log": run.command_log or [],
         "output": run.output,
         "error": run.error,
     }
-
 
 @router.post("/seed")
 def seed_automation_jobs(

@@ -151,6 +151,12 @@ class HomeDashboardScreen extends StatelessWidget {
             icon: Icons.settings_outlined,
             route: '/settings',
           ),
+          _DashboardItem(
+            title: 'Automation Center',
+            subtitle: 'Scheduled server jobs, history and run controls.',
+            icon: Icons.schedule_outlined,
+            route: '/automation-center',
+          ), 
         ],
       ),
     ];

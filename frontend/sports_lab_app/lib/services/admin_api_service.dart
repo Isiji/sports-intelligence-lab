@@ -1,7 +1,7 @@
 // lib/services/admin_api_service.dart
 
 import 'dart:convert';
-
+import '../config/api_config.dart';
 import 'package:http/http.dart' as http;
 
 class AdminSeasonInfo {
@@ -53,8 +53,7 @@ class AdminCommandItem {
 }
 
 class AdminApiService {
-  static const String baseUrl = 'http://127.0.0.1:8000';
-
+  static const String baseUrl = ApiConfig.baseUrl;  
   Future<AdminSeasonInfo> fetchSeason() async {
     final response = await http.get(Uri.parse('$baseUrl/admin/season'));
 

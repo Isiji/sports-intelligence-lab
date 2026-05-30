@@ -1533,6 +1533,10 @@ class AutomationJobRun(Base):
 
     command_count = Column(Integer)
 
+    progress_percent = Column(Float, default=0)
+    current_step = Column(String(240))
+    command_log = Column(JSON)
+    
     output = Column(Text)
 
     error = Column(Text)
